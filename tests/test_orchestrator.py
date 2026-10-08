@@ -1816,7 +1816,8 @@ async def test_a_markup_subset_probe_is_caught_on_retrieve(name: str) -> None:
                 classifier=None,
                 config=_SAMPLE_CONFIG,
                 sanitizer_revision=_SAMPLE_REVISION,
-                **_retrieve_kwargs(),
+                # The 2 MB padding page is past the default 64-chunk ceiling.
+                **_retrieve_kwargs(settings=RetrieveSettings(max_promptguard_chunks=0)),
             )
         assert retrieved.stage2_verdict != Stage2Verdict.CLEAN, (name, where)
 
@@ -6087,12 +6088,25 @@ async def test_a_fetched_page_exactly_at_the_budget_is_served() -> None:
     assert content.injection_detected is False
 
 
-@pytest.mark.parametrize("config", [{}, {"retrieve": {"max_promptguard_chunks": 0}}])
-async def test_the_default_zero_budget_runs_no_pre_check_at_all(
-    config: dict[str, Any],
-) -> None:
-    """`0` is today's behaviour: no ceiling, and no `max_chunks` handed over."""
-    settings = retrieve_settings_from_config(config)
+async def test_the_default_budget_refuses_an_over_budget_page() -> None:
+    """The default is 64 chunks: a page past 114,688 characters is refused."""
+    settings = retrieve_settings_from_config({})
+    ceiling = settings.max_extracted_characters
+    assert ceiling == 114_688
+
+    classifier = _loaded_classifier()
+    with pytest.raises(PipelineError) as excinfo:
+        await _retrieve_with_text("a" * (ceiling + 1), settings, classifier)
+    classifier.classify_windows.assert_not_called()
+    assert excinfo.value.error == "content_too_large"
+    assert excinfo.value.reason == contract.PROMPTGUARD_BUDGET
+
+
+async def test_an_explicit_zero_budget_runs_no_pre_check_at_all() -> None:
+    """Explicit `0` is the opt-out: no ceiling, and no `max_chunks` handed over."""
+    settings = retrieve_settings_from_config(
+        {"retrieve": {"max_promptguard_chunks": 0}}
+    )
     assert settings.max_extracted_characters is None
 
     classifier = _loaded_classifier()
@@ -6129,10 +6143,9 @@ async def test_the_classifier_budget_error_maps_to_the_same_refusal() -> None:
     [
         ({"retrieve": {"max_promptguard_chunks": 256}}, "word " * 1000),
         ({"retrieve": {"max_promptguard_chunks": 256}}, "a" * 458752),
-        ({}, "a" * 600000),
         ({"retrieve": {"max_promptguard_chunks": 0}}, "a" * 600000),
     ],
-    ids=["under-budget", "boundary", "absent", "explicit-zero"],
+    ids=["under-budget", "boundary", "explicit-zero"],
 )
 async def test_retrieve_classifies_every_window_with_compatible_response(
     config: dict[str, Any],
@@ -6164,7 +6177,9 @@ async def test_retrieve_classifies_every_window_with_compatible_response(
     assert model.call_count == len(windows)
     assert [call.args[0] for call in tokenizer.call_args_list] == windows
     # Previous unbounded call: same real gauntlet, just no max_chunks.
-    baseline = await _retrieve_with_text(text, RetrieveSettings(), _loaded_classifier())
+    baseline = await _retrieve_with_text(
+        text, _budget_settings(settings.max_promptguard_chunks), _loaded_classifier()
+    )
     assert content.promptguard_state == "scanned"
     assert content.model_dump(
         exclude={"request_id", "retrieved_at"}

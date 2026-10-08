@@ -225,7 +225,7 @@ reproducing `840c78fa…` exactly). A twentieth rotation — **not** behaviour-c
 came with `run_retrieve_pipeline`'s five new keyword-only dependencies and the pre-checked
 chunk budget (`6f0fa2de…` → `e55b5f06…`, `hardening-retrieve-parity` US-001 —
 `orchestrator.py` + `contract.py`, each reverted in turn, both-reverted control landing on
-`6f0fa2de…`; the shipped default `retrieve.max_promptguard_chunks: 0` runs no pre-check, and
+`6f0fa2de…`; the default then was `retrieve.max_promptguard_chunks: 0` (64 since 1.4.0) and ran no pre-check, and
 the new `pipeline/retrieve_limits.py` and `pipeline/config_bounds.py` are not hashed).
 A twenty-first — also **not** behaviour-changing — came with the classification semaphore on
 `/retrieve` and `/search` (`e55b5f06…` → `d0433876…`, `hardening-retrieve-parity` US-006 —

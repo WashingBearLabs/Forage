@@ -529,6 +529,32 @@ merging and the owner gates are all that remain.
 
 ## Implementation Notes
 
+### US-001 — `/retrieve` chunk budget default 64
+- `derive_sanitizer_revision()` before and after: `23444fe43e67bab3768e8e095bb3231f91a76a5f9e500b83dcff05338f7c5925`
+  (equal) under `{}`, `config.yaml` and `bench/config.yaml`.
+- Corpus: `python -m scripts.corpus.report --write-baseline` left `tests/corpus/baseline.json`
+  byte-identical (zero outcome changes).
+- Doc sweep command: `grep -rInE "coming[_ ]default|retrieve_budget_unset|COMING_MAX" docs kit_tools README.md CLAUDE.md contract SECURITY.md pipeline scripts retrieval_app.py config.yaml bench tests/*.py`.
+  Remaining hits (all historical or intentional): `docs/releases.md:199,257` (v1.2.x release text,
+  each now carries a "closed in 1.4.0 at 64" note), `contract/GOVERNANCE.md:502` (ruling (g)
+  step 2, with dated continuation), `pipeline/contract.py:91` (frozen 1.3.0 entry),
+  `pipeline/orchestrator.py:675` (hashed; fixed in US-003), `tests/test_app.py` (absence assertions),
+  plus specs, `bootstrap-notes.md` and `SESSION_LOG.md`.
+- Attempt 2, prose sweep (the token grep above missed prose): `grep -rnE "default of .?0\b|459 KB|458,?752|0\.5 MB" docs kit_tools/arch kit_tools/docs README.md CLAUDE.md contract SECURITY.md config.yaml bench/config.yaml pipeline/retrieve_limits.py retrieval_app.py`
+  now returns **no hits**. It caught three current statements the first attempt left: the
+  hinted `SECURITY.md:176` is `kit_tools/arch/SECURITY.md:176` (root `SECURITY.md` is the
+  short disclosure policy and held nothing), now "shipped default 64, ceiling 114,688; `0` is
+  the explicit opt-out"; and the per-waiter figure at `docs/configuration.md` (~:1116) and
+  `kit_tools/arch/SECURITY.md:445`, now `max_extracted_characters(64)` ≈ 115 KB (waiter term
+  ≤ 0.12 MB), unbounded except by the 10 MB fetch cap under the `0` opt-out.
+  A wider grep (`chunks?.{0,40}256|256.{0,40}chunk|defaults to .?0|max_promptguard_chunks: 0`)
+  leaves only allowed hits: `GOTCHAS.md:758` and `DECISIONS.md:644` (rotation history),
+  `docs/releases.md:198-199,256-257` (v1.2.x release text, annotated closed in 1.4.0),
+  `CLAUDE.md:288` / `CODE_ARCH.md:228` (rotation history, annotated "64 since 1.4.0"),
+  `docs/configuration.md` opt-out discussion and the 256 sizing example, and specs.
+- Three markup-probe tests in `tests/test_orchestrator.py` send a 2 MB page and now pass
+  `RetrieveSettings(max_promptguard_chunks=0)` explicitly.
+
 ## Refinement Notes
 
 ### Research Findings

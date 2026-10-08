@@ -500,7 +500,8 @@ accepted the request.
    `1.3.0` keeps the default at `0`; the next MINOR flips it to `256`. That window is
    stated in `docs/releases.md` and belongs in the Release body, and boot logs one WARNING
    `retrieve_budget_unset coming_default=256` so an operator finds it without reading
-   either.
+   either. *Continuation (2026-10-07): closed in 1.4.0 at `64`, owner ruling 2026-10-07,
+   measured; `256` was announced. The WARNING is retired and `0` stays the opt-out.*
 3. *The MAJOR is never reached.* Step 3 cuts a MAJOR when the old behaviour is removed.
    It is not removed: `0` stays a legal, documented opt-out after the flip, so an operator
    who needs the old behaviour keeps it by configuration rather than by pinning a version.

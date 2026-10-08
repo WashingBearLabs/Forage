@@ -22,13 +22,12 @@ from pipeline.config_bounds import bounded_bool, bounded_float, bounded_int
 from pipeline.extraction_limits import max_extracted_characters
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 
-# ``0`` means "no pre-check, and no ``max_chunks`` passed to the classifier" —
-# exactly the behaviour that shipped before this key existed. It is the
-# shipped default for one minor release (``contract/GOVERNANCE.md`` ruling (g),
-# worked example 6 step 1); the next MINOR flips it to
-# ``COMING_MAX_PROMPTGUARD_CHUNKS`` and ``0`` stays a legal opt-out after that.
-RETRIEVE_MAX_PROMPTGUARD_CHUNKS = 0
-COMING_MAX_PROMPTGUARD_CHUNKS = 256
+# The default is 64 chunks (owner ruling 2026-10-07, measured; closed in 1.4.0,
+# ``contract/GOVERNANCE.md`` ruling (g)), so one large fetched page cannot hold
+# the classification permit past the wait other requests are given. ``0`` is the
+# explicit opt-out: "no pre-check, and no ``max_chunks`` passed to the
+# classifier" — the behaviour that shipped before this key existed.
+RETRIEVE_MAX_PROMPTGUARD_CHUNKS = 64
 _MAX_RETRIEVE_PROMPTGUARD_CHUNKS = 1024
 
 # Pinned at exactly one, the way ``extraction.extraction_concurrency`` is: a

@@ -1003,7 +1003,7 @@ sibling-dense markup) cost more per byte than these pages and are cut off by the
 `MAX_HTML_FRAME_BYTES` (96 MiB) is both the cap on the whole frame and on every string field
 (`title`, `author` and `date` are not capped by `extract_html`, so the frame cap bounds them).
 A frame over the cap is refused, never truncated. Derivation, with
-`retrieve.max_promptguard_chunks: 0` (no budget) so both fields of a `DEFAULT_MAX_CONTENT_BYTES`
+`retrieve.max_promptguard_chunks: 0` (the explicit opt-out; the default 64 would refuse such a body first) so both fields of a `DEFAULT_MAX_CONTENT_BYTES`
 (10 MiB) body cross:
 
 - Stage 1 does **not** strip C0 controls, and JSON escapes each as `\u00XX`: 6 bytes per source
@@ -1113,9 +1113,10 @@ runs, so an in-flight page costs three to five times the 10 MB body term, and th
 bounds the body term only. What is **not** bounded is the population of classification
 waiters: `uvicorn` runs with no `--limit-concurrency` and both middlewares gate on `/extract`
 alone, so admission bounds the *rate* through stage 1, not the number of requests past it.
-Each such waiter costs at most `max_extracted_characters(256)` ≈ 459 KB of text for at most
-`promptguard_wait_seconds`, so the waiter term is
-`arrival rate × promptguard_wait_seconds × ≤ 0.5 MB`. `--limit-concurrency` is the envelope
+At the default budget of 64 chunks each such waiter costs at most
+`max_extracted_characters(64)` ≈ 115 KB of text for at most `promptguard_wait_seconds`, so
+the waiter term is `arrival rate × promptguard_wait_seconds × ≤ 0.12 MB`. Under the `0`
+opt-out a waiter's text is unbounded except by the 10 MB fetch cap. `--limit-concurrency` is the envelope
 knob that bounds it, and the resource-envelope spec owns it.
 
 **Disk.** An HTML body at or below `html_worker_threshold_bytes` writes nothing to disk: it
@@ -1143,7 +1144,7 @@ file — the procedure the resource-envelope spec documents.
 
 | Key | Default | Allowed range | Purpose |
 |-----|---------|---------------|---------|
-| `max_promptguard_chunks` | `0` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. `0` means **no pre-check** and no `max_chunks` handed to the classifier — today's behaviour — and boot logs one WARNING `retrieve_budget_unset coming_default=256`. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (458,752 at the coming default of 256); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. Ships at `0` for one minor release; the next MINOR flips the default to `256`, and `0` stays a legal opt-out (`contract/GOVERNANCE.md` ruling (g)). |
+| `max_promptguard_chunks` | `64` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (114,688 at the default of 64); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. `0` is the explicit opt-out: **no pre-check** and no `max_chunks` handed to the classifier, the pre-1.4.0 behaviour. Default set to 64 in 1.4.0 (owner ruling 2026-10-07, measured; `256` had been announced) — `contract/GOVERNANCE.md` ruling (g). |
 | `fetch_concurrency` | `1` | 1 – 1 | Admission slots: concurrent `/retrieve` fetch-and-stage-1 work. Fixed at one for the PDF worker budget above; widening remains deferred. |
 | `admission_queue_depth` | `4` | 0 – 16 | Requests allowed to wait for the fetch slot, holding no body while they wait. Beyond it a request is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). `0` means refuse immediately whenever the slot is taken. Worst-case queue latency is `admission_queue_depth / fetch_concurrency × 30 s` — 120 s at the defaults. |
 | `html_worker_threshold_bytes` | `524288` (512 KiB) | 0 – 1048576 (1 MiB) | Fetched HTML bodies **larger than** this many bytes (compared on the fetched byte length, before decoding) parse in the rlimited worker inside the admission slot; a body of exactly this size parses in-thread. `0` routes every body to the worker. A worker failure is 422 `extraction_failed` / `html_extraction_error`. **Security-relevant: raising it weakens the bound** — see [HTML worker threshold](#html-worker-threshold). Not a cache-fingerprint or `sanitizer_revision` input, because the served output is byte-identical on either path. |
@@ -1198,27 +1199,25 @@ it bounds the hold rather than waiting longer for an unbounded one.
 
 Until the resource-envelope spec measures the per-window number on the reference envelope,
 a **provisional** pairing: at an assumed 100 ms per window on a 2-vCPU container, the
-coming default of 256 chunks is a ~25.6 s hold, which the shipped `30.0` clears with
-little margin. An operator who cannot meet that on their hardware lowers
-`retrieve.max_promptguard_chunks` — to 128 for a ~12.8 s hold, to 64 for ~6.4 s — rather
-than raising the wait, because a longer wait parks more requests behind the same permit
+shipped default of 64 chunks is a ~6.4 s hold, which the shipped `30.0` clears with
+wide margin. An operator who sets a larger budget, or who cannot meet that on their
+hardware, adjusts `retrieve.max_promptguard_chunks` — 256 would be a ~25.6 s hold, 32
+would be ~3.2 s — rather than raising the wait, because a longer wait parks more requests behind the same permit
 without making any of them finish sooner.
 
-One honest qualification: **while `retrieve.max_promptguard_chunks` is `0` the rule does
-not hold**, because there is no chunk budget to multiply — the worst-case hold is bounded
-only by the 10 MB fetch cap, which is far more windows than any wait in range covers. An
-operator who wants the sizing rule to apply sets the key explicitly; the
-`retrieve_budget_unset` boot WARNING says so. The shipped default pair (`0` and `30.0`) is
-recorded under Known risks for exactly that reason: on a CPU-bound classifier it makes
-wait timeouts likely under even modest concurrency.
+One honest qualification: **if an operator sets `retrieve.max_promptguard_chunks` to `0`
+the rule does not hold**, because there is no chunk budget to multiply — the worst-case hold
+is bounded only by the 10 MB fetch cap, which is far more windows than any wait in range
+covers. The shipped default pair (`64` and `30.0`) is bounded; the opt-out pair (`0` and
+`30.0`) is the known risk below.
 
-**Known risk — the shipped default pair.** `retrieve.max_promptguard_chunks: 0` with
+**Known risk — the opt-out pair.** `retrieve.max_promptguard_chunks: 0` with
 `promptguard_wait_seconds: 30.0` leaves the permit hold unbounded by anything but the fetch
 cap, so a single large fetched page can time out every other request's wait. The signal is
 `retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on
 `/metrics` rising while `/health` still reports `promptguard_loaded: true` — contention,
-not a missing model. Watch both counters after enabling `/retrieve` at volume, and set
-`retrieve.max_promptguard_chunks` to bound the hold.
+not a missing model. Watch both counters after enabling `/retrieve` at volume, and drop the
+`0` opt-out (the default of 64 bounds the hold).
 
 ---
 

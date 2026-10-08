@@ -284,8 +284,8 @@ chunk budget (`hardening-retrieve-parity` US-001): `orchestrator.py` for the sig
 and the `PromptGuardBudgetExceededError` backstop; `contract.py` for `PROMPTGUARD_BUDGET`
 and the `1.3.0` continuation line. Two hashed files, each measured by reverting it in turn,
 with a both-reverted control landing exactly on `6f0fa2de…`. It does not join the four
-behaviour-changing rotations because the shipped default is
-`retrieve.max_promptguard_chunks: 0` — no pre-check, no `max_chunks` handed to the
+behaviour-changing rotations because the shipped default was then
+`retrieve.max_promptguard_chunks: 0` (64 since 1.4.0) — no pre-check, no `max_chunks` handed to the
 classifier, byte-for-byte the previous behaviour; the new module
 `pipeline/retrieve_limits.py` and the migrated `pipeline/config_bounds.py` are **not**
 `_REVISION_SOURCES` members, so they do not move this hash on their own.

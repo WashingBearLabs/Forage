@@ -83,7 +83,6 @@ from pipeline.orchestrator import (
 )
 from pipeline.pdf_subprocess import SpoolDirectoryError, spool_dir
 from pipeline.retrieve_limits import (
-    COMING_MAX_PROMPTGUARD_CHUNKS,
     RetrieveConfigurationError,
     RetrieveSettings,
     retrieve_settings_from_config,
@@ -1745,15 +1744,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         spool_directory, max_wall_clock_seconds=MAX_EXTRACTION_WALL_SECONDS
     )
     logger.info("spool_sweep removed=%d", swept)
-    if retrieve_settings.max_promptguard_chunks == 0:
-        # Exactly one WARNING, closed token plus the integer — no URL, no
-        # config dump. `0` is the shipped default for one minor release
-        # (`contract/GOVERNANCE.md` ruling (g)); this names the value the next
-        # MINOR flips to, so an operator reading boot logs finds the window
-        # rather than discovering it in a Release body.
-        logger.warning(
-            "retrieve_budget_unset coming_default=%d", COMING_MAX_PROMPTGUARD_CHUNKS
-        )
     app.state.extraction_metrics = ExtractionMetrics()
     app.state.extraction_admission = ExtractionAdmissionController(
         settings,
@@ -1953,9 +1943,8 @@ app = FastAPI(
 _initial_extraction_settings = extraction_settings_from_config({})
 app.state.extraction_settings = _initial_extraction_settings
 # The file route's module-level fallback shape, for a transport that never
-# fires lifespan events. Deliberately silent: the `retrieve_budget_unset`
-# WARNING belongs to the lifespan, so a lifespan-free test does not emit a
-# boot warning nobody configured.
+# fires lifespan events. Deliberately silent: boot logging belongs to the
+# lifespan, so a lifespan-free test does not emit a record nobody configured.
 app.state.retrieve_settings = retrieve_settings_from_config({})
 # The search handler also supports transports that never fire lifespan events.
 app.state.search_targets = SearchTargets()

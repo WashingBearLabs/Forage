@@ -3312,10 +3312,10 @@ async def test_served_empty_search_measures_but_pre_loop_refusal_does_not(
 class TestRetrieveSettingsReader:
     """`retrieve_settings_from_config` — defaults, bounds, and the derivation."""
 
-    def test_an_empty_config_is_todays_behaviour(self) -> None:
+    def test_an_empty_config_is_bounded_at_64_chunks(self) -> None:
         settings = retrieve_settings_from_config({})
-        assert settings.max_promptguard_chunks == 0
-        assert settings.max_extracted_characters is None
+        assert settings.max_promptguard_chunks == 64
+        assert settings.max_extracted_characters == 114_688
         assert settings.fetch_concurrency == 1
         assert settings.admission_queue_depth == 4
         assert settings.max_queued_fetch_bytes == 31457280
@@ -3544,35 +3544,28 @@ async def test_lifespan_refuses_an_unsafe_spool_directory(
 
 
 @pytest.mark.parametrize(
-    ("config", "expected"),
+    "config",
     [
-        ({}, True),
-        ({"retrieve": {"max_promptguard_chunks": 0}}, True),
-        ({"retrieve": {"max_promptguard_chunks": 256}}, False),
+        {},
+        {"retrieve": {"max_promptguard_chunks": 64}},
+        {"retrieve": {"max_promptguard_chunks": 0}},
     ],
+    ids=["empty", "64", "explicit-zero"],
 )
-async def test_lifespan_warns_exactly_once_while_the_budget_is_unset(
+async def test_lifespan_logs_no_retrieve_budget_record(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     config: dict[str, object],
-    expected: bool,
 ) -> None:
-    """One closed-token WARNING naming the coming default, nothing more."""
+    """The announced-default WARNING is retired: no config spelling emits it."""
     monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
 
     probe_app = FastAPI()
-    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+    with caplog.at_level(logging.DEBUG, logger="retrieval_app"):
         async with lifespan(probe_app):
             pass
 
-    warnings = [
-        record.getMessage()
-        for record in caplog.records
-        if "retrieve_budget_unset" in record.getMessage()
-    ]
-    assert warnings == (
-        ["retrieve_budget_unset coming_default=256"] if expected else []
-    )
+    assert "retrieve_budget_unset" not in caplog.text
 
 
 async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
@@ -3580,7 +3573,7 @@ async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
 ) -> None:
     """The lifespan-free path exists for tests, so it emits no boot warning."""
     assert isinstance(retrieval_app.app.state.retrieve_settings, RetrieveSettings)
-    assert retrieval_app.app.state.retrieve_settings.max_promptguard_chunks == 0
+    assert retrieval_app.app.state.retrieve_settings.max_promptguard_chunks == 64
     assert "retrieve_budget_unset" not in caplog.text
 
 

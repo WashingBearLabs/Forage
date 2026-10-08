@@ -196,8 +196,9 @@ What is unchanged:
 **Compatibility windows — both still open:**
 
 - `retrieve.max_promptguard_chunks` still defaults to `0` and boot still warns
-  `retrieve_budget_unset coming_default=256`; the next MINOR flips the default
-  to `256` (`0` stays a legal opt-out).
+  `retrieve_budget_unset coming_default=256`; the next MINOR was to flip the
+  default (`0` stays a legal opt-out). *Closed in 1.4.0 at `64`, not `256`
+  (owner ruling 2026-10-07, measured); the warning is retired.*
 - Request-validation 422s still carry `input` / `ctx` / `url` as
   `"[redacted]"`; the next MINOR drops them. Consumers reading
   `detail[].input` must still stop.
@@ -253,8 +254,9 @@ What shipped (hardening changes carried forward):
   `pdf_extraction_error` or `pdf_spool_error`. PDF chunk overflows use
   `content_too_large` / `promptguard_budget`.
 - The page-level `retrieve.max_promptguard_chunks` budget ships at `0` for
-  this compatibility window, warning `retrieve_budget_unset`; the next MINOR
-  defaults to `256`, with `0` retained as an explicit opt-out.
+  this compatibility window, warning `retrieve_budget_unset`; `0` is retained
+  as an explicit opt-out. *Closed in 1.4.0 at `64` (owner ruling 2026-10-07,
+  measured), not the announced `256`; the warning is retired.*
 - Both fetch responses report `effective_promptguard_fail_closed` and
   `effective_promptguard_threshold` on every 200, including cache hits.
   Omitted/null thresholds use the validated configured default (shipped 0.85)
@@ -476,13 +478,12 @@ in the hermetic suite. Historical goldens remain untouched; no further
 in-place regeneration is permitted. That freeze is not authorization to cut
 a tag: US-003's owner gate and its full-suite pre-flight still apply.
 
-**The `retrieve.max_promptguard_chunks` compatibility window.** The release that ships
-contract `1.3.0` keeps that key's default at **`0`** — no pre-check on `/retrieve`, exactly
-the behaviour that shipped before the key existed — and boot logs one WARNING,
-`retrieve_budget_unset coming_default=256`. The **next MINOR** flips the default to `256`;
-`0` remains a legal, documented opt-out after the flip, so no MAJOR is ever cut for it.
-That is worked example 6 step 1 with the window named, and it belongs in this release's
-Release body as well as here (`contract/GOVERNANCE.md` ruling (g)).
+**The `retrieve.max_promptguard_chunks` compatibility window (closed).** The release that
+shipped contract `1.3.0` kept that key's default at `0` — no pre-check on `/retrieve` — with
+a boot WARNING announcing a flip to `256`. **1.4.0 closes it at `64`** (owner ruling
+2026-10-07, measured; `256` was announced, `64` shipped): the default is now bounded, the
+character ceiling is 114,688, and the warning is retired. `0` remains a legal, documented
+opt-out, so no MAJOR is cut for it (`contract/GOVERNANCE.md` ruling (g)).
 
 **Consumer note for the shipped hardening release (spec 8 handoff).** From
 `hardening-retrieve-parity`, a caller sending `promptguard_fail_closed: false` is

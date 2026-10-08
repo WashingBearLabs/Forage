@@ -79,12 +79,12 @@ extraction:
 retrieve:
   # Classification budget for a FETCHED page, separate from `extraction`'s
   # ceiling for uploads and fetched PDFs. `0` means no pre-check and no
-  # `max_chunks` handed to the classifier — today's behaviour — and boot logs
-  # one WARNING `retrieve_budget_unset coming_default=256`. It ships as `0`
-  # for one minor release; the next MINOR flips the default to 256, and `0`
-  # stays a legal opt-out after that (contract/GOVERNANCE.md ruling (g)).
-  # Derived character ceiling at 256 = (512 - 64) * 256 * 4 = 458752.
-  max_promptguard_chunks: 0
+  # `max_chunks` handed to the classifier — the pre-1.4.0 behaviour — and is
+  # the explicit opt-out. The default is 64 (owner ruling 2026-10-07, measured;
+  # contract/GOVERNANCE.md ruling (g)), so one large page cannot hold the
+  # classification permit past the wait other requests are given.
+  # Derived character ceiling at 64 = (512 - 64) * 64 * 4 = 114688.
+  max_promptguard_chunks: 64
   # Pinned at exactly 1, for the reason `extraction.extraction_concurrency` is:
   # a fetched PDF spawns the same bounded worker under the same
   # `child_address_space_bytes` rlimit, so N fetch slots would put
