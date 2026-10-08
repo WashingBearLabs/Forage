@@ -685,19 +685,19 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 - **Rotation.** `orchestrator.py` moves; follow the procedure.
 
 **Acceptance Criteria:**
-- [ ] No `extract_html` or `scan_raw_markup` call in `run_search_pipeline` runs on the loop
+- [x] No `extract_html` or `scan_raw_markup` call in `run_search_pipeline` runs on the loop
       thread (thread-identity test, ≥ 3 results). A ticker progresses during a sleeping stub
       parse (test).
-- [ ] The one-off pre/post lag measurement is recorded in Implementation Notes.
-- [ ] The six `8e449fc` captures and the `/search` corpus outcomes are unchanged.
-- [ ] A cancelled `/search` does not return before its parse thread finishes (test).
-- [ ] The classification-wait counter and the high-water mark equal the pre-story values under a
+- [x] The one-off pre/post lag measurement is recorded in Implementation Notes.
+- [x] The six `8e449fc` captures and the `/search` corpus outcomes are unchanged.
+- [x] A cancelled `/search` does not return before its parse thread finishes (test).
+- [x] The classification-wait counter and the high-water mark equal the pre-story values under a
       stub delay (test). `docs/configuration.md` states which includes thread-hop time.
-- [ ] The rotation is recorded per the procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The rotation is recorded per the procedure.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 
