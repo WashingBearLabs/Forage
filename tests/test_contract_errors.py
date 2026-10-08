@@ -171,18 +171,11 @@ def assert_mirrors(model: type[BaseModel], response: httpx.Response) -> None:
     assert mirrored.model_dump_json() == response.text
 
 
-def _strip_window_keys(payload: dict[str, Any]) -> dict[str, Any]:
-    for item in payload["detail"]:
-        for key in retrieval_app._VALIDATION_WINDOW_KEYS:
-            assert item.pop(key) == retrieval_app._VALIDATION_PLACEHOLDER
-    return payload
-
-
 def _assert_validation_mirror(response: httpx.Response) -> None:
     assert response.status_code == 422
     assert_mirrors(
         HTTPValidationError,
-        httpx.Response(422, json=_strip_window_keys(response.json())),
+        response,
     )
 
 
@@ -585,7 +578,7 @@ async def test_extract_validation_arm_is_mirrored(client: httpx.AsyncClient) -> 
 
 
 _VALIDATION_MARKER = "caller_validation_marker_7b953cf1"
-_VALIDATION_ITEM_KEYS = {"loc", "msg", "type", "input", "ctx", "url"}
+_VALIDATION_ITEM_KEYS = {"loc", "msg", "type"}
 _REQUEST_MODELS = {"/search": SearchRequest, "/retrieve": RetrieveRequest}
 _REQUEST_FIELD_CASES = {
     "/search": {
@@ -640,8 +633,11 @@ def _assert_marker_refused(
     assert _VALIDATION_MARKER not in response.text, "reflected caller marker"
     for item in detail:
         assert set(item) == _VALIDATION_ITEM_KEYS
-        for key in retrieval_app._VALIDATION_WINDOW_KEYS:
-            assert item[key] == "[redacted]"
+        # A validator that interpolates its input into `msg` (for example
+        # `raise ValueError(f"invalid query: {value}")`) fails here: this is
+        # the guard that keeps `msg` free of caller text now that the
+        # `input`/`ctx`/`url` keys are gone.
+        assert _VALIDATION_MARKER not in item["msg"], "reflected caller marker"
     _assert_validation_mirror(response)
 
 
@@ -702,24 +698,49 @@ async def _post_marker_case(
 
 @pytest.mark.parametrize("route", _REQUEST_MODELS)
 async def test_validation_marker_fuzz_each_request_field(
-    client: httpx.AsyncClient, route: str
+    client: httpx.AsyncClient, route: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     model = _REQUEST_MODELS[route]
     assert _REQUEST_FIELD_CASES[route] == set(model.model_fields)
     validated = _validated_fields(model)
-    for field in sorted(_REQUEST_FIELD_CASES[route]):
-        response = await _post_marker_case(
-            client, route, field, validated=field in validated
-        )
-        _assert_marker_refused(response, field, validated=field in validated)
+    with caplog.at_level(logging.DEBUG):
+        for field in sorted(_REQUEST_FIELD_CASES[route]):
+            response = await _post_marker_case(
+                client, route, field, validated=field in validated
+            )
+            _assert_marker_refused(response, field, validated=field in validated)
+    assert caplog.records, "log capture must be live"
+    assert all(_VALIDATION_MARKER not in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.parametrize("field", sorted(_EXTRACT_FIELDS))
 async def test_validation_marker_fuzz_each_extract_field(
-    client: httpx.AsyncClient, field: str
+    client: httpx.AsyncClient, field: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    response = await _post_marker_case(client, "/extract", field)
-    _assert_marker_refused(response, field, validated=False)
+    with caplog.at_level(logging.DEBUG):
+        response = await _post_marker_case(client, "/extract", field)
+        _assert_marker_refused(response, field, validated=False)
+    assert caplog.records, "log capture must be live"
+    assert all(_VALIDATION_MARKER not in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("route", ["/search", "/retrieve", "/extract"])
+async def test_validation_items_have_exactly_loc_msg_type(
+    client: httpx.AsyncClient, route: str
+) -> None:
+    if route == "/extract":
+        response = await client.post(
+            route,
+            files={"file": ("document.txt", b"safe", "text/plain")},
+            data={"filename": "document.txt", "extract_mode": "bogus"},
+        )
+    else:
+        response = await client.post(route, json={})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail
+    for item in detail:
+        assert set(item) == {"loc", "msg", "type"}
 
 
 async def test_validation_fuzz_catches_interpolating_validator(
@@ -787,9 +808,9 @@ async def _synthetic_validation(
     return httpx.Response(response.status_code, content=bytes(response.body))
 
 
-async def test_validation_window_keys_are_fixed_placeholders() -> None:
-    assert retrieval_app._VALIDATION_WINDOW_KEYS == ("input", "ctx", "url")
-    assert retrieval_app._VALIDATION_PLACEHOLDER == "[redacted]"
+async def test_validation_window_keys_are_dropped() -> None:
+    assert not hasattr(retrieval_app, "_VALIDATION_WINDOW_KEYS")
+    assert not hasattr(retrieval_app, "_VALIDATION_PLACEHOLDER")
     response = await _synthetic_validation(
         [
             {

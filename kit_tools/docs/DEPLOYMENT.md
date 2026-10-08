@@ -116,13 +116,13 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
    same two files. The anchor at `HEAD` is
-   `6bd2e0d789410a3b48a1cf7eab0f3326df3a9d2c39b5d3e93f5c567ca87b83dd`.
+   `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
    semvers — image `1.2.2` serves contract `1.3.0`. Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately
-   diverged from Poppy's fifty-seven times (`docs/bootstrap-notes.md` keeps the record).
+   diverged from Poppy's fifty-eight times (`docs/bootstrap-notes.md` keeps the record).
 5. **Confirm the weights source is reachable** from the host: an `HF_TOKEN` with gated-repo
    access, or mirror credentials. Weights are fetched at runtime, so a wrong token is a
    `degraded` boot, not a failed one.

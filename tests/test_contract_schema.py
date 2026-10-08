@@ -421,6 +421,7 @@ def test_retrieve_metrics_response_1_4_0_field_set_is_pinned_exactly() -> None:
     assert set(RetrieveMetricsResponse.model_fields) == {
         "html_worker_spawns",
         "html_worker_refusals",
+        "promptguard_budget_refusals",
         "requests",
         "errors",
         "cache_hits",

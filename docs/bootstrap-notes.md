@@ -2602,3 +2602,26 @@ route form): maximum fold/n ratio 1.0-1.18 per genre, **0** fields over `max(2n,
 4.141 s, post shape (16 ASCII + U+FDFA, new limit) 2.263 s, ratio 54.6% (an earlier pre-shape median of 3 was 4.100 s).
 The corpus baseline and floors regenerate byte-identically, `floors_diff` reports 0 problems and `--baseline-fpr`
 0 rises (exempt `ben-0288`, `ben-0289`), and both cassettes are byte-unchanged. Not replayed to Poppy.
+
+### The fifty-eighth rotation: contract 1.4.0 finalised (`release-1-3-0` US-003)
+
+`pipeline/contract.py` replaces the in-progress 1.4.0 entry with the final one: the validation-422
+items are exactly `loc`, `msg`, `type` (the `"[redacted]"` `input`/`ctx`/`url` placeholders of 1.3.0 are
+dropped, GOVERNANCE ruling (l)), `retrieve.max_promptguard_chunks` defaults to 64 with `0` the explicit
+opt-out, `html_extraction_error`, and the three `retrieve.*` counters (`html_worker_spawns`,
+`html_worker_refusals`, `promptguard_budget_refusals`); sanitizer outcomes are stated not to be contract
+changes. `orchestrator.py` loses the stale "coming default of 256" comment. This is **not** a
+sanitization-behaviour change: both edits are text only. The counter is incremented at the handler in
+`retrieval_app.py` (`exc.reason == contract.PROMPTGUARD_BUDGET`), which is not hashed.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`616beed`) / both files reverted (= all-reverted control) | `23444fe43e67bab3768e8e095bb3231f91a76a5f9e500b83dcff05338f7c5925` |
+| `contract.py` reverted alone | `53280032427c6aea44818e7687dc39f716a7ce61e293b5da89d5681b9eae213c` |
+| `orchestrator.py` reverted alone | `78c5563313f6f35978d24211f5392eb4fe846e56b5a8046fd6eb2d178800aa23` |
+| After | `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78` |
+
+Every reversal was read-only: the working tree was copied to a temp directory and the file replaced by
+`git show 616beed:pipeline/<file>`. Goldens 1.0.0-1.3.0 are byte-unchanged; the held 1.4.0 golden regenerates
+byte-identical (no model in it changed), and `contract/openapi.yaml`, its anchor and the fixture twin were
+regenerated. Not replayed to Poppy.

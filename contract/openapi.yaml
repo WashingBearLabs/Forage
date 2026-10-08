@@ -773,6 +773,12 @@ components:
             Exact matches through bare entries do not increment it.
           title: Policy Suffix Trusted Skip
           type: integer
+        promptguard_budget_refusals:
+          description: '`/retrieve` requests refused 422 `content_too_large` / `promptguard_budget`
+            because the extracted text exceeded the `retrieve.max_promptguard_chunks` budget.
+            Zero when the budget is 0 (no limit).'
+          title: Promptguard Budget Refusals
+          type: integer
         promptguard_contiguity_detections:
           description: Retrievals blocked by the contiguity rule, including both-rule verdicts.
           title: Promptguard Contiguity Detections
@@ -810,6 +816,7 @@ components:
       - promptguard_contiguity_detections
       - html_worker_spawns
       - html_worker_refusals
+      - promptguard_budget_refusals
       title: RetrieveMetricsResponse
       type: object
     RetrieveRequest:
@@ -1540,13 +1547,13 @@ components:
       description: 'One entry of the service''s redacted request-validation error list.
 
 
-        The handler emits the declared trio ``loc``, ``msg``, ``type``, capped at
+        The handler emits exactly the declared trio ``loc``, ``msg``, ``type``,
 
-        ``_MAX_VALIDATION_ERRORS`` entries. For contract 1.3.0 ``input``, ``ctx``
+        capped at ``_MAX_VALIDATION_ERRORS`` entries. ``input``, ``ctx`` and ``url``
 
-        and ``url`` are present with the fixed value ``"[redacted]"``; they are
+        were present with the fixed value ``"[redacted]"`` in contract 1.3.0 and
 
-        dropped at the next MINOR (GOVERNANCE ruling (l)).'
+        are gone from 1.4.0 (GOVERNANCE ruling (l)).'
       properties:
         loc:
           description: Path to the offending field within the request.
@@ -1662,9 +1669,8 @@ paths:
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Extract Extract Post
           description: Document failure (coded body, carrying sanitizer_revision) or request
-            validation failure (redacted loc/msg/type entries, at most _MAX_VALIDATION_ERRORS
-            (100); input/ctx/url carry '[redacted]' in contract 1.3.0 and are dropped at the
-            next MINOR).
+            validation failure (redacted entries of exactly loc/msg/type, at most _MAX_VALIDATION_ERRORS
+            (100)).
         '429':
           content:
             application/json:
@@ -1775,8 +1781,7 @@ paths:
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Retrieve Retrieve Post
           description: Pipeline refusal (coded body) or request validation failure (redacted
-            loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry
-            '[redacted]' in contract 1.3.0 and are dropped at the next MINOR).
+            entries of exactly loc/msg/type, at most _MAX_VALIDATION_ERRORS (100)).
       summary: Retrieve
   /search:
     post:
@@ -1830,6 +1835,5 @@ paths:
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Search Search Post
           description: Pipeline refusal (coded body) or request validation failure (redacted
-            loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry
-            '[redacted]' in contract 1.3.0 and are dropped at the next MINOR).
+            entries of exactly loc/msg/type, at most _MAX_VALIDATION_ERRORS (100)).
       summary: Search

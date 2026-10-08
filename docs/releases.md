@@ -91,6 +91,12 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   (a 6-character title ending in U+FDFA) still fold. The worst accepted fold at 2 MiB costs about
   55% of the old one. No response-shape change and no contract bump (GOVERNANCE ruling (m)); the
   corpus baseline, floors and both cassettes are byte-unchanged; old cache entries become misses.
+- **A fifty-eighth rotation, `23444fe4…` → `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78`**
+  (`release-1-3-0` US-003): the final contract `1.4.0` entry (`contract.py`) and a stale comment
+  (`orchestrator.py`). Text only, no sanitization change; old cache entries still become misses.
+  Request-validation 422 items are now exactly `loc`, `msg`, `type` (the `"[redacted]"`
+  `input`/`ctx`/`url` placeholders are gone, GOVERNANCE ruling (l)), and `/metrics` adds
+  `retrieve.promptguard_budget_refusals`.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 
@@ -193,15 +199,15 @@ What is unchanged:
   for that consumer: the same contract 1.3.0 as v1.2.1, plus the 86M as an
   opt-in `FORAGE_MODEL_ID`. Compare contracts, not `sanitizer_revision`.
 
-**Compatibility windows — both still open:**
+**Compatibility windows — both closed in 1.4.0:**
 
 - `retrieve.max_promptguard_chunks` still defaults to `0` and boot still warns
   `retrieve_budget_unset coming_default=256`; the next MINOR was to flip the
   default (`0` stays a legal opt-out). *Closed in 1.4.0 at `64`, not `256`
   (owner ruling 2026-10-07, measured); the warning is retired.*
 - Request-validation 422s still carry `input` / `ctx` / `url` as
-  `"[redacted]"`; the next MINOR drops them. Consumers reading
-  `detail[].input` must still stop.
+  `"[redacted]"`; the next MINOR drops them. *Closed in 1.4.0: the items carry
+  exactly `loc`, `msg` and `type`.* Consumers reading `detail[].input` must stop.
 
 ### v1.2.1 — 2026-09-23
 

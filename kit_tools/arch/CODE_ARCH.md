@@ -505,7 +505,8 @@ US-001, stage 1 made linear, output byte-identical) moves it to `0ace27ca…`; t
 `ff18b0bf…`; the fifty-sixth (US-008, `/search` parse moved to a worker thread, `orchestrator.py` alone,
 output byte-identical) moves it to `d582f8da…`; the fifty-seventh (`release-padding-gate` US-001, a refused
 look-alike fold BLOCKS at `max(2n, n + 256)`, `stage2_structural.py` and `orchestrator.py`, the eighteenth
-sanitization-behaviour-changing rotation) moves it to `23444fe4…`.
+sanitization-behaviour-changing rotation) moves it to `23444fe4…`; the fifty-eighth (`release-1-3-0` US-003, the final
+1.4.0 entry and a stale comment, text only, not behaviour-changing) moves it to `91455b21…`.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public

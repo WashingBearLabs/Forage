@@ -2916,6 +2916,54 @@ async def test_post_retrieve_fetched_pdf_runs_under_the_extraction_ceiling(
     assert _spool_leftovers(spool_root) == []
 
 
+@pytest.mark.parametrize("site", ["pdf_worker", "character_precheck", "backstop"])
+async def test_post_retrieve_budget_refusal_increments_the_counter_at_each_site(
+    client: httpx.AsyncClient, spool_root: Path, site: str
+) -> None:
+    """All three ``promptguard_budget`` refusal sites reach the handler's counter."""
+    from retrieval_app import app
+
+    assert app.state.retrieve_metrics.promptguard_budget_refusals == 0
+    if site == "pdf_worker":
+
+        def over_budget(_path: Path, _settings: ExtractionSettings) -> ExtractionResult:
+            raise PDFClassifiableTextLimitError("over budget")
+
+        with (
+            _fetched(b"%PDF-1.7 fetched report", "application/pdf"),
+            patch.object(pdf_subprocess, "extract_pdf_in_subprocess", over_budget),
+        ):
+            resp = await client.post(
+                "/retrieve", json={"url": "https://example.com/report.pdf"}
+            )
+    else:
+        text = " ".join(["quarterly"] * 250)
+        html = f"<html><body><article><p>{text}</p></article></body></html>"
+        app.state.retrieve_settings = RetrieveSettings(
+            max_promptguard_chunks=1 if site == "character_precheck" else 256
+        )
+        backstop = patch(
+            "pipeline.orchestrator.sanitize_and_structure",
+            new=AsyncMock(side_effect=PromptGuardBudgetExceededError("budget")),
+        )
+        with _fetched(html.encode(), "text/html"):
+            if site == "backstop":
+                with backstop:
+                    resp = await client.post(
+                        "/retrieve", json={"url": "https://example.com/page.html"}
+                    )
+            else:
+                resp = await client.post(
+                    "/retrieve", json={"url": "https://example.com/page.html"}
+                )
+
+    assert resp.status_code == 422
+    assert resp.json()["reason"] == contract.PROMPTGUARD_BUDGET
+    assert app.state.retrieve_metrics.promptguard_budget_refusals == 1
+    metrics = (await client.get("/metrics")).json()["retrieve"]
+    assert metrics["promptguard_budget_refusals"] == 1
+
+
 async def test_post_search_endpoint_success(client: httpx.AsyncClient) -> None:
     """POST /search returns 200 with SearchResponse JSON on success."""
     mock_resp = make_response(

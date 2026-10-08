@@ -185,9 +185,21 @@ MINOR when fields are only added.
   ``retrieve.html_worker_spawns`` (large bodies handed to the worker) and
   ``retrieve.html_worker_refusals`` (the worker's refusals, a spool fault
   excluded). Both are pinned by ``tests/test_contract_metrics.py``, not the
-  schema golden. This entry is in progress and is finalised by
-  ``release-resource-bounds`` spec 3; every addition above is additive, so a
-  consumer comparing MAJOR keeps working untouched.
+  schema golden. ``retrieve.promptguard_budget_refusals`` counts ``/retrieve``
+  requests refused 422 ``content_too_large`` / ``promptguard_budget``; it is
+  pinned the same way. ``retrieve.max_promptguard_chunks`` now defaults to 64
+  (a budget of 114 688 characters) where it defaulted to 0: a page above the
+  budget is refused with that reason instead of classified in full. ``0`` is
+  the explicit opt-out (no pre-check) and 256 is the announced next default.
+  A budget refusal is a served-outcome change at the shipped default, not a
+  new enum member. The request-validation 422 items are now exactly ``loc``,
+  ``msg`` and ``type``: the ``input``, ``ctx`` and ``url`` placeholders that
+  1.3.0 carried as ``"[redacted]"`` are dropped, as GOVERNANCE ruling (l)
+  scheduled; a consumer still reading them must stop. Sanitizer outcomes, such
+  as a refused look-alike fold now blocking, are not contract changes
+  (GOVERNANCE ruling (m)). Every addition above is additive except the
+  placeholder-key drop (ruling (l)); a consumer comparing MAJOR keeps working
+  untouched.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

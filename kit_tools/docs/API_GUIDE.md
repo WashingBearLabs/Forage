@@ -499,7 +499,7 @@ NFC-normalised. The complete frozen `1.3.0` record also covers retrieve
 admission/PDF refusals, directional domain policy, effective fail-closed and
 threshold fields, signed-cache health and counters, `promptguard_model`,
 classification/contiguity and provider/latency metrics, and redacted validation
-422s (`input`/`ctx`/`url` stay `"[redacted]"` until the next MINOR).
+422s (`input`/`ctx`/`url` were `"[redacted]"` in 1.3.0 and are gone in 1.4.0).
 See `pipeline/contract.py` for the exact additions and `docs/releases.md` for
 upgrade actions; schema freeze does not mean the image is published. Do not
 compare `sanitizer_revision`: it has deliberately diverged between Forage and Poppy's
@@ -518,7 +518,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`6bd2e0d789410a3b48a1cf7eab0f3326df3a9d2c39b5d3e93f5c567ca87b83dd`).
+`dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

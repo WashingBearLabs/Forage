@@ -672,9 +672,9 @@ async def run_retrieve_pipeline(
     # ceiling derived from `retrieve.max_promptguard_chunks` is refused rather
     # than chunked and classified in full, so one hostile page cannot burn
     # unbounded CPU. Characters only -- `/extract`'s second, byte limb is not
-    # copied here: at the coming default of 256 chunks the character limb
-    # (458 752) admits at most 1 835 008 UTF-8 bytes, under the 2 MiB output
-    # ceiling, so a byte limb could not bind below 293 chunks.
+    # copied here: at 256 chunks the character limb (458 752) admits at most
+    # 1 835 008 UTF-8 bytes, under the 2 MiB output ceiling, so a byte limb
+    # could not bind below 293 chunks. The shipped default is 64 chunks.
     budget_characters = settings.max_extracted_characters
     if budget_characters is not None and len(extraction.raw_text) > budget_characters:
         raise PipelineError(

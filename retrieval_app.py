@@ -873,6 +873,14 @@ class RetrieveMetricsResponse(BaseModel):
             "not counted."
         )
     )
+    promptguard_budget_refusals: int = Field(
+        description=(
+            "`/retrieve` requests refused 422 `content_too_large` / "
+            "`promptguard_budget` because the extracted text exceeded the "
+            "`retrieve.max_promptguard_chunks` budget. Zero when the budget "
+            "is 0 (no limit)."
+        )
+    )
 
 
 class CacheMetricsResponse(BaseModel):
@@ -1137,10 +1145,10 @@ class DetailResponse(BaseModel):
 class ValidationErrorDetail(BaseModel):
     """One entry of the service's redacted request-validation error list.
 
-    The handler emits the declared trio ``loc``, ``msg``, ``type``, capped at
-    ``_MAX_VALIDATION_ERRORS`` entries. For contract 1.3.0 ``input``, ``ctx``
-    and ``url`` are present with the fixed value ``"[redacted]"``; they are
-    dropped at the next MINOR (GOVERNANCE ruling (l)).
+    The handler emits exactly the declared trio ``loc``, ``msg``, ``type``,
+    capped at ``_MAX_VALIDATION_ERRORS`` entries. ``input``, ``ctx`` and ``url``
+    were present with the fixed value ``"[redacted]"`` in contract 1.3.0 and
+    are gone from 1.4.0 (GOVERNANCE ruling (l)).
     """
 
     loc: list[str | int] = Field(
@@ -1174,8 +1182,6 @@ _MAX_MIME_HINT_LENGTH = 255
 _MAX_REQUEST_ID_LENGTH = 128
 _MAX_DOCUMENT_BYTES = MAX_INPUT_BYTES
 _MAX_VALIDATION_ERRORS = 100
-_VALIDATION_PLACEHOLDER = "[redacted]"
-_VALIDATION_WINDOW_KEYS = ("input", "ctx", "url")
 _ROUTE_LOC_ALLOWLIST: dict[str, frozenset[str]] = {
     "/search": frozenset(SearchRequest.model_fields),
     "/retrieve": frozenset(RetrieveRequest.model_fields),
@@ -1281,6 +1287,9 @@ class RetrieveMetrics:
         # Large HTML bodies handed to the worker, and the worker's refusals.
         self.html_worker_spawns = 0
         self.html_worker_refusals = 0
+        # `/retrieve` 422s refused on the classification budget, counted at the
+        # handler from `PipelineError.reason`.
+        self.promptguard_budget_refusals = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free retrieve error, keyed by ``PipelineError.error``."""
@@ -2027,7 +2036,6 @@ async def request_validation_error_handler(
                     "loc": loc,
                     "msg": str(entry.get("msg", "")),
                     "type": str(entry.get("type", "")),
-                    **dict.fromkeys(_VALIDATION_WINDOW_KEYS, _VALIDATION_PLACEHOLDER),
                 }
             )
         response = JSONResponse(status_code=422, content={"detail": items})
@@ -2083,9 +2091,8 @@ async def pipeline_error_handler(
 
 _PIPELINE_422_DESCRIPTION = (
     "Pipeline refusal (coded body) or request validation failure "
-    "(redacted loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); "
-    "input/ctx/url carry '[redacted]' in contract 1.3.0 and are dropped "
-    "at the next MINOR)."
+    "(redacted entries of exactly loc/msg/type, at most "
+    "_MAX_VALIDATION_ERRORS (100))."
 )
 
 
@@ -2215,6 +2222,9 @@ async def metrics(request: Request) -> dict[str, Any]:
             ),
             "html_worker_spawns": retrieve_metrics.html_worker_spawns,
             "html_worker_refusals": retrieve_metrics.html_worker_refusals,
+            "promptguard_budget_refusals": (
+                retrieve_metrics.promptguard_budget_refusals
+            ),
         },
         # A different layer from `retrieve.cache_hits`/`cache_misses` above,
         # not a duplicate of it — :class:`CacheMetricsResponse` says why, and
@@ -2370,6 +2380,8 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
         )
     except PipelineError as exc:
         retrieve_metrics.record_error(exc.error)
+        if exc.reason == contract.PROMPTGUARD_BUDGET:
+            retrieve_metrics.promptguard_budget_refusals += 1
         raise
     retrieve_metrics.record_content(content)
     return content.model_copy(
@@ -2417,9 +2429,8 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             "model": Extract422ErrorResponse | HTTPValidationError,
             "description": (
                 "Document failure (coded body, carrying sanitizer_revision) or "
-                "request validation failure (redacted loc/msg/type entries, "
-                "at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry "
-                "'[redacted]' in contract 1.3.0 and are dropped at the next MINOR)."
+                "request validation failure (redacted entries of exactly "
+                "loc/msg/type, at most _MAX_VALIDATION_ERRORS (100))."
             ),
         },
         429: {

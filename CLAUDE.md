@@ -715,6 +715,17 @@ and `3e789a3d…`), with an all-reverted control reproducing `d582f8da…` under
 floors and both cassettes are byte-unchanged. Not replayed to Poppy. Full values:
 `docs/bootstrap-notes.md`.
 
+The fifty-eighth rotation is `23444fe4…` → `91455b21…` for
+`release-1-3-0` US-003 — **not a sanitization-behaviour change**: the held contract `1.4.0`
+entry in `pipeline/contract.py` is finalised (the placeholder-key drop, the budget default
+and `retrieve.promptguard_budget_refusals`) and `orchestrator.py` loses a stale "coming
+default of 256" comment. Both are text only. Each was reverted alone, read-only, against
+`HEAD` (`78c55633…` with only the orchestrator reverted, `53280032…` with only the contract
+reverted), with a both-reverted control reproducing `23444fe4…` under default, `config.yaml`
+and `bench/config.yaml`. The validation-422 placeholder keys and the counter live in
+`retrieval_app.py`, which is not hashed. Not replayed to Poppy. Full values:
+`docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

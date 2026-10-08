@@ -187,7 +187,9 @@ _ONE_THREE_ZERO_RETRIEVE_FIELDS = frozenset(
 )
 
 
-_ONE_FOUR_ZERO_ADDITIONS = frozenset({"html_worker_spawns", "html_worker_refusals"})
+_ONE_FOUR_ZERO_ADDITIONS = frozenset(
+    {"html_worker_spawns", "html_worker_refusals", "promptguard_budget_refusals"}
+)
 
 
 def test_every_1_4_0_metric_addition_is_named_in_the_contract_entry() -> None:
