@@ -572,6 +572,8 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "semaphore_saturation": 0,
         "busy_rejections": 0,
         "promptguard_contiguity_detections": 0,
+        "html_worker_spawns": 0,
+        "html_worker_refusals": 0,
     }
     assert set(body["cache"]) == {
         "reconnect_attempts",

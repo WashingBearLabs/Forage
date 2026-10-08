@@ -518,7 +518,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72`).
+`6bd2e0d789410a3b48a1cf7eab0f3326df3a9d2c39b5d3e93f5c567ca87b83dd`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

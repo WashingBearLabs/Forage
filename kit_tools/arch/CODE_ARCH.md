@@ -501,7 +501,8 @@ The epic's nine rotations (forty-fourth to fifty-second) end at `46b8d1bb…`; p
 controls are in `docs/bootstrap-notes.md`. The fifty-third rotation (`release-resource-bounds`
 US-001, stage 1 made linear, output byte-identical) moves it to `0ace27ca…`; the fifty-fourth
 (US-006, large `/retrieve` HTML bodies routed to the worker, output byte-identical) moves it to
-`54aa9649…`.
+`54aa9649…`; the fifty-fifth (US-007, contract `1.4.0` announcement, `contract.py` alone) moves it to
+`ff18b0bf…`.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public

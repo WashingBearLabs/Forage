@@ -76,6 +76,10 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   (`release-resource-bounds` US-006): `/retrieve` HTML bodies above
   `retrieve.html_worker_threshold_bytes` (512 KiB) parse in the rlimited worker. Output within
   bounds is byte-identical; old cache entries still become misses.
+- **A fifty-fifth rotation, `54aa9649…` → `ff18b0bfb436e14ea19269c54d1582991797eec9c055ea35260ff80959a0528c`**
+  (`release-resource-bounds` US-007): the held contract `1.4.0` entry (`contract.py` alone)
+  announces `html_extraction_error` and `retrieve.html_worker_spawns` / `html_worker_refusals`.
+  No sanitization or served-body change; old cache entries still become misses.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 

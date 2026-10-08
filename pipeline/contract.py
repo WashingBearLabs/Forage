@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
-CONTRACT_VERSION = "1.3.0"
+CONTRACT_VERSION = "1.4.0"
 """The retrieval sidecar's wire-shape version, carried on ``/health``.
 
 Bump MAJOR when a field is removed/renamed or its semantics change; bump
@@ -173,6 +173,21 @@ MINOR when fields are only added.
   at the next MINOR (GOVERNANCE ruling (l)).
   Every addition above is additive except the request-validation 422 trim
   (ruling (l)); a consumer comparing MAJOR keeps working untouched.
+* ``1.4.0`` — ``extraction_failed`` on ``/retrieve`` gains the reason
+  ``html_extraction_error``: a fetched HTML body above
+  ``retrieve.html_worker_threshold_bytes`` is parsed in the rlimited worker,
+  and one the worker cannot turn into a result (deadline, CPU or address-space
+  kill, oversized or forged frame, spawn failure) is refused 422 where it was
+  previously parsed in-process. The causes are deliberately indistinguishable.
+  A spool fault on this path reuses ``pdf_spool_error``. This is a served-outcome
+  change for large pages, not a new enum member: the ``Pipeline422ErrorResponse``
+  ``error`` description names the reason. ``/metrics`` adds
+  ``retrieve.html_worker_spawns`` (large bodies handed to the worker) and
+  ``retrieve.html_worker_refusals`` (the worker's refusals, a spool fault
+  excluded). Both are pinned by ``tests/test_contract_metrics.py``, not the
+  schema golden. This entry is in progress and is finalised by
+  ``release-resource-bounds`` spec 3; every addition above is additive, so a
+  consumer comparing MAJOR keeps working untouched.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
@@ -398,6 +413,10 @@ spooled for it. Its reasons — ``RETRIEVE_PDF_ENCRYPTED``,
 ``RETRIEVE_PDF_NO_TEXT``, ``RETRIEVE_PDF_EXTRACTION_ERROR``,
 ``RETRIEVE_PDF_SPOOL_ERROR`` — are reasons under ``extraction_failed``, not
 members of this alias, even where the literal matches an ``/extract`` code.
+``html_extraction_error`` (contract ``1.4.0``,
+``RETRIEVE_HTML_EXTRACTION_ERROR``) is a fifth reason under the same code: a
+large fetched HTML body the bounded worker could not parse. A spool fault on
+that path is ``RETRIEVE_PDF_SPOOL_ERROR``.
 """
 
 RETRIEVE_ERROR_CODES = frozenset(get_args(RetrieveErrorCode))

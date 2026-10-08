@@ -2542,3 +2542,21 @@ Linux envelope for realistic pages (Docker `--cpus 1 -m 1536m`, aarch64, no rlim
 384 MiB cap); 4 MiB 642.9 MiB / 16.41 s. Largest page that fits: about 2.1 MiB. Kill-test shape:
 768 KiB sibling-dense is 2.0-2.3 s CPU and a 316 MiB `VmPeak`, so it trips a 1 s CPU limit and
 not the address-space cap (512 KiB measured 1.27 s on macOS, 1.61 s / 235 MiB on Linux).
+
+### The fifty-fifth rotation: contract `1.4.0` announces the HTML worker (`release-resource-bounds` US-007)
+
+`CONTRACT_VERSION` moves to the held `1.4.0`. The in-progress entry names the `html_extraction_error`
+reason under `extraction_failed`, `retrieve.html_worker_spawns` and `retrieve.html_worker_refusals`, and the
+large-page refusal as a served-outcome change; spec 3 US-004 finalises it. `RetrieveMetricsResponse` gains the
+two counters (wired from `RetrieveMetrics`) and the `Pipeline422ErrorResponse.error` description names the
+reason. `tests/golden/contract_1_4_0.json` is new and held; goldens 1.0.0-1.3.0 are byte-unchanged.
+`contract/openapi.yaml`, its anchor and the fixture twin are regenerated.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`HEAD`) / `contract.py` reverted | `54aa96492868e3e2785dba28008815b0ea5f76e3bb1c4c5336b3d15fd2efa3ca` |
+| After | `ff18b0bfb436e14ea19269c54d1582991797eec9c055ea35260ff80959a0528c` |
+
+`contract.py` is the only hashed source that moved (`git diff --name-only`); the reversal loaded
+`git show HEAD:pipeline/contract.py` into a copy of the tree in a temp directory, read-only. `retrieval_app.py`
+and `models.py` are not hashed. Not a sanitization-behaviour change. Not replayed to Poppy.

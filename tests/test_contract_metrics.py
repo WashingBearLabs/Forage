@@ -168,15 +168,65 @@ _ONE_TWO_ZERO_SECTION_FIELDS = {
 }
 
 
+# Field set of contract 1.3.0's retrieve section: the 1.4.0 baseline.
+_ONE_THREE_ZERO_RETRIEVE_FIELDS = frozenset(
+    {
+        "requests",
+        "errors",
+        "cache_hits",
+        "cache_misses",
+        "blocked_by_reason",
+        "promptguard_state",
+        "classification_wait_timeouts",
+        "semaphore_saturation",
+        "busy_rejections",
+        "policy_invalid_domain_entry",
+        "policy_suffix_trusted_skip",
+        "promptguard_contiguity_detections",
+    }
+)
+
+
+_ONE_FOUR_ZERO_ADDITIONS = frozenset({"html_worker_spawns", "html_worker_refusals"})
+
+
+def test_every_1_4_0_metric_addition_is_named_in_the_contract_entry() -> None:
+    entry = _slice_entry((_REPO_ROOT / "pipeline" / "contract.py").read_text(), "1.4.0")
+    added = set(RetrieveMetricsResponse.model_fields) - _ONE_THREE_ZERO_RETRIEVE_FIELDS
+    assert added == _ONE_FOUR_ZERO_ADDITIONS
+    assert set(RetrieveMetricsResponse.model_fields) >= _ONE_THREE_ZERO_RETRIEVE_FIELDS
+    assert all(f"``retrieve.{name}``" in entry for name in added)
+    assert "``html_extraction_error``" in entry
+
+
+async def test_html_worker_counters_are_typed_and_emitted(
+    client: httpx.AsyncClient,
+) -> None:
+    for name in ("html_worker_spawns", "html_worker_refusals"):
+        field = RetrieveMetricsResponse.model_fields[name]
+        assert field.is_required()
+        assert field.annotation is int
+    before = (await client.get("/metrics")).json()["retrieve"]
+    assert before["html_worker_spawns"] == 0
+    assert before["html_worker_refusals"] == 0
+    app.state.retrieve_metrics.html_worker_spawns = 5
+    app.state.retrieve_metrics.html_worker_refusals = 2
+    after = (await client.get("/metrics")).json()["retrieve"]
+    assert after["html_worker_spawns"] == 5
+    assert after["html_worker_refusals"] == 2
+
+
 def test_every_1_3_0_metric_addition_is_named_in_the_contract_entry() -> None:
     entry = _slice_entry((_REPO_ROOT / "pipeline" / "contract.py").read_text(), "1.3.0")
     assert set(_ONE_TWO_ZERO_SECTION_FIELDS) == set(_SECTION_MODELS)
     for section, model in _SECTION_MODELS.items():
         previous = _ONE_TWO_ZERO_SECTION_FIELDS[section]
+        # Fields 1.4.0 added are named in its entry, not this one.
+        later = _ONE_FOUR_ZERO_ADDITIONS if section == "retrieve" else frozenset[str]()
         assert previous <= set(model.model_fields), section
         assert all(
             f"``{section}.{name}``" in entry
-            for name in set(model.model_fields) ^ previous
+            for name in (set(model.model_fields) - later) ^ previous
         ), section
     assert {field.name for field in dataclasses.fields(CacheMetrics)} == set(
         CacheMetricsResponse.model_fields
@@ -325,13 +375,6 @@ async def test_contiguity_counter_is_typed_and_emitted(
     assert response.json()[section][name] == 3
 
 
-# Counters the pipeline increments that are deliberately not on the wire yet:
-# the HTML worker's spawn and refusal counts (`release-resource-bounds` US-006),
-# exposed with the contract cut that names them in its entry. Delete this set
-# when `RetrieveMetricsResponse` gains the fields.
-_INTERNAL_RETRIEVE_COUNTERS = frozenset({"html_worker_spawns", "html_worker_refusals"})
-
-
 async def test_domain_policy_counters_match_classes_models_and_wire(
     client: httpx.AsyncClient,
 ) -> None:
@@ -340,12 +383,7 @@ async def test_domain_policy_counters_match_classes_models_and_wire(
         counters: retrieval_app.RetrieveMetrics | retrieval_app.SearchMetrics = getattr(
             app.state, f"{section}_metrics"
         )
-        internal: frozenset[str] = (
-            _INTERNAL_RETRIEVE_COUNTERS if section == "retrieve" else frozenset[str]()
-        )
-        assert set(vars(counters)) - internal == set(
-            _SECTION_MODELS[section].model_fields
-        )
+        assert set(vars(counters)) == set(_SECTION_MODELS[section].model_fields)
         for name in ("policy_invalid_domain_entry", "policy_suffix_trusted_skip"):
             assert payload[section][name] == 0
             setattr(counters, name, 7)

@@ -860,6 +860,20 @@ class RetrieveMetricsResponse(BaseModel):
             "Retrievals blocked by the contiguity rule, including both-rule verdicts."
         )
     )
+    html_worker_spawns: int = Field(
+        description=(
+            "Fetched HTML bodies above `retrieve.html_worker_threshold_bytes` "
+            "handed to the rlimited extraction worker. A spool fault counts a "
+            "spawn."
+        )
+    )
+    html_worker_refusals: int = Field(
+        description=(
+            "Worker spawns that produced no result and were refused 422 "
+            "`extraction_failed` / `html_extraction_error`. A spool fault is "
+            "not counted."
+        )
+    )
 
 
 class CacheMetricsResponse(BaseModel):
@@ -1042,7 +1056,8 @@ class Pipeline422ErrorResponse(BaseModel):
             "the same literal is /extract's 429. extraction_failed arrives on "
             "/retrieve only, as a fetched PDF the worker could not parse or "
             "spool (reason pdf_encrypted, pdf_no_text, pdf_extraction_error "
-            "or pdf_spool_error)."
+            "or pdf_spool_error) or a large fetched HTML body the worker could "
+            "not parse (reason html_extraction_error)."
         )
     )
     reason: str = Field(
@@ -1264,8 +1279,7 @@ class RetrieveMetrics:
         self.busy_rejections = 0
         self.classification_wait_timeouts = 0
         self.promptguard_contiguity_detections = 0
-        # Internal until the contract cut that exposes them on `/metrics`:
-        # large HTML bodies handed to the worker, and the worker's refusals.
+        # Large HTML bodies handed to the worker, and the worker's refusals.
         self.html_worker_spawns = 0
         self.html_worker_refusals = 0
 
@@ -2210,6 +2224,8 @@ async def metrics(request: Request) -> dict[str, Any]:
             "promptguard_contiguity_detections": (
                 retrieve_metrics.promptguard_contiguity_detections
             ),
+            "html_worker_spawns": retrieve_metrics.html_worker_spawns,
+            "html_worker_refusals": retrieve_metrics.html_worker_refusals,
         },
         # A different layer from `retrieve.cache_hits`/`cache_misses` above,
         # not a duplicate of it — :class:`CacheMetricsResponse` says why, and

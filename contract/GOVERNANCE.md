@@ -26,7 +26,7 @@ response, and does every name it already knows still mean what it meant?
 | Schema fixtures | `tests/golden/contract_X_Y_Z.json` | by hand, one per contract version |
 | What the running service serves | `/openapi.json` `info.version`, `/health`'s `contract_version` | from `CONTRACT_VERSION` at import |
 
-The current contract version is **1.3.0**. *(That sentence is checked against
+The current contract version is **1.4.0**. *(That sentence is checked against
 `pipeline/contract.py` by `tests/test_governance_docs.py`; a bump that leaves it stale is
 a red test, not a stale doc.)*
 
@@ -72,7 +72,10 @@ The next mapping is **published**: image `v1.2.2` (2026-10-04, verified), a
 PATCH that makes the opt-in 86M classifier selectable, serves contract
 `1.3.0`, unchanged from `v1.2.1`. It is not the next MINOR, so both "next MINOR" windows below
 (ruling (g)'s `retrieve.max_promptguard_chunks` flip and the 422 field drop)
-stay open. A process built from this tree reports `1.3.0` on `/health`.
+stay open. A process built from this tree reports `1.4.0` on `/health`: the held
+`release-resource-bounds` cut, unpublished, whose `contract_1_4_0.json` is regenerated until
+the tag. Image `v1.0.0` serving contract `1.4.0` is not a mapping that exists; the example
+above stays the one that shows the two semvers diverging.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the
 last unmechanized integrity claim in the release path, so it is not a human line. The

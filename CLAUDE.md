@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.3.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.4.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, add a golden fixture
 under `tests/golden/` (older ones are retained, never edited), and note the change for the
 consuming repo.
@@ -686,6 +686,14 @@ both-reverted control reproducing `0ace27ca…` under default and shipped config
 outcome moves only for a page the worker refuses (a coded 422); within bounds the response is
 byte-identical (corpus comparison against `0`, in-process for all page records and by real
 spawn on a sample). Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The fifty-fifth rotation is `54aa9649…` → `ff18b0bf…` for
+`release-resource-bounds` US-007 — **not a sanitization-behaviour change**: the held
+contract `1.4.0` entry in `pipeline/contract.py` announces `html_extraction_error` and
+`retrieve.html_worker_spawns` / `html_worker_refusals`. `contract.py` is the only hashed file
+that moves; a read-only whole-file reversal against `HEAD` reproduces `54aa9649…` under
+default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` is not hashed. Not replayed
+to Poppy. Full values: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

@@ -858,6 +858,16 @@ fields to the 1.3.0 entry.
 
 - The contract bump to 1.4.0 happens in US-007. Spec 3 finalises the entry.
 
+### US-007 notes
+
+- Held contract `1.4.0` cut: `RetrieveMetricsResponse` gained `html_worker_spawns` / `html_worker_refusals`
+  (wired from `RetrieveMetrics`); `_INTERNAL_RETRIEVE_COUNTERS` is deleted. `contract_1_4_0.json` is new
+  (one description line differs from 1.3.0); spec 3 regenerates it until the tag.
+- `test_every_1_3_0_metric_addition...` subtracts the 1.4.0 additions from the retrieve section so each
+  entry names only its own fields; `test_every_1_4_0_metric_addition...` is the analogue.
+- Anchor quotes refreshed in API_GUIDE, CI_CD, DEPLOYMENT and SERVICE_MAP. Rotation 54th->55th
+  (`54aa9649` -> `ff18b0bf`), `contract.py` alone, control reproduces `54aa9649`.
+
 ## Clarifications
 
 ### Session 2026-10-07
