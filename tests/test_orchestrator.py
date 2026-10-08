@@ -495,7 +495,7 @@ def _make_pg_safe(**overrides: Any) -> PromptGuardResult:
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -685,7 +685,7 @@ async def test_retrieve_summary_cache_does_not_serve_full_request(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -747,7 +747,7 @@ async def test_retrieve_ttl_zero_deletes_without_cache_read_or_write(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.build_retrieved_content")
@@ -810,7 +810,7 @@ async def test_retrieve_stage2_blocked_returns_quarantine(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -878,7 +878,7 @@ async def test_retrieve_stage3_injection_returns_quarantine(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocked(
@@ -914,7 +914,7 @@ async def test_retrieve_classifier_absent_fail_closed_reports_unavailable_blocke
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
@@ -949,7 +949,7 @@ async def test_retrieve_classifier_absent_fail_open_reports_unavailable_allowed(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 async def test_retrieve_trusted_tier_loaded_classifier_reports_skipped_trusted(
@@ -1816,7 +1816,8 @@ async def test_a_markup_subset_probe_is_caught_on_retrieve(name: str) -> None:
                 classifier=None,
                 config=_SAMPLE_CONFIG,
                 sanitizer_revision=_SAMPLE_REVISION,
-                **_retrieve_kwargs(),
+                # The 2 MB padding page is past the default 64-chunk ceiling.
+                **_retrieve_kwargs(settings=RetrieveSettings(max_promptguard_chunks=0)),
             )
         assert retrieved.stage2_verdict != Stage2Verdict.CLEAN, (name, where)
 
@@ -1866,15 +1867,15 @@ async def test_a_markup_subset_probe_is_caught_on_search(name: str, field: str) 
 
 
 def test_the_retrieve_thread_returns_only_a_scan_result_for_the_markup() -> None:
-    from pipeline.orchestrator import _extract_html_and_scan_inline
+    from pipeline.html_subprocess import extract_html_and_scan
 
-    extraction, page_scan = _extract_html_and_scan_inline(
+    extraction, page_scan = extract_html_and_scan(
         "<html><body><system>x</system></body></html>", None, None
     )
     assert extraction.scan_text_inline is None
     assert isinstance(page_scan, StructuralScanResult)
     assert page_scan.verdict != Stage2Verdict.CLEAN
-    clean_extraction, clean_scan = _extract_html_and_scan_inline(
+    clean_extraction, clean_scan = extract_html_and_scan(
         "<html><body><p>hello</p></body></html>", None, None
     )
     assert isinstance(clean_extraction, ExtractionResult)
@@ -2389,7 +2390,7 @@ def client() -> httpx.AsyncClient:
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -2459,7 +2460,7 @@ def memory_cache_client(client: httpx.AsyncClient) -> httpx.AsyncClient:
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -2527,7 +2528,7 @@ async def test_post_retrieve_repeat_is_served_from_the_in_memory_cache(
     return_value=("93.184.216.34", "example.com"),
 )
 @patch("pipeline.orchestrator.fetch_url", new_callable=AsyncMock)
-@patch("pipeline.orchestrator.extract_html")
+@patch("pipeline.html_subprocess.extract_html")
 @patch("pipeline.orchestrator.detect_content_type", return_value="html")
 @patch("pipeline.orchestrator.scan_structural_forms")
 @patch("pipeline.orchestrator.run_promptguard", new_callable=AsyncMock)
@@ -2634,7 +2635,7 @@ def _spool_leftovers(root: Path) -> list[Path]:
     directory = root / f"forage-spool-{os.geteuid()}"
     if not directory.exists():
         return []
-    return sorted(directory.glob("forage-retrieve-*"))
+    return sorted(directory.glob("forage-retrieve-pdf-*"))
 
 
 def _fetched(body: bytes, content_type: str) -> ExitStack:
@@ -2703,7 +2704,7 @@ async def test_post_retrieve_fetched_pdf_runs_in_the_worker_inside_the_slot(
     assert seen["settings"] is app.state.extraction_settings
     assert seen["path"].parent == seen["spool_dir"]
     assert seen["spool_dir"] == spool_root / f"forage-spool-{os.geteuid()}"
-    assert seen["path"].name.startswith("forage-retrieve-")
+    assert seen["path"].name.startswith("forage-retrieve-pdf-")
     assert seen["mode"] == 0o600
     assert seen["off_loop"] is True
     assert seen["active"] == 1
@@ -2913,6 +2914,54 @@ async def test_post_retrieve_fetched_pdf_runs_under_the_extraction_ceiling(
     assert as_html.status_code == 200
     assert as_html.json()["content_type"] == "html"
     assert _spool_leftovers(spool_root) == []
+
+
+@pytest.mark.parametrize("site", ["pdf_worker", "character_precheck", "backstop"])
+async def test_post_retrieve_budget_refusal_increments_the_counter_at_each_site(
+    client: httpx.AsyncClient, spool_root: Path, site: str
+) -> None:
+    """All three ``promptguard_budget`` refusal sites reach the handler's counter."""
+    from retrieval_app import app
+
+    assert app.state.retrieve_metrics.promptguard_budget_refusals == 0
+    if site == "pdf_worker":
+
+        def over_budget(_path: Path, _settings: ExtractionSettings) -> ExtractionResult:
+            raise PDFClassifiableTextLimitError("over budget")
+
+        with (
+            _fetched(b"%PDF-1.7 fetched report", "application/pdf"),
+            patch.object(pdf_subprocess, "extract_pdf_in_subprocess", over_budget),
+        ):
+            resp = await client.post(
+                "/retrieve", json={"url": "https://example.com/report.pdf"}
+            )
+    else:
+        text = " ".join(["quarterly"] * 250)
+        html = f"<html><body><article><p>{text}</p></article></body></html>"
+        app.state.retrieve_settings = RetrieveSettings(
+            max_promptguard_chunks=1 if site == "character_precheck" else 256
+        )
+        backstop = patch(
+            "pipeline.orchestrator.sanitize_and_structure",
+            new=AsyncMock(side_effect=PromptGuardBudgetExceededError("budget")),
+        )
+        with _fetched(html.encode(), "text/html"):
+            if site == "backstop":
+                with backstop:
+                    resp = await client.post(
+                        "/retrieve", json={"url": "https://example.com/page.html"}
+                    )
+            else:
+                resp = await client.post(
+                    "/retrieve", json={"url": "https://example.com/page.html"}
+                )
+
+    assert resp.status_code == 422
+    assert resp.json()["reason"] == contract.PROMPTGUARD_BUDGET
+    assert app.state.retrieve_metrics.promptguard_budget_refusals == 1
+    metrics = (await client.get("/metrics")).json()["retrieve"]
+    assert metrics["promptguard_budget_refusals"] == 1
 
 
 async def test_post_search_endpoint_success(client: httpx.AsyncClient) -> None:
@@ -6040,7 +6089,7 @@ async def _retrieve_with_text(
             return_value=_make_fetch_result(),
         ),
         patch(
-            "pipeline.orchestrator.extract_html",
+            "pipeline.html_subprocess.extract_html",
             MagicMock(return_value=_make_extraction(raw_text=raw_text)),
         ),
     ):
@@ -6087,12 +6136,25 @@ async def test_a_fetched_page_exactly_at_the_budget_is_served() -> None:
     assert content.injection_detected is False
 
 
-@pytest.mark.parametrize("config", [{}, {"retrieve": {"max_promptguard_chunks": 0}}])
-async def test_the_default_zero_budget_runs_no_pre_check_at_all(
-    config: dict[str, Any],
-) -> None:
-    """`0` is today's behaviour: no ceiling, and no `max_chunks` handed over."""
-    settings = retrieve_settings_from_config(config)
+async def test_the_default_budget_refuses_an_over_budget_page() -> None:
+    """The default is 64 chunks: a page past 114,688 characters is refused."""
+    settings = retrieve_settings_from_config({})
+    ceiling = settings.max_extracted_characters
+    assert ceiling == 114_688
+
+    classifier = _loaded_classifier()
+    with pytest.raises(PipelineError) as excinfo:
+        await _retrieve_with_text("a" * (ceiling + 1), settings, classifier)
+    classifier.classify_windows.assert_not_called()
+    assert excinfo.value.error == "content_too_large"
+    assert excinfo.value.reason == contract.PROMPTGUARD_BUDGET
+
+
+async def test_an_explicit_zero_budget_runs_no_pre_check_at_all() -> None:
+    """Explicit `0` is the opt-out: no ceiling, and no `max_chunks` handed over."""
+    settings = retrieve_settings_from_config(
+        {"retrieve": {"max_promptguard_chunks": 0}}
+    )
     assert settings.max_extracted_characters is None
 
     classifier = _loaded_classifier()
@@ -6129,10 +6191,9 @@ async def test_the_classifier_budget_error_maps_to_the_same_refusal() -> None:
     [
         ({"retrieve": {"max_promptguard_chunks": 256}}, "word " * 1000),
         ({"retrieve": {"max_promptguard_chunks": 256}}, "a" * 458752),
-        ({}, "a" * 600000),
         ({"retrieve": {"max_promptguard_chunks": 0}}, "a" * 600000),
     ],
-    ids=["under-budget", "boundary", "absent", "explicit-zero"],
+    ids=["under-budget", "boundary", "explicit-zero"],
 )
 async def test_retrieve_classifies_every_window_with_compatible_response(
     config: dict[str, Any],
@@ -6164,7 +6225,9 @@ async def test_retrieve_classifies_every_window_with_compatible_response(
     assert model.call_count == len(windows)
     assert [call.args[0] for call in tokenizer.call_args_list] == windows
     # Previous unbounded call: same real gauntlet, just no max_chunks.
-    baseline = await _retrieve_with_text(text, RetrieveSettings(), _loaded_classifier())
+    baseline = await _retrieve_with_text(
+        text, _budget_settings(settings.max_promptguard_chunks), _loaded_classifier()
+    )
     assert content.promptguard_state == "scanned"
     assert content.model_dump(
         exclude={"request_id", "retrieved_at"}
@@ -7560,7 +7623,7 @@ async def test_post_retrieve_quarantine_serves_a_null_title_and_is_never_cached(
         validate_patch,
         fetch_patch,
         patch(
-            "pipeline.orchestrator.extract_html",
+            "pipeline.html_subprocess.extract_html",
             return_value=_make_extraction(title=_HOSTILE_TITLE),
         ),
         patch(
@@ -7596,7 +7659,7 @@ async def test_post_retrieve_clean_page_still_serves_its_title(
         validate_patch,
         fetch_patch,
         patch(
-            "pipeline.orchestrator.extract_html",
+            "pipeline.html_subprocess.extract_html",
             return_value=_make_extraction(title="A Fine Title"),
         ),
         patch(

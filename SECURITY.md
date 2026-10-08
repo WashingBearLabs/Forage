@@ -107,6 +107,17 @@ known and will be closed as such.
   problem is upstream's, and a weights-free Forage reports itself `degraded` rather than
   pretending content was scanned.
 
+## Spool files at rest
+
+Fetched documents and `/extract` uploads are spooled `0600` into a `0700` per-euid
+directory and unlinked on every normal exit path. A SIGKILLed process can orphan one; the
+next startup unlinks aged orphans (`forage-extract-*`, `forage-retrieve-*`, legacy
+`poppy-extract-*`) that are regular, euid-owned and older than the maximum permitted wall
+clock plus 60 s — fd-relative, without following symlinks, never recursing, and logging
+only a count. Between boots an orphan persists, so a tmpfs `TMPDIR` is the way to keep
+spooled content off disk entirely. A stalled `/extract` upload can be swept mid-flight and
+then fails closed with a 422. See `docs/configuration.md`, "The spool directory".
+
 ## How a fix ships
 
 A fix lands on `main` through a pull request behind the same six gates as anything else

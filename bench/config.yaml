@@ -82,12 +82,12 @@ extraction:
 retrieve:
   # Classification budget for a FETCHED page, separate from `extraction`'s
   # ceiling for uploads and fetched PDFs. `0` means no pre-check and no
-  # `max_chunks` handed to the classifier — today's behaviour — and boot logs
-  # one WARNING `retrieve_budget_unset coming_default=256`. It ships as `0`
-  # for one minor release; the next MINOR flips the default to 256, and `0`
-  # stays a legal opt-out after that (contract/GOVERNANCE.md ruling (g)).
-  # Derived character ceiling at 256 = (512 - 64) * 256 * 4 = 458752.
-  max_promptguard_chunks: 0
+  # `max_chunks` handed to the classifier — the pre-1.4.0 behaviour — and is
+  # the explicit opt-out. The default is 64 (owner ruling 2026-10-07, measured;
+  # contract/GOVERNANCE.md ruling (g)), so one large page cannot hold the
+  # classification permit past the wait other requests are given.
+  # Derived character ceiling at 64 = (512 - 64) * 64 * 4 = 114688.
+  max_promptguard_chunks: 64
   # Pinned at exactly 1, for the reason `extraction.extraction_concurrency` is:
   # a fetched PDF spawns the same bounded worker under the same
   # `child_address_space_bytes` rlimit, so N fetch slots would put
@@ -100,6 +100,13 @@ retrieve:
   # exercisable.
   admission_queue_depth: 4
   max_queued_fetch_bytes: 31457280
+  # Fetched HTML bodies above this many bytes parse in the bounded worker
+  # (rlimited, killable) instead of the request thread; at or below it they
+  # stay in-thread. 0 sends every body to the worker. Maximum 2 x the default
+  # (1048576): raising it weakens the bound. Not a cache-key or revision
+  # input -- the output is byte-identical either way. See docs/configuration.md,
+  # "HTML worker threshold".
+  html_worker_threshold_bytes: 524288
 # Per-request PromptGuard policy floors for the fetch routes. A request may
 # not relax below `promptguard_fail_closed_floor` nor above
 # `promptguard_threshold_ceiling`; the shipped values (false / 1.0) impose no
@@ -111,4 +118,4 @@ promptguard_fail_closed_floor: false
 promptguard_threshold_ceiling: 1.0
 # How long either fetch route waits for a classification slot before giving
 # up. A float so sub-second values are expressible.
-promptguard_wait_seconds: 30.0
+promptguard_wait_seconds: 90.0

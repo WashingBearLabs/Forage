@@ -64,6 +64,7 @@ from pipeline.contract import (
 )
 from pipeline.extraction_limits import (
     CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL,
+    MAX_EXTRACTION_WALL_SECONDS,
     MAX_INPUT_BYTES,
     PARENT_RESERVATION_BYTES,
     PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES,
@@ -82,7 +83,6 @@ from pipeline.orchestrator import (
 )
 from pipeline.pdf_subprocess import SpoolDirectoryError, spool_dir
 from pipeline.retrieve_limits import (
-    COMING_MAX_PROMPTGUARD_CHUNKS,
     RetrieveConfigurationError,
     RetrieveSettings,
     retrieve_settings_from_config,
@@ -112,6 +112,7 @@ from pipeline.stage3_promptguard import (
     promptguard_settings_from_config,
 )
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
+from pipeline.worker_launch import make_process_non_dumpable, sweep_stale_spool
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
     PromptGuardClassifier,
@@ -461,6 +462,7 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "retrieve.fetch_concurrency",
         "retrieve.admission_queue_depth",
         "retrieve.max_queued_fetch_bytes",
+        "retrieve.html_worker_threshold_bytes",
     }
 )
 
@@ -857,6 +859,28 @@ class RetrieveMetricsResponse(BaseModel):
             "Retrievals blocked by the contiguity rule, including both-rule verdicts."
         )
     )
+    html_worker_spawns: int = Field(
+        description=(
+            "Fetched HTML bodies above `retrieve.html_worker_threshold_bytes` "
+            "handed to the rlimited extraction worker. A spool fault counts a "
+            "spawn."
+        )
+    )
+    html_worker_refusals: int = Field(
+        description=(
+            "Worker spawns that produced no result and were refused 422 "
+            "`extraction_failed` / `html_extraction_error`. A spool fault is "
+            "not counted."
+        )
+    )
+    promptguard_budget_refusals: int = Field(
+        description=(
+            "`/retrieve` requests refused 422 `content_too_large` / "
+            "`promptguard_budget` because the extracted text exceeded the "
+            "`retrieve.max_promptguard_chunks` budget. Zero when the budget "
+            "is 0 (no limit)."
+        )
+    )
 
 
 class CacheMetricsResponse(BaseModel):
@@ -1039,7 +1063,8 @@ class Pipeline422ErrorResponse(BaseModel):
             "the same literal is /extract's 429. extraction_failed arrives on "
             "/retrieve only, as a fetched PDF the worker could not parse or "
             "spool (reason pdf_encrypted, pdf_no_text, pdf_extraction_error "
-            "or pdf_spool_error)."
+            "or pdf_spool_error) or a large fetched HTML body the worker could "
+            "not parse (reason html_extraction_error)."
         )
     )
     reason: str = Field(
@@ -1120,10 +1145,10 @@ class DetailResponse(BaseModel):
 class ValidationErrorDetail(BaseModel):
     """One entry of the service's redacted request-validation error list.
 
-    The handler emits the declared trio ``loc``, ``msg``, ``type``, capped at
-    ``_MAX_VALIDATION_ERRORS`` entries. For contract 1.3.0 ``input``, ``ctx``
-    and ``url`` are present with the fixed value ``"[redacted]"``; they are
-    dropped at the next MINOR (GOVERNANCE ruling (l)).
+    The handler emits exactly the declared trio ``loc``, ``msg``, ``type``,
+    capped at ``_MAX_VALIDATION_ERRORS`` entries. ``input``, ``ctx`` and ``url``
+    were present with the fixed value ``"[redacted]"`` in contract 1.3.0 and
+    are gone from 1.4.0 (GOVERNANCE ruling (l)).
     """
 
     loc: list[str | int] = Field(
@@ -1157,8 +1182,6 @@ _MAX_MIME_HINT_LENGTH = 255
 _MAX_REQUEST_ID_LENGTH = 128
 _MAX_DOCUMENT_BYTES = MAX_INPUT_BYTES
 _MAX_VALIDATION_ERRORS = 100
-_VALIDATION_PLACEHOLDER = "[redacted]"
-_VALIDATION_WINDOW_KEYS = ("input", "ctx", "url")
 _ROUTE_LOC_ALLOWLIST: dict[str, frozenset[str]] = {
     "/search": frozenset(SearchRequest.model_fields),
     "/retrieve": frozenset(RetrieveRequest.model_fields),
@@ -1261,6 +1284,12 @@ class RetrieveMetrics:
         self.busy_rejections = 0
         self.classification_wait_timeouts = 0
         self.promptguard_contiguity_detections = 0
+        # Large HTML bodies handed to the worker, and the worker's refusals.
+        self.html_worker_spawns = 0
+        self.html_worker_refusals = 0
+        # `/retrieve` 422s refused on the classification budget, counted at the
+        # handler from `PipelineError.reason`.
+        self.promptguard_budget_refusals = 0
 
     def record_error(self, error: str) -> None:
         """Record one content-free retrieve error, keyed by ``PipelineError.error``."""
@@ -1566,7 +1595,7 @@ async def _spool_upload(
     received_bytes = 0
     try:
         with tempfile.NamedTemporaryFile(
-            prefix="poppy-extract-",
+            prefix="forage-extract-",
             suffix=".upload",
             dir=spool_dir(),
             delete=False,
@@ -1641,6 +1670,8 @@ def _sanitize_upload_metadata(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown lifecycle."""
+    if not make_process_non_dumpable():
+        logger.info("process_non_dumpable_not_set")
     model_id, model_allowed = model_fetcher.resolve_model_id()
     if not model_allowed:
         raise model_fetcher.ModelConfigurationError("model_id_not_allowed")
@@ -1711,18 +1742,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # path. Each spool re-runs the same check, because a directory verified now
     # can be removed and re-created by another local user later.
     try:
-        spool_dir()
+        spool_directory = spool_dir()
     except SpoolDirectoryError as exc:
         raise RetrieveConfigurationError(str(exc)) from exc
-    if retrieve_settings.max_promptguard_chunks == 0:
-        # Exactly one WARNING, closed token plus the integer — no URL, no
-        # config dump. `0` is the shipped default for one minor release
-        # (`contract/GOVERNANCE.md` ruling (g)); this names the value the next
-        # MINOR flips to, so an operator reading boot logs finds the window
-        # rather than discovering it in a Release body.
-        logger.warning(
-            "retrieve_budget_unset coming_default=%d", COMING_MAX_PROMPTGUARD_CHUNKS
-        )
+    # Orphans of a killed process are removed here. The age gate is the
+    # *maximum permitted* wall clock, not `settings.wall_clock_seconds`, so a
+    # sibling process with a longer config sharing this per-euid directory
+    # never has a live spool swept. A count only — never a name or path.
+    swept = sweep_stale_spool(
+        spool_directory, max_wall_clock_seconds=MAX_EXTRACTION_WALL_SECONDS
+    )
+    logger.info("spool_sweep removed=%d", swept)
     app.state.extraction_metrics = ExtractionMetrics()
     app.state.extraction_admission = ExtractionAdmissionController(
         settings,
@@ -1922,9 +1952,8 @@ app = FastAPI(
 _initial_extraction_settings = extraction_settings_from_config({})
 app.state.extraction_settings = _initial_extraction_settings
 # The file route's module-level fallback shape, for a transport that never
-# fires lifespan events. Deliberately silent: the `retrieve_budget_unset`
-# WARNING belongs to the lifespan, so a lifespan-free test does not emit a
-# boot warning nobody configured.
+# fires lifespan events. Deliberately silent: boot logging belongs to the
+# lifespan, so a lifespan-free test does not emit a record nobody configured.
 app.state.retrieve_settings = retrieve_settings_from_config({})
 # The search handler also supports transports that never fire lifespan events.
 app.state.search_targets = SearchTargets()
@@ -2007,7 +2036,6 @@ async def request_validation_error_handler(
                     "loc": loc,
                     "msg": str(entry.get("msg", "")),
                     "type": str(entry.get("type", "")),
-                    **dict.fromkeys(_VALIDATION_WINDOW_KEYS, _VALIDATION_PLACEHOLDER),
                 }
             )
         response = JSONResponse(status_code=422, content={"detail": items})
@@ -2063,9 +2091,8 @@ async def pipeline_error_handler(
 
 _PIPELINE_422_DESCRIPTION = (
     "Pipeline refusal (coded body) or request validation failure "
-    "(redacted loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); "
-    "input/ctx/url carry '[redacted]' in contract 1.3.0 and are dropped "
-    "at the next MINOR)."
+    "(redacted entries of exactly loc/msg/type, at most "
+    "_MAX_VALIDATION_ERRORS (100))."
 )
 
 
@@ -2192,6 +2219,11 @@ async def metrics(request: Request) -> dict[str, Any]:
             "busy_rejections": retrieve_metrics.busy_rejections,
             "promptguard_contiguity_detections": (
                 retrieve_metrics.promptguard_contiguity_detections
+            ),
+            "html_worker_spawns": retrieve_metrics.html_worker_spawns,
+            "html_worker_refusals": retrieve_metrics.html_worker_refusals,
+            "promptguard_budget_refusals": (
+                retrieve_metrics.promptguard_budget_refusals
             ),
         },
         # A different layer from `retrieve.cache_hits`/`cache_misses` above,
@@ -2348,6 +2380,8 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
         )
     except PipelineError as exc:
         retrieve_metrics.record_error(exc.error)
+        if exc.reason == contract.PROMPTGUARD_BUDGET:
+            retrieve_metrics.promptguard_budget_refusals += 1
         raise
     retrieve_metrics.record_content(content)
     return content.model_copy(
@@ -2395,9 +2429,8 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             "model": Extract422ErrorResponse | HTTPValidationError,
             "description": (
                 "Document failure (coded body, carrying sanitizer_revision) or "
-                "request validation failure (redacted loc/msg/type entries, "
-                "at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry "
-                "'[redacted]' in contract 1.3.0 and are dropped at the next MINOR)."
+                "request validation failure (redacted entries of exactly "
+                "loc/msg/type, at most _MAX_VALIDATION_ERRORS (100))."
             ),
         },
         429: {

@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: release-resource-bounds
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: "T2 hardening follow-through — bound the remaining CPU costs and cut v1.3.0"
@@ -11,7 +11,8 @@ epic: forage-v1-3-0-release
 epic_seq: 1
 epic_final: false
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
+completed: 2026-10-08
 ---
 
 # Feature Spec: Release Resource Bounds — Linear Stage 1, HTML Parse in a Scrubbed Rlimited Worker, `/search` off the Loop
@@ -149,25 +150,25 @@ byte-unchanged.
   354 ms per field. Record the before and after for a 8,000-character unclosed-span snippet.
 
 **Acceptance Criteria:**
-- [ ] `copy.copy` no longer appears in `pipeline/stage1_extraction.py` (grep), and `import copy`
+- [x] `copy.copy` no longer appears in `pipeline/stage1_extraction.py` (grep), and `import copy`
       is removed if unused.
-- [ ] For every corpus HTML record and every stage-1 unit fixture, all `ExtractionResult` fields
+- [x] For every corpus HTML record and every stage-1 unit fixture, all `ExtractionResult` fields
       equal the pre-story output, under all four `with_inline`/`prune_hidden` combinations. This is
       an in-process equivalence test against frozen values generated before the change.
   - The fixtures include a hidden-element page and a pruned-fallback page
     (`main_content_is_fallback=True`).
-- [ ] The pruned fallback strips `pruned_soup` in place, and is never a re-parse of the input. The
+- [x] The pruned fallback strips `pruned_soup` in place, and is never a re-parse of the input. The
       hidden-element fallback fixture proves the hidden text stays out.
-- [ ] `tests/stage1_shapes.py` defines the four pinned shapes, and `tests/test_stage1_complexity.py`
+- [x] `tests/stage1_shapes.py` defines the four pinned shapes, and `tests/test_stage1_complexity.py`
       shows each scales within `_RATIO_BOUND` between 64 KiB and 256 KiB under calibrated ceilings.
       Before and after seconds per shape are recorded.
-- [ ] The corpus baseline regenerates with zero outcome changes, and both cassettes are
+- [x] The corpus baseline regenerates with zero outcome changes, and both cassettes are
       byte-unchanged.
-- [ ] The rotation is recorded per the procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The rotation is recorded per the procedure.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: A shared worker launcher — explicit environment, fd-passed pipe, fixed working directory
 
@@ -240,25 +241,25 @@ PDF worker moved onto the shared launcher so a second worker reuses reviewed cod
   `kit_tools/arch/DECISIONS.md` gets a dated entry.
 
 **Acceptance Criteria:**
-- [ ] `pipeline/worker_launch.py` and `pipeline/worker_entry.py` exist, and the PDF worker runs
+- [x] `pipeline/worker_launch.py` and `pipeline/worker_entry.py` exist, and the PDF worker runs
       through them. Every existing PDF worker test passes with at most import and seam edits.
-- [ ] With every name in `_CLEARED_ENV_VARS` and a pattern-matching sentinel set in the parent, a
+- [x] With every name in `_CLEARED_ENV_VARS` and a pattern-matching sentinel set in the parent, a
       real worker child's `os.environ` keys are a subset of the recorded allowlist ∪ the recorded
       platform-injected set (`__CF_USER_TEXT_ENCODING` on darwin), and contain no excluded or
       pattern-matching name (test).
-- [ ] The child imports its parsers successfully under that environment.
-- [ ] On Linux (CI), the child's `/proc/self/environ` contains no excluded name (test; skipped with
+- [x] The child imports its parsers successfully under that environment.
+- [x] On Linux (CI), the child's `/proc/self/environ` contains no excluded name (test; skipped with
       a recorded reason elsewhere).
-- [ ] A real worker launched while the parent's cwd is an unrelated temp dir succeeds (test).
+- [x] A real worker launched while the parent's cwd is an unrelated temp dir succeeds (test).
       `cwd=` is the project root.
-- [ ] A `Popen` `OSError` maps to the PDF worker's existing failure error (test).
-- [ ] SECURITY.md (worker isolation and the verdict-integrity residual) and DECISIONS.md are
+- [x] A `Popen` `OSError` maps to the PDF worker's existing failure error (test).
+- [x] SECURITY.md (worker isolation and the verdict-integrity residual) and DECISIONS.md are
       updated.
-- [ ] `sanitizer_revision` is unchanged (no hashed file edited), with the values recorded.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `sanitizer_revision` is unchanged (no hashed file edited), with the values recorded.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-003: Make the parent non-dumpable on Linux
 
@@ -290,18 +291,18 @@ tests pass.
   - The guarantee also assumes the container lacks `CAP_SYS_PTRACE`.
 
 **Acceptance Criteria:**
-- [ ] On Linux the parent sets `PR_SET_DUMPABLE` to 0 at startup, and a real worker child's read
+- [x] On Linux the parent sets `PR_SET_DUMPABLE` to 0 at startup, and a real worker child's read
       of `/proc/<ppid>/environ` raises `PermissionError` (test; skipped with a recorded reason
       elsewhere).
-- [ ] Existing metrics and health tests pass. Spawn latency under dumpable 0 is measured on Linux
+- [x] Existing metrics and health tests pass. Spawn latency under dumpable 0 is measured on Linux
       and recorded.
-- [ ] SECURITY.md lists the same-uid, `--init`, `--workers`, non-exec-wrapper and
+- [x] SECURITY.md lists the same-uid, `--init`, `--workers`, non-exec-wrapper and
       `CAP_SYS_PTRACE` residuals, and the loss of core dumps and debugger attach.
-- [ ] `sanitizer_revision` is unchanged.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `sanitizer_revision` is unchanged.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-004: Sweep stale spool files at startup, safely
 
@@ -345,24 +346,24 @@ fresh one, a symlink, a foreign-prefix file and a subdirectory entry all survive
 - **Docs.** The at-rest lifecycle goes in `docs/configuration.md` and SECURITY.md.
 
 **Acceptance Criteria:**
-- [ ] `/extract`'s spool prefix is `forage-extract-`, and the existing upload tests pass.
-- [ ] Startup removes an aged euid-owned regular file for each of the `forage-extract-`,
+- [x] `/extract`'s spool prefix is `forage-extract-`, and the existing upload tests pass.
+- [x] Startup removes an aged euid-owned regular file for each of the `forage-extract-`,
       `forage-retrieve-` and `poppy-extract-` prefixes. It keeps a fresh prefixed file, a
       symlink, a foreign-prefix file and an entry in a subdirectory (one test each, with `mtime`
       set via `os.utime`).
-- [ ] Unlinks are `dir_fd`-relative after a no-follow `stat`. Covered by two tests:
+- [x] Unlinks are `dir_fd`-relative after a no-follow `stat`. Covered by two tests:
   - a seam swaps the entry for a symlink to an outside file after the stat; the outside file
     survives;
   - `FileNotFoundError`, `IsADirectoryError` and `PermissionError` during unlink are swallowed
     without logging a name.
-- [ ] The PDF worker's spool prefix is `forage-retrieve-pdf-` (test). The age gate uses the
+- [x] The PDF worker's spool prefix is `forage-retrieve-pdf-` (test). The age gate uses the
       maximum permitted wall clock (test with a raised running value).
-- [ ] The log record is a closed token plus a count (test).
-- [ ] The configuration and security docs describe the lifecycle.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The log record is a closed token plus a count (test).
+- [x] The configuration and security docs describe the lifecycle.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-005: The HTML extraction worker — shared stage-1 function, strict frame, measured envelope
 
@@ -458,31 +459,31 @@ validated plain-data frame, so that the parse cost of a hostile page is bounded 
   - Also record these figures under a `docs/bootstrap-notes.md` heading.
 
 **Acceptance Criteria:**
-- [ ] `pipeline/html_subprocess.py` holds `extract_html_and_scan` and
+- [x] `pipeline/html_subprocess.py` holds `extract_html_and_scan` and
       `extract_html_bytes_in_subprocess`, using the US-002 launcher and the US-004 prefix.
       `orchestrator.py` is not edited.
-- [ ] For every corpus `/retrieve` HTML record, plus a non-UTF-8 body and an over-budget body, the
+- [x] For every corpus `/retrieve` HTML record, plus a non-UTF-8 body and an over-budget body, the
       in-process frame round trip equals `orchestrator._extract_html_and_scan_inline`. That covers
       `ExtractionResult`, verdict, penalty, categories and line numbers. A real-spawn test on the
       fixed 12-body sample matches too.
-- [ ] The raw frame bytes contain neither `scan_text_inline` nor a marker string that occurs only
+- [x] The raw frame bytes contain neither `scan_text_inline` nor a marker string that occurs only
       in a matched span (test). The docstring enumerates every field.
-- [ ] The worker path re-emits `stage2_fold_expansion_refused` exactly when the in-thread path
+- [x] The worker path re-emits `stage2_fold_expansion_refused` exactly when the in-thread path
       does (parity test).
-- [ ] The parent rejects a forged frame for each validation rule with `HTMLExtractionError` (one
+- [x] The parent rejects a forged frame for each validation rule with `HTMLExtractionError` (one
       test each).
-- [ ] `MAX_HTML_FRAME_BYTES` is derived and documented. The largest admissible result fits, and
+- [x] `MAX_HTML_FRAME_BYTES` is derived and documented. The largest admissible result fits, and
       an over-cap frame is refused, not truncated (tests). Parent peak RSS is recorded for the
       budget-off and 64-chunk cases.
-- [ ] The kill test passes, a spawn `OSError` maps to `HTMLExtractionError`, and no child
+- [x] The kill test passes, a spawn `OSError` maps to `HTMLExtractionError`, and no child
       survives (tests).
-- [ ] The Linux envelope (VmPeak and CPU per size, and the largest page that fits) is recorded in
+- [x] The Linux envelope (VmPeak and CPU per size, and the largest page that fits) is recorded in
       Implementation Notes, `docs/configuration.md` and `docs/bootstrap-notes.md`.
-- [ ] `sanitizer_revision` is unchanged, with the values recorded.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `sanitizer_revision` is unchanged, with the values recorded.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-006: Route large `/retrieve` HTML bodies through the worker
 
@@ -569,31 +570,31 @@ hostile page costs at most the worker's limits, while ordinary pages keep today'
 - **Rotation.** `orchestrator.py` and `contract.py` move; follow the procedure.
 
 **Acceptance Criteria:**
-- [ ] The in-thread path calls `html_subprocess.extract_html_and_scan`, with no second copy of its
+- [x] The in-thread path calls `html_subprocess.extract_html_and_scan`, with no second copy of its
       body (grep).
-- [ ] A body exactly at the threshold parses in-thread, one byte over goes to the worker, and `0`
+- [x] A body exactly at the threshold parses in-thread, one byte over goes to the worker, and `0`
       sends everything to the worker. The decision uses fetched byte length (tests).
-- [ ] `retrieve.html_worker_threshold_bytes` is bounded to `0 … 2 × default`, registered in
+- [x] `retrieve.html_worker_threshold_bytes` is bounded to `0 … 2 × default`, registered in
       `KNOWN_CONFIG_KEYS` as security-relevant, and documented in all four sites with the
       worst-case-at-maximum figure. The partition and shipped-default tests pass.
-- [ ] The default is the two-axis calibrated value (time and parent RSS), recorded per shape. A
+- [x] The default is the two-axis calibrated value (time and parent RSS), recorded per shape. A
       regression test runs every pinned shape at the default, using the ratio assertion plus a
       5× absolute ceiling.
-- [ ] `HTMLExtractionError` maps to 422 `extraction_failed` / `html_extraction_error`, and spool
+- [x] `HTMLExtractionError` maps to 422 `extraction_failed` / `html_extraction_error`, and spool
       errors map to the existing reason. Each logs its closed token, with no exception text
       (tests).
-- [ ] Internal spawn and refusal counters increment on the worker and refusal paths (tests).
+- [x] Internal spawn and refusal counters increment on the worker and refusal paths (tests).
       `RetrieveMetricsResponse` is unchanged.
-- [ ] Admission is released only after reap and unlink under real-task cancellation (test).
-- [ ] Default-versus-`0` responses are equal for all corpus HTML records (in-process) and the
+- [x] Admission is released only after reap and unlink under real-task cancellation (test).
+- [x] Default-versus-`0` responses are equal for all corpus HTML records (in-process) and the
       real-spawn sample. The corpus baseline regenerates with zero outcome changes, and the
       cassettes are byte-unchanged.
-- [ ] `tests/golden/contract_1_3_0.json` and `CONTRACT_VERSION` are unchanged.
-- [ ] The rotation is recorded per the procedure, and the false docs and docstring are corrected.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `tests/golden/contract_1_3_0.json` and `CONTRACT_VERSION` are unchanged.
+- [x] The rotation is recorded per the procedure, and the false docs and docstring are corrected.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-007: Contract surface — announce the reason and counters, cut held 1.4.0
 
@@ -637,21 +638,21 @@ so that the published surface matches the new behaviour.
 - **Rotation.** `contract.py` moves; follow the procedure.
 
 **Acceptance Criteria:**
-- [ ] The `/retrieve` 422 description and the `RetrieveErrorCode` docstring name
+- [x] The `/retrieve` 422 description and the `RetrieveErrorCode` docstring name
       `html_extraction_error`.
-- [ ] `/metrics` emits both counters, wired from US-006's counters (test). A 1.4.0
+- [x] `/metrics` emits both counters, wired from US-006's counters (test). A 1.4.0
       metric-addition test requires them in the 1.4.0 entry.
-- [ ] `CONTRACT_VERSION == "1.4.0"`, and the 1.4.0 bullet covers the reason, the counters and the
+- [x] `CONTRACT_VERSION == "1.4.0"`, and the 1.4.0 bullet covers the reason, the counters and the
       large-page refusal. The tense guard passes.
-- [ ] `tests/golden/contract_1_4_0.json` exists and matches. Goldens 1.0.0–1.3.0 are
+- [x] `tests/golden/contract_1_4_0.json` exists and matches. Goldens 1.0.0–1.3.0 are
       byte-unchanged.
-- [ ] The OpenAPI file, anchor and fixture twin are regenerated. Export, anchor-quote,
+- [x] The OpenAPI file, anchor and fixture twin are regenerated. Export, anchor-quote,
       bench-pin and GOVERNANCE tests are green.
-- [ ] The rotation is recorded per the procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The rotation is recorded per the procedure.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-008: `/search` parses titles and snippets off the event-loop thread
 
@@ -685,19 +686,19 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 - **Rotation.** `orchestrator.py` moves; follow the procedure.
 
 **Acceptance Criteria:**
-- [ ] No `extract_html` or `scan_raw_markup` call in `run_search_pipeline` runs on the loop
+- [x] No `extract_html` or `scan_raw_markup` call in `run_search_pipeline` runs on the loop
       thread (thread-identity test, ≥ 3 results). A ticker progresses during a sleeping stub
       parse (test).
-- [ ] The one-off pre/post lag measurement is recorded in Implementation Notes.
-- [ ] The six `8e449fc` captures and the `/search` corpus outcomes are unchanged.
-- [ ] A cancelled `/search` does not return before its parse thread finishes (test).
-- [ ] The classification-wait counter and the high-water mark equal the pre-story values under a
+- [x] The one-off pre/post lag measurement is recorded in Implementation Notes.
+- [x] The six `8e449fc` captures and the `/search` corpus outcomes are unchanged.
+- [x] A cancelled `/search` does not return before its parse thread finishes (test).
+- [x] The classification-wait counter and the high-water mark equal the pre-story values under a
       stub delay (test). `docs/configuration.md` states which includes thread-hop time.
-- [ ] The rotation is recorded per the procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The rotation is recorded per the procedure.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 
@@ -777,6 +778,38 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 
 ## Implementation Notes
 
+### US-001
+- Rotation 52nd -> 53rd: `46b8d1bb…` -> `0ace27ca…` (`stage1_extraction.py` alone; measured, see `docs/bootstrap-notes.md`).
+- `_extract_raw_text` became a non-mutating walk (no re-parse needed); `_prune_hidden(soup, html)` re-parses; pruned fallback uses `_strip_in_place_raw_text`.
+- Before/after seconds (64 / 256 KiB): sibling-dense 0.197/0.802 -> 0.130/0.533; deep span 0.337/3.403 -> 0.043/0.152; attribute-heavy 0.066/0.247 -> 0.060/0.224; unclosed span 1.792/26.323 -> 0.118/0.453; deep hidden 0.704/9.930 -> 0.077/0.288; unclosed hidden 3.460/52.141 -> 0.208/0.825. `/search` 8,000-char unclosed snippet: 47.7 ms -> 14.5 ms.
+- Equivalence pin: `tests/golden/stage1_equivalence.json` (1,484 digests, generated from pre-change code).
+
+### US-002
+- No rotation: default and shipped `sanitizer_revision` stay `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911`; no hashed file edited.
+- Final env allowlist: `PATH HOME LANG LC_ALL LC_CTYPE TMPDIR PYTHONPATH VIRTUAL_ENV PYTHONHASHSEED PYTHONDONTWRITEBYTECODE`; no addition needed (`HF_HOME` absent). Platform-injected set recorded in the test: `__CF_USER_TEXT_ENCODING`.
+- The env test injects a `sitecustomize.py` via the allowlisted `PYTHONPATH` to dump the child's environment, so there is no production test seam. Spawn `OSError` returns `None` from `run_worker`, which the PDF side maps to `PDFExtractionError`.
+- `spool_dir`/`SpoolDirectoryError` moved to `worker_launch` and are re-exported from `pdf_subprocess`; the only PDF test edit is the chmod-source test, which now reads `worker_launch`.
+
+### US-005
+- No rotation: default, `config.yaml` and `bench/config.yaml` stay `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911`; the new module and `worker_entry.py` are unhashed and `orchestrator.py` is untouched.
+- `title`/`author`/`date` are uncapped in `extract_html`, so the frame cap bounds them. Stage 1 does not strip C0 controls (6x JSON escape); `MAX_HTML_FRAME_BYTES` = 96 MiB (budget-off 120 MiB frame peaks the parent at 442 MiB / +388 MiB, over 384; 96 MiB is +336 MiB). 64-chunk case +2.8 MiB. Full table in `docs/bootstrap-notes.md`.
+- Linux envelope: 2 MiB page 361.9 MiB VmPeak / 5.82 s; 2.2 MiB 388.2 MiB (over 384); 4 MiB 642.9 MiB / 16.41 s. Largest realistic page that fits: about 2.1 MiB.
+- Stage 2's category sets are private to a hashed file, so `html_subprocess._VALID_CATEGORIES` is a literal pinned equal to them by a test (a public accessor would rotate the revision).
+- `fold_refused` is taken from `ScanForms.expansion_refused`, not from the flags: a BLOCKING markup scan drops the refusal flag from the combined result but the in-thread path has already logged the token.
+- The in-process round trip must `logging.disable` around the child half, else the stage-2 token logs twice and the parity test is meaningless.
+- Spool `OSError` propagates (as in the PDF path) for US-006 to map; only worker/frame failures become `HTMLExtractionError`.
+- Kill test uses 768 KiB sibling-dense (not 512 KiB) for margin on a faster runner; verified on Linux in Docker.
+
+### US-006
+- Rotation 53rd -> 54th: `0ace27ca…` -> `54aa9649…` (`orchestrator.py` and `contract.py`; each reverted alone against `HEAD`, both-reverted control reproduces `0ace27ca…` under default, `config.yaml` and `bench/config.yaml`; see `docs/bootstrap-notes.md`). Not a sanitization-behaviour change.
+- Default `retrieve.html_worker_threshold_bytes` = 524288 (512 KiB), max 1048576. Worst shape at the default: unclosed-span-hidden, 1.19 s / +149 MiB parent RSS; at the 1 MiB max 2.39 s / +303 MiB (sibling-dense 2.28 s / +313 MiB). 1 MiB fails the 2 s axis; RSS (384 MiB limit) holds up to 1 MiB. Full per-shape table in `docs/configuration.md` and `docs/bootstrap-notes.md`.
+- Spawn share: the 359 corpus page records are synthetic (median 591 B, max 15,640 B), so none spawns at the default; real median HTML is tens of KiB, so only the tail above 512 KiB pays the spawn.
+- `orchestrator._extract_html_and_scan_inline` was removed; the callers use `html_subprocess.extract_html_and_scan`. Re-patched `pipeline.orchestrator.extract_html` -> `pipeline.html_subprocess.extract_html` (retrieve sites only; `/search` sites keep the orchestrator patch): `tests/test_orchestrator.py`, `tests/test_app.py`, `tests/test_retrieve_admission.py` (which also patches `scan_structural_forms` in both modules in the off-loop test). `tests/test_inline_scan_form.py`, `tests/test_html_subprocess.py` and one `test_orchestrator.py` test now call the shared function directly; the old orchestrator-vs-shared equivalence test became an identity/no-second-copy test.
+- Counters `html_worker_spawns` / `html_worker_refusals` are plain attributes on `RetrieveMetrics`, `_NullRetrieveMetrics` and the `RetrieveMetricsSink` protocol; `RetrieveMetricsResponse` is unchanged. `test_domain_policy_counters_match_classes_models_and_wire` excludes them through `_INTERNAL_RETRIEVE_COUNTERS` (delete the set when US-007 adds the response fields). A spool fault counts a spawn but not a refusal.
+- `contract.py` gained only `RETRIEVE_HTML_EXTRACTION_ERROR` (no description, not in `RETRIEVE_PDF_FAILURE_REASONS`); `CONTRACT_VERSION`, OpenAPI and the 1.3.0 golden are unchanged.
+- The corpus comparison needs `retrieved_at` and `request_id` excluded: they are per-call by construction.
+- Calibration figures are macOS arm64, not Linux/x86_64.
+
 ## Refinement Notes
 
 ### Research Findings
@@ -826,6 +859,16 @@ fields to the 1.3.0 entry.
 
 - The contract bump to 1.4.0 happens in US-007. Spec 3 finalises the entry.
 
+### US-007 notes
+
+- Held contract `1.4.0` cut: `RetrieveMetricsResponse` gained `html_worker_spawns` / `html_worker_refusals`
+  (wired from `RetrieveMetrics`); `_INTERNAL_RETRIEVE_COUNTERS` is deleted. `contract_1_4_0.json` is new
+  (one description line differs from 1.3.0); spec 3 regenerates it until the tag.
+- `test_every_1_3_0_metric_addition...` subtracts the 1.4.0 additions from the retrieve section so each
+  entry names only its own fields; `test_every_1_4_0_metric_addition...` is the analogue.
+- Anchor quotes refreshed in API_GUIDE, CI_CD, DEPLOYMENT and SERVICE_MAP. Rotation 54th->55th
+  (`54aa9649` -> `ff18b0bf`), `contract.py` alone, control reproduces `54aa9649`.
+
 ## Clarifications
 
 ### Session 2026-10-07
@@ -835,3 +878,10 @@ fields to the 1.3.0 entry.
 - **Q:** Move `/search` parsing off the event loop? **A:** Yes.
 - **Q:** Accept refusal of realistic pages above about 2 MB? **A:** Yes, and document it.
 - **Q:** Scrub the environment for the PDF worker too? **A:** Both workers.
+
+### US-008
+- Rotation 55th -> 56th: `ff18b0bf…` -> `d582f8da…` (`orchestrator.py` alone; measured, see `docs/bootstrap-notes.md`).
+- One `to_thread` per result (`_scan_search_result_fields`: both `extract_html` forms + both `scan_raw_markup` scans), inside `completed_thread`, after the URL verdict; rejected results parse nothing. Loop consumes the precomputed `StructuralScanResult`s.
+- One-off lag (10 hostile results, 2,048-char titles, 8,000-char snippets, `run_promptguard` stubbed, 1 ms ticker, macOS arm64, 3 runs each): maximum ticker lag pre 157.6-159.5 ms (≈ the whole 158-160 ms call) -> post 6.8-11.0 ms; total call 158-160 ms -> 172-174 ms. The GIL still serialises the CPU work; the hop gives the loop control at the switch interval.
+- Counters: classification-wait timeouts stay 0 and `sanitization_latency_max_ms` ≥ stub delay under a 40 ms stub parse (test). `docs/configuration.md` states the latency counters include hop time and the wait deadline is spent by it.
+

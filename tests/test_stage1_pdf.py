@@ -18,7 +18,7 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 
 from models import RetrieveRequest
-from pipeline import orchestrator, pdf_subprocess
+from pipeline import orchestrator, pdf_subprocess, worker_launch
 from pipeline.extraction_limits import ExtractionSettings
 from pipeline.pdf_subprocess import (
     PDFClassifiableTextLimitError,
@@ -336,11 +336,11 @@ def _private_spool_path(root: Path) -> Path:
 
 
 def _spooled_leftovers(root: Path) -> list[Path]:
-    """Every ``forage-retrieve-*`` file under the spool directory, if it exists."""
+    """Every ``forage-retrieve-pdf-*`` file under the spool directory, if it exists."""
     directory = _private_spool_path(root)
     if not directory.exists():
         return []
-    return sorted(directory.glob("forage-retrieve-*"))
+    return sorted(directory.glob("forage-retrieve-pdf-*"))
 
 
 class TestSpoolDir:
@@ -436,9 +436,9 @@ class TestSpoolDir:
         assert isinstance(exc_info.value, SpoolDirectoryError)
         assert str(spool_root) not in str(exc_info.value)
 
-    def test_the_only_chmod_in_the_module_is_the_spool_files_fchmod(self) -> None:
+    def test_the_only_chmod_in_the_launcher_is_the_spool_files_fchmod(self) -> None:
         """Repair-then-verify would pass the 0755 test by fixing what it refuses."""
-        source = Path(pdf_subprocess.__file__).read_text()
+        source = Path(worker_launch.__file__).read_text()
         lines = [line for line in source.splitlines() if "chmod" in line]
         assert len(lines) == 1
         assert "os.fchmod(" in lines[0]
@@ -536,7 +536,7 @@ class TestExtractPdfBytesInSubprocess:
 
         assert result.raw_text == "Fetched PDF text."
         assert seen["path"].parent == _private_spool_path(spool_root)
-        assert seen["path"].name.startswith("forage-retrieve-")
+        assert seen["path"].name.startswith("forage-retrieve-pdf-")
         assert seen["mode"] == 0o600
         assert seen["contents"] == data
         assert seen["settings"] is settings

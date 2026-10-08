@@ -67,7 +67,7 @@ The stage 2 and stage 3 defences are measured, not asserted: a corpus of indirec
 
 <!-- boundary-text:end -->
 
-The response contract is versioned (`contract_version`, currently **1.3.0**). Consumers
+The response contract is versioned (`contract_version`, currently **1.4.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart
@@ -75,9 +75,9 @@ should refuse to activate on a mismatch rather than guess.
 Two containers, one token. [`compose/minimal.yml`](compose/minimal.yml) is the whole
 deployment:
 
-The Forage pin is **v1.2.2 / contract 1.3.0** (contract unchanged from
-v1.2.1), published 2026-10-04 and verified (see
-[`docs/releases.md`](docs/releases.md) for the index digest). v1.2.0 was
+The Forage pin is **v1.3.0 / contract 1.4.0**, prepared and **not yet
+published** (the pull fails with `manifest unknown` until the tag publishes;
+see [`docs/releases.md`](docs/releases.md); v1.2.2 is the latest published). v1.2.0 was
 withdrawn because its classifier rejected the verified default model.
 
 ```bash
@@ -250,9 +250,9 @@ weights, the Llama terms come with it.
 
 ## Status
 
-Forage is **post-1.0**, with **v1.2.2 / contract 1.3.0 published 2026-10-04 and
-verified** (a PATCH making the opt-in 86M classifier selectable; contract
-unchanged from v1.2.1). It succeeds v1.2.1 (published and verified 2026-09-23),
+Forage is **post-1.0**, with **v1.3.0 / contract 1.4.0 prepared, not yet published**
+(a MINOR making the 86M the default classifier and bounding worker resources).
+It succeeds v1.2.2 (published and verified 2026-10-04) and v1.2.1 (2026-09-23),
 which replaced withdrawn v1.2.0. The code and its full history were split
 out of the [Poppy](https://github.com/WashingBearLabs) monorepo (`services/retrieval/`,
 `config/searxng/`, `tests/retrieval/`) on 2026-09-07; see
@@ -290,7 +290,7 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
 The optional in-memory cache shipped with contract `1.1.0` (the current contract is
-`1.3.0`), and the **frozen OpenAPI
+`1.4.0`), and the **frozen OpenAPI
 contract** is in the tree: [`contract/openapi.yaml`](contract/openapi.yaml), generated and
 checked against a committed `openapi.yaml.sha256` anchor, with the versioning rules — what
 counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — in

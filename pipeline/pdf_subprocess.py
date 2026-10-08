@@ -2,18 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import multiprocessing
-import os
-import signal
-import stat
-import sys
-import tempfile
-import time
-from contextlib import suppress
-from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import Any, cast
 
 from pipeline.extraction_limits import ExtractionSettings
 from pipeline.stage1_extraction import ExtractionResult, normalize_text
@@ -22,6 +11,12 @@ from pipeline.stage1_pdf import (
     PDFExtractionError,
     PDFNoTextError,
 )
+from pipeline.worker_launch import SpoolDirectoryError as SpoolDirectoryError
+from pipeline.worker_launch import run_worker, spooled_bytes
+from pipeline.worker_launch import spool_dir as spool_dir
+
+# Spool-file name prefix for fetched PDFs; the spool helpers live in worker_launch.
+_SPOOL_PREFIX = "forage-retrieve-pdf-"
 
 
 class PDFClassifiableTextLimitError(PDFExtractionError):
@@ -30,70 +25,6 @@ class PDFClassifiableTextLimitError(PDFExtractionError):
 
 class PDFPageLimitError(PDFExtractionError):
     """Raised when a PDF exceeds the fixed page-count extraction bound."""
-
-
-class SpoolDirectoryError(OSError):
-    """Raised when the spool directory exists but is not safe to spool into.
-
-    The message is one closed token — ``spool_dir_symlink``,
-    ``spool_dir_not_directory``, ``spool_dir_foreign_owner`` or
-    ``spool_dir_mode`` — and never the path, so the lifespan can re-raise it
-    as a boot refusal and ``/retrieve`` can map it to ``pdf_spool_error``
-    without either carrying anything host-derived.
-    """
-
-
-def spool_dir() -> Path:
-    """Return the process-private spool directory, creating it on first use.
-
-    ``<tempfile.gettempdir()>/forage-spool-<euid>``, resolved on every call
-    rather than at import, so a ``TMPDIR`` set after import still applies.
-    Both routes spool here: ``/extract``'s uploads and ``/retrieve``'s fetched
-    PDFs. The worker child re-opens a spool file by path, so the file must sit
-    in a directory nobody else can enter — that is what closes the re-open
-    window without depending on the sticky bit of the parent.
-
-    Created with ``mkdir(mode=0o700)`` and ``exist_ok=False``: umask can only
-    clear bits, so the directory is never wider than 0700 at any instant. An
-    existing path is verified with ``os.lstat`` (never ``stat``, which would
-    follow a planted symlink) on **every** call and refused, never repaired —
-    a directory already present with the wrong owner or mode is evidence, not
-    a state to fix, and a check that re-runs per call catches one removed and
-    re-created by another local user after boot.
-    """
-    path = Path(tempfile.gettempdir()) / f"forage-spool-{os.geteuid()}"
-    try:
-        path.mkdir(mode=0o700)
-    except FileExistsError:
-        st = os.lstat(path)
-        if stat.S_ISLNK(st.st_mode):
-            raise SpoolDirectoryError("spool_dir_symlink") from None
-        if not stat.S_ISDIR(st.st_mode):
-            raise SpoolDirectoryError("spool_dir_not_directory") from None
-        if st.st_uid != os.geteuid():
-            raise SpoolDirectoryError("spool_dir_foreign_owner") from None
-        if st.st_mode & 0o077:
-            raise SpoolDirectoryError("spool_dir_mode") from None
-    return path
-
-
-def _apply_child_limits(settings: ExtractionSettings) -> None:
-    """Apply child-only kernel limits before invoking pypdf."""
-    import resource
-
-    resource.setrlimit(
-        resource.RLIMIT_CPU,
-        (settings.child_cpu_seconds, settings.child_cpu_seconds),
-    )
-    # Docker production runs Linux cgroups where RLIMIT_AS is enforced against
-    # the worker. macOS does not reliably account spawned interpreter shared VM
-    # mappings under this limit, so local development uses parent supervision.
-    if sys.platform.startswith("linux"):
-        resource.setrlimit(
-            resource.RLIMIT_AS,
-            (settings.child_address_space_bytes, settings.child_address_space_bytes),
-        )
-    signal.setitimer(signal.ITIMER_REAL, settings.wall_clock_seconds)
 
 
 def _extract_pdf_path(path: Path, settings: ExtractionSettings) -> ExtractionResult:
@@ -147,93 +78,36 @@ def _extract_pdf_path(path: Path, settings: ExtractionSettings) -> ExtractionRes
     )
 
 
-def _send_child_result(
-    connection: Connection,
-    payload: dict[str, object],
-    max_result_bytes: int,
-) -> None:
-    """Encode and send one bounded, length-framed result over the IPC pipe."""
-    encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode()
-    if len(encoded) > max_result_bytes:
-        encoded = b'{"status":"failed"}'
-    connection.send_bytes(encoded)
-
-
-def _pdf_child(
-    path: str,
-    settings: ExtractionSettings,
-    connection: Connection,
-) -> None:
-    """Spawn target: constrain pypdf and return only a capped extraction result."""
+def run_pdf_worker(path: Path, settings: ExtractionSettings) -> dict[str, object]:
+    """Child side: parse one spooled PDF into a capped, closed-vocabulary payload."""
     try:
-        _apply_child_limits(settings)
-        result = _extract_pdf_path(Path(path), settings)
-        _send_child_result(
-            connection,
-            {
-                "status": "ok",
-                "raw_text": result.raw_text,
-                "word_count": result.word_count,
-            },
-            settings.max_ipc_result_bytes,
-        )
+        result = _extract_pdf_path(path, settings)
     except PDFClassifiableTextLimitError:
-        _send_child_result(
-            connection,
-            {"status": "too_large_to_classify"},
-            settings.max_ipc_result_bytes,
-        )
+        return {"status": "too_large_to_classify"}
     except PDFEncryptedError:
-        _send_child_result(
-            connection, {"status": "encrypted"}, settings.max_ipc_result_bytes
-        )
+        return {"status": "encrypted"}
     except PDFNoTextError:
-        _send_child_result(
-            connection, {"status": "no_text"}, settings.max_ipc_result_bytes
-        )
-    except Exception:
-        # Parser errors must not transport arbitrary document-derived messages.
-        with suppress(Exception):
-            _send_child_result(
-                connection, {"status": "failed"}, settings.max_ipc_result_bytes
-            )
-    finally:
-        connection.close()
+        return {"status": "no_text"}
+    return {
+        "status": "ok",
+        "raw_text": result.raw_text,
+        "word_count": result.word_count,
+    }
 
 
 def extract_pdf_in_subprocess(
     path: Path,
     settings: ExtractionSettings,
 ) -> ExtractionResult:
-    """Run pypdf in a spawned child and kill/reap it on every abnormal outcome."""
-    context = multiprocessing.get_context("spawn")
-    receiver, sender = context.Pipe(duplex=False)
-    process = context.Process(target=_pdf_child, args=(str(path), settings, sender))
-    process.start()
-    sender.close()
-    deadline = time.monotonic() + settings.wall_clock_seconds
-    payload: dict[str, Any] | None = None
-
-    try:
-        while time.monotonic() < deadline:
-            if receiver.poll(min(0.1, deadline - time.monotonic())):
-                try:
-                    raw_payload = receiver.recv_bytes(settings.max_ipc_result_bytes)
-                    decoded: object = json.loads(raw_payload)
-                except (EOFError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-                    break
-                if isinstance(decoded, dict):
-                    payload = cast(dict[str, object], decoded)
-                break
-            if not process.is_alive():
-                break
-    finally:
-        # Always SIGKILL and reap unfinished workers; request cancellation cannot
-        # leave a parser thread or process consuming the shared sidecar budget.
-        if process.is_alive():
-            process.kill()
-        process.join()
-        receiver.close()
+    """Run pypdf in a launched worker and kill/reap it on every abnormal outcome."""
+    payload = run_worker(
+        "pdf",
+        [str(path), str(settings.max_pages), str(settings.max_promptguard_chunks)],
+        cpu_seconds=settings.child_cpu_seconds,
+        address_space_bytes=settings.child_address_space_bytes,
+        wall_clock_seconds=settings.wall_clock_seconds,
+        max_frame_bytes=settings.max_ipc_result_bytes,
+    )
 
     if payload is None or payload.get("status") == "failed":
         raise PDFExtractionError("PDF extraction worker failed")
@@ -283,17 +157,5 @@ def extract_pdf_bytes_in_subprocess(
     An ``OSError`` from the directory check, the create or the write propagates
     unchanged for the caller to map; an already-created file is still unlinked.
     """
-    path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix="forage-retrieve-",
-            dir=spool_dir(),
-            delete=False,
-        ) as spool:
-            path = Path(spool.name)
-            os.fchmod(spool.fileno(), 0o600)
-            spool.write(data)
+    with spooled_bytes(data, prefix=_SPOOL_PREFIX) as path:
         return extract_pdf_in_subprocess(path, settings)
-    finally:
-        if path is not None:
-            path.unlink(missing_ok=True)

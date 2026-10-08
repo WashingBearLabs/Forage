@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: release-padding-gate
-status: active
+status: completed
 session_ready: true
 depends_on: [release-resource-bounds]
 vision_ref: "T2 hardening follow-through — bound the remaining CPU costs and cut v1.3.0"
@@ -11,7 +11,8 @@ epic: forage-v1-3-0-release
 epic_seq: 2
 epic_final: false
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
+completed: 2026-10-08
 ---
 
 # Feature Spec: Release Padding Gate — a Refused Look-alike Fold Blocks, at 2× Plus Slack
@@ -205,37 +206,37 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
     List 2026-10-04-060 and 2026-10-07-002 as ready to resolve in Implementation Notes.
 
 **Acceptance Criteria:**
-- [ ] The pre-change measurement (benign ratio maximum and over-limit count per genre, and the
+- [x] The pre-change measurement (benign ratio maximum and over-limit count per genre, and the
       pre-shape 2 MiB timing) is recorded in Implementation Notes before the first code commit.
-- [ ] The limit is `max(2 * n, n + 256)`. Boundary tests show that exactly-at-limit is accepted
+- [x] The limit is `max(2 * n, n + 256)`. Boundary tests show that exactly-at-limit is accepted
       and one character over is refused, on both the 2n branch and the n+256 branch, through
       both the pass-one and the pass-two refusal paths.
-- [ ] `scan_structural_forms` returns BLOCKED, with penalty `0.0` and the `encoded_payload`
+- [x] `scan_structural_forms` returns BLOCKED, with penalty `0.0` and the `encoded_payload`
       refusal flag (plus any suspicious flags already found), whenever the fold is refused. The
       six listed fold-form tests are updated or renamed: the 10 MiB test now asserts BLOCKED, and
       the unpadded padding assertion is `== BLOCKED`.
-- [ ] Refused pages are quarantined or omitted on every route: `/retrieve` (TRUSTED and default
+- [x] Refused pages are quarantined or omitted on every route: `/retrieve` (TRUSTED and default
       tier) and `/extract` quarantine (title `None`). `/search` omits the result for each of the
       four refusal sources, with the existing `search_result_omitted` token, the right `field`
       value and the `omitted_by_reason` structural-blocked counter (one test each).
-- [ ] A 6-character Arabic title ending in U+FDFA (code-point escapes) is folded, not refused,
+- [x] A 6-character Arabic title ending in U+FDFA (code-point escapes) is folded, not refused,
       on `/search` (test).
-- [ ] The sweep's `maximal_accepted_expansion` is `"a" * 16 + "\ufdfa"`, with an in-sweep
+- [x] The sweep's `maximal_accepted_expansion` is `"a" * 16 + "\ufdfa"`, with an in-sweep
       assertion that the large input is not refused. The ceiling is about 2× the measured
       post-shape median. The back-to-back post/pre median ratio is ≤ 65%, and every run is
       recorded.
-- [ ] The corpus baseline and floors are regenerated, `floors_diff` reports 0 problems and
+- [x] The corpus baseline and floors are regenerated, `floors_diff` reports 0 problems and
       `--baseline-fpr` reports 0 rises. Both cassettes are byte-unchanged.
-- [ ] The rotation is recorded per the procedure: each file reverted alone plus an all-reverted
+- [x] The rotation is recorded per the procedure: each file reverted alone plus an all-reverted
       control, under default and shipped config. Every count site in step 9 shows the new
       ordinal, and a grep for the previous ordinal word over those files finds no stale
       current-count hit.
-- [ ] `SECURITY.md`, `docs/releases.md` Unreleased and GOTCHAS describe the rule.
+- [x] `SECURITY.md`, `docs/releases.md` Unreleased and GOTCHAS describe the rule.
       `tests/test_corpus_docs_payloads.py` passes, and new fixtures use code-point escapes only.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 
@@ -279,6 +280,19 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
 - Archived `feature-structural-scan-forms.md` US-005
 
 ## Implementation Notes
+
+### US-001
+- **Pre-change measurement** (taken before any code edit; throwaway script, not committed). Every benign record's stage-2 decoded text on its route forms (`/retrieve` raw + inline-joined, `/extract`, `/search` title/snippet scan + inline), 732 fields. Max fold/n ratio and count over `max(2n, n+256)` per genre: code 1.0029/0; docs 1.0/0; ecommerce 1.0/0; forum 1.0/0; long_form 1.0005/0; multilingual 1.0058/0; news 1.001/0; over_defence_probe 1.1818/0; security_prose 1.002/0. Total over the new limit: 0 (and 0 over the old 4x). Max NFKC ratio 1.0005.
+- **Pre-shape 2 MiB timing** (U+FDFA + 5 ASCII, old limit, `scan_structural_forms(structural_scan_forms(...))`, GC off, median of 3): 4.100 s (runs 4.105, 4.081, 4.100; dev Mac).
+- **Implemented.** `_FOLD_EXPANSION_LIMIT = 2`, `_FOLD_SLACK = 256`, one `limit` for both passes (strict `>`); `scan_structural_forms` returns BLOCKED (penalty 0.0, `encoded_payload` flag after any earlier flags). `stage4_structuring.py` reads the verdict (`finalize_quarantine`), and categories appear in no contract/models enum (grep). `/search`: the four refusal sources are resolved to one `refused_field` (title before snippet, fold before inline) right after the folds are built, then the result is logged `search_result_omitted … field=…`, counted under `structural_blocked`, and `continue`d past the scan loop; the `suspicious = True` assignments are gone. (Equivalent to hoisting `blocked`, without re-indenting the loop.)
+- **Tests.** Six fold-form tests updated/renamed; exact-length builder `_exact_text` (pass one / pass two x 2n / n+256 branches, recomputes lengths, U+00E6 for pass two); 6-character Arabic title and sparse-ligature `/retrieve` fixture (code-point escapes); route tests: `/retrieve` TRUSTED and default, `/extract`, `/search` per source (title fold, title inline, snippet fold, snippet inline, plus a precedence case). The `/search` per-source tests patch `_scan_search_result_fields` so exactly one source refuses (a real parse refuses scan and inline together). `test_html_subprocess.py` worker round trip now asserts BLOCKED.
+- **Sweep.** `maximal_accepted_expansion` is `"a" * 16 + "\ufdfa"` with in-sweep `refused is False` assertions at both sizes. Calibration 0.240 s; post-shape 2.263 s = 9.4x, so the multiple is 19 (about 2x); `floor=4 * _CEILING_SECONDS` was kept as instructed, so on this machine the 8 s floor binds (the multiple only matters on slower runners).
+- **Cost bar (one process, GC off, median of 5, pre via read-only copy of `74e47e5`'s module):** pre 4.141 s, post 2.263 s, **ratio 54.6%** (<= 65%). Single run; not in the 65-70% band, so no 9-sample re-measure.
+- **Corpus.** `--write-baseline` and `--write-floors` regenerate `baseline.json` and `floors.json` byte-identically (no record moved); `floors_diff`: 0 problems; `--baseline-fpr` (exempt ben-0288, ben-0289): 0 rises; cassettes untouched.
+- **Rotation 56th -> 57th** (the eighteenth sanitization-behaviour-changing): `d582f8da…` -> `23444fe4…`. `stage2_structural.py` alone reverted: `42b2c131…`; `orchestrator.py` alone: `3e789a3d…`; both: `d582f8da…` exactly, identical under default, `config.yaml` and `bench/config.yaml`. Recorded in `CLAUDE.md`, `docs/bootstrap-notes.md`, the GOTCHAS table/tally/entry and every count site; the remaining `fifty-six` hits are historical rows.
+- **Docs.** SECURITY.md (Stage 2 scan forms), CODE_ARCH, DECISIONS (note), `docs/corpus.md`, `docs/releases.md` Unreleased (rotation bullet and the 4x sentence), GOTCHAS entry.
+- **Ready to resolve (not edited here; `AUDIT_FINDINGS.md` is owner-only):** 2026-10-04-060 and 2026-10-07-002.
+- **Full gates:** `uv run pytest` 5546 passed, 6 skipped; ruff check/format and pyright clean.
 
 ## Refinement Notes
 

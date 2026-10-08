@@ -129,9 +129,9 @@ a configured-but-unreachable Valkey (`cache_unavailable`), or Valkey without sig
 ### The spool directory (`TMPDIR`)
 
 The PDF worker is a spawned child that re-opens its input **by path**, so both PDF routes
-write the document to a spool file first: `/extract` its upload (`poppy-extract-*`) and,
+write the document to a spool file first: `/extract` its upload (`forage-extract-*`) and,
 since `hardening-retrieve-parity` US-003, `/retrieve` every fetched PDF
-(`forage-retrieve-*`). Both land in one directory,
+(`forage-retrieve-pdf-*`). Both land in one directory,
 `<TMPDIR>/forage-spool-<uid>`, which Forage creates for you on first use with mode `0700`
 — never wider at any instant, because it is created with that mode rather than chmod-ed
 after. The boot checks it once and each spool checks it again: if the path already
@@ -153,9 +153,29 @@ read. It is `0600` inside a `0700` directory and unlinked on every normal exit p
 success, every worker failure, a failed spool write and a cancelled request. A **tmpfs**
 `TMPDIR` keeps that content off durable storage altogether. On a non-tmpfs `TMPDIR`, a
 process killed with SIGKILL (an OOM kill, `docker kill`) mid-parse leaves its
-`forage-retrieve-*` or `poppy-extract-*` file behind, and those orphans are
-**content-bearing**: they survive until the next manual clear of the spool directory. No
-sweep runs at boot (an open question in the resource-envelope spec).
+`forage-retrieve-pdf-*` or `forage-extract-*` file behind, and those orphans are
+**content-bearing** until the next boot's sweep (below) removes them.
+
+**At-rest lifecycle and the startup sweep** (`release-resource-bounds` US-004). Spool
+files are named `forage-extract-*` (`/extract` uploads), `forage-retrieve-pdf-*` (fetched
+PDFs) and `forage-retrieve-html-*` (the HTML worker). Every boot sweeps the spool
+directory once, right after the directory check, and unlinks each entry that is a
+**regular file**, **owned by Forage's euid**, named with a `forage-extract-` or
+`forage-retrieve-` prefix (or the legacy `poppy-extract-` of releases before 1.3.0), and
+whose `mtime` is older than the **maximum permitted** `extraction.wall_clock_seconds` (90)
+plus 60 s. The gate uses the bound, not the running value, so several processes with
+different configs sharing the per-euid directory (uvicorn `--workers`, a restart
+overlapping a draining process, a shared `/tmp` volume) never sweep each other's live
+spools; a worker spool can never be that old. The directory is held open by fd, each entry
+is `stat`-ed without following symlinks and unlinked `dir_fd`-relative, so a symlink, a
+subdirectory (never recursed into), a foreign-prefix file or a name swapped for a symlink
+after the check is never followed. A vanished or undeletable entry is skipped silently. The
+only log line is INFO `spool_sweep removed=<n>` — a count, never a name or path.
+**Accepted effect:** an `/extract` upload spool's `mtime` advances only on writes, so an
+upload stalled past the gate while another process boots can have its spool swept; that
+request then fails closed with a coded 422. This is an availability effect on a stalled
+client only. Between boots nothing sweeps, so a tmpfs `TMPDIR` remains the way to keep
+spooled content off disk entirely.
 
 **Cancellation ownership.** Cancelling a `/retrieve` task cannot stop its Python
 worker thread. The request therefore keeps its admission slot and waits for the existing
@@ -560,11 +580,15 @@ recommendations, not measured throughput guarantees. The reference envelope (1 v
 `1536m` (raised from `1024m` with the 86M default), threads `0` and classification
 concurrency `1`, not the tuned first row below.
 
-| Host envelope | FORAGE_CPUS | FORAGE_MEM_LIMIT | promptguard_threads | classification_concurrency | cache.max_bytes | `/extract` classify latency, warm p50 (one window / max budget) |
+| Host envelope | FORAGE_CPUS | FORAGE_MEM_LIMIT | promptguard_threads | classification_concurrency | cache.max_bytes | `/extract` end-to-end latency, fresh container (one window / max budget) |
 |---|---|---|---|---|---|---|
 | 1 vCPU / 1.5 GB (reference envelope) | 1 | 1536m (`1024m` for the 22M) | 1 | 1 | 33554432 | measured at `1024m`: 86M **26.2 s / 1,316 s** (55 windows); 22M **13.1 s / 501 s** (40 windows) |
 | 2 / 2 GB | 2 | 2048m | 2 | 1 | 67108864 | not measured |
 | 4 / 4 GB | 4 | 4096m | 2 | 2 | 134217728 | not measured at this row's settings; at `--cpus 4`, `1024m`, default threads: 22M **3.1 s / 104 s**, 86M **6.4 s / 368 s** |
+
+The latency column is **end-to-end `/extract` latency in a fresh container** (model load, fetch
+and every stage), not the per-window classification cost; for that, see
+[Measured per-window cost](#measured-per-window-cost) below.
 
 Measured 2026-10-02 by `corpus-86m-enablement` US-003 on one host (AMD Ryzen Threadripper
 2970WX, Docker 29.5.2, cgroup v2; image commit `43279910`, manifest revisions 22M
@@ -790,7 +814,7 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 | `promptguard_contiguity_threshold` | float, 0.0–1.0 | `0.5` | `0.5` | Absolute server-side run threshold (`>=`), independent of the caller's max-score threshold. Both rules apply; raising the max threshold cannot override this one. Booleans, strings, non-finite and out-of-range values refuse boot with `PromptGuardConfigurationError`, even when the rule is off. See the opt-in recipe below. |
 | `policy_domain_entries_max_bytes` | integer | `65536` (64 KiB) | `65536` | Raw UTF-8 bytes per caller domain list, including newline separators; range **4096–1048576** (4 KiB–1 MiB). Each `/retrieve` list and `/search`'s denylist has its own budget. An over-budget denylist is refused whole with 422 `content_too_large` on `/retrieve` or `search_unavailable` on `/search`, reason `policy_domain_list_too_large`; allowlists retain the in-budget prefix and count all remaining entries as drops. Invalid configuration logs `config_invalid_value — key=policy_domain_entries_max_bytes` and falls back to 65536, never refuses boot. Read once at startup; restart after changing it. |
 | `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
-| `search_promptguard_latency_target_ms` | integer, 100–60000 | `1000` | `1000` | Observational target for the per-result sanitization loop: structural scan, PromptGuard and any semaphore wait. A strictly greater duration increments `search.promptguard_latency_target_exceeded` once per request; `search.sanitization_latency_max_ms` records the per-process maximum even below target. Scales with `num_results` (1–20); compare only at the same `num_results`. Not a deadline or sanitizer-revision input. Validated unconditionally at boot by `search_targets_from_config`; invalid values, including booleans, raise `SearchTargetsConfigurationError`. Restart after changes. |
+| `search_promptguard_latency_target_ms` | integer, 100–60000 | `1000` | `1000` | Observational target for the per-result sanitization loop: structural scan, PromptGuard and any semaphore wait. A strictly greater duration increments `search.promptguard_latency_target_exceeded` once per request; `search.sanitization_latency_max_ms` records the per-process maximum even below target. Scales with `num_results` (1–20); compare only at the same `num_results`. Each result's title/snippet parse and raw-markup scans run in one worker-thread hop, so the duration — and therefore `search.promptguard_latency_target_exceeded` and `search.sanitization_latency_max_ms` — **includes thread-hop time**; `search.classification_wait_timeouts` counts only expired semaphore waits, but its per-request `promptguard_wait_seconds` deadline is wall-clock from before the result loop, so hop time spends that budget too. Not a deadline or sanitizer-revision input. Validated unconditionally at boot by `search_targets_from_config`; invalid values, including booleans, raise `SearchTargetsConfigurationError`. Restart after changes. |
 | `search_first_token_target_ms` | integer, 100–120000 | `5000` | `5000` | **log-only today**: tunes the `search_promptguard_complete` log line; no counter compares it. Also appears on the overrun WARNING's `extra` dict; neither payload renders under default container logging. Not a deadline or sanitizer-revision input. The same unconditional boot reader refuses invalid values with `SearchTargetsConfigurationError`; restart after changes. |
 | `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Wall-clock budget for one Brave call — connect, headers and body together; a request on an N-provider chain can take the sum of the configured budgets. Out of range (1.0 to 60.0) or wrong-typed refuses boot. The caller's timeout must exceed the sum of the configured per-provider budgets — 25 s at the shipped defaults on a `searxng,brave` chain — plus parse, sanitization and classification time. Raise this budget for a slow Brave instance; for a slow SearXNG raise `search_searxng_timeout_seconds`. Defaults are unchanged but now bound the whole interaction, not each socket operation separately. |
 | `search_brave_chunk_max_chars` | integer | `2000` | `2000` | Cap on each Brave result's extracted-chunk text before it reaches sanitization. Out of range (200 to 2000) or wrong-typed refuses boot. |
@@ -802,7 +826,7 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 | `retrieve` | mapping | `{}` (all defaults) | all four keys at their defaults | Fetch-route admission and classification limits — see the `retrieve:` block below. |
 | `promptguard_fail_closed_floor` | boolean | `false` | `false` | Operator fail-closed floor on both fetch routes; see "Top-level PromptGuard policy keys" below. |
 | `promptguard_threshold_ceiling` | float | `1.0` | `1.0` | Operator threshold ceiling on both fetch routes; see "Top-level PromptGuard policy keys" below. |
-| `promptguard_wait_seconds` | float | `30.0` | `30.0` | Classification-permit wait budget on both fetch routes; see "Top-level PromptGuard policy keys" below. |
+| `promptguard_wait_seconds` | float | `90.0` | `90.0` | Classification-permit wait budget on both fetch routes; see "Top-level PromptGuard policy keys" below. |
 
 Domain matching is directional: denylist `evil.com` blocks `evil.com` and
 `www.evil.com`, never `notevil.com` or `evil.com.attacker.net`. Allowlist
@@ -945,6 +969,89 @@ and `admission_queue_depth` (0–4).
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 – 50 MiB | Total bytes of queued uploads held in flight. `0` disables queuing of upload bodies. |
 
+#### The HTML worker's envelope
+
+`pipeline/html_subprocess.py` runs a fetched page's stage-1 work (`extract_html` plus the
+inline-form and raw-markup scans) in the same rlimited worker the PDF path uses, under the
+`extraction:` limits above (`child_cpu_seconds`, `child_address_space_bytes`,
+`wall_clock_seconds`). `/retrieve` sends it every fetched HTML body above
+`retrieve.html_worker_threshold_bytes` (see [The `retrieve:` block](#retrieve--fetch-route-limits));
+this section records what the worker itself costs. Any failure — a limit kill, a deadline, a malformed or
+forged frame, an oversize frame, a spawn error — is one `HTMLExtractionError`.
+
+**Import CPU counts against `child_cpu_seconds`.** The child applies `RLIMIT_CPU` before it
+imports its parsers, so the interpreter start and imports (about 0.33 s) are spent from the same
+budget as the parse. `child_cpu_seconds: 1` therefore leaves about 0.67 s of parsing.
+
+**Measured on Linux** (`docker run --cpus 1 -m 1536m`, python 3.12, aarch64, no rlimits applied
+so the peak is observable; realistic pages built from `div`/`h2`/`p`/`a`/`em`/nested `ul`).
+`VmPeak` is the child's peak *virtual* size — what `RLIMIT_AS` bounds — not its RSS. CPU is
+user+system for the whole child including import:
+
+| Body | Extracted chars | Child `VmPeak` | Child CPU | Under 384 MiB / 20 s |
+|---|---|---|---|---|
+| 0.5 MiB (524,361 B) | 249,140 | 143.3 MiB | 1.30 s | yes |
+| 1 MiB (1,048,783 B) | 498,390 | 215.4 MiB | 2.50 s | yes |
+| 2 MiB (2,097,364 B) | 996,765 | 361.9 MiB | 5.82 s | yes |
+| 2.1 MiB (2,202,301 B) | 1,046,640 | 376.9 MiB | 6.00 s | yes |
+| 2.2 MiB (2,306,975 B) | 1,096,390 | 388.2 MiB | 6.44 s | **no** (address space) |
+| 4 MiB (4,194,515 B) | 1,993,802 | 642.9 MiB | 16.41 s | **no** (address space) |
+
+**The largest realistic page that parses under 384 MiB / 20 s is about 2.1 MiB**
+(2,202,301 bytes measured); memory binds first, at roughly 140 MiB of virtual size per MiB of
+page. Raising `child_address_space_bytes` (up to 512 MiB) moves that to about 3 MiB; at 4 MiB
+the CPU is already 16.4 s of the 20 s limit. Hostile shapes (deep, unclosed or
+sibling-dense markup) cost more per byte than these pages and are cut off by the same limits.
+
+**The frame cap.** The worker answers with one JSON frame carrying `raw_text` and `main_content`;
+`MAX_HTML_FRAME_BYTES` (96 MiB) is both the cap on the whole frame and on every string field
+(`title`, `author` and `date` are not capped by `extract_html`, so the frame cap bounds them).
+A frame over the cap is refused, never truncated. Derivation, with
+`retrieve.max_promptguard_chunks: 0` (the explicit opt-out; the default 64 would refuse such a body first) so both fields of a `DEFAULT_MAX_CONTENT_BYTES`
+(10 MiB) body cross:
+
+- Stage 1 does **not** strip C0 controls, and JSON escapes each as `\u00XX`: 6 bytes per source
+  byte, the worst case. Anything else grows at most 3x (an invalid byte becomes U+FFFD). Both
+  fields cross, so the unconstrained worst case is 2 x 6 x 10 MiB = 120 MiB; every
+  non-control-character 10 MiB body is at most 60 MiB and fits.
+- Parent peak RSS while receiving, decoding and validating a frame (fresh interpreter, 54.4 MiB
+  baseline; macOS arm64, `ru_maxrss`): 120 MiB frame (budget off, worst case) peaks at 442.4 MiB,
+  a 388.0 MiB increase — over 25% of 1536 MiB (384 MiB). A 96 MiB frame peaks at 390.8 MiB, a
+  336.4 MiB increase, which fits. A 60 MiB frame of U+FFFD (the 3x case) peaks at 269.8 MiB. The
+  64-chunk case (114,688 characters per field, worst-case controls, a 1.3 MiB frame) peaks at
+  57.3 MiB, a 2.8 MiB increase.
+- So the cap is 96 MiB, and the only bodies refused are ones that are mostly C0 control bytes
+  (more than about 8 million of them) — those fail as an `HTMLExtractionError`.
+
+<a id="html-worker-threshold"></a>
+
+#### HTML worker threshold
+
+`retrieve.html_worker_threshold_bytes` is calibrated on two axes, on the pinned hostile shapes
+in `tests/stage1_shapes.py` (linear stage 1, GC off, median of 3, macOS arm64 dev machine, each
+sample in a fresh process; parent peak-RSS delta is `ru_maxrss` after minus before the parse,
+with the body and its decoded copy already held). The default is the largest power-of-two KiB at
+which **both** hold: the worst shape parses in-thread in ≤ 2 s, and the parent's peak-RSS delta
+is ≤ 25% of the 1536 MiB Compose default (384 MiB). Seconds / RSS delta in MiB:
+
+| Shape | 256 KiB | **512 KiB (default)** | **1 MiB (maximum)** | 2 MiB |
+|---|---|---|---|---|
+| sibling-dense | 0.41 / 78 | 0.88 / 156 | 2.28 / 313 | 5.24 / 624 |
+| deep span | 0.17 / 39 | 0.29 / 48 | 0.52 / 66 | 0.97 / 102 |
+| attribute-heavy | 0.18 / 39 | 0.35 / 76 | 0.70 / 152 | 1.41 / 319 |
+| unclosed span | 0.34 / 37 | 0.68 / 75 | 1.38 / 147 | 2.72 / 296 |
+| deep span, hidden | 0.27 / 48 | 0.48 / 66 | 0.90 / 102 | 1.76 / 176 |
+| unclosed span, hidden | 0.60 / 74 | **1.19 / 149** | **2.39 / 303** | 4.79 / 608 |
+
+At the default the worst shape is unclosed-hidden at 1.19 s / 149 MiB. At 1 MiB it is
+2.28–2.39 s and 303–313 MiB: the time limit is already exceeded, which is why 1 MiB is the
+**maximum** and not a safe default, and why raising the key above 512 KiB weakens the bound.
+The in-thread parse holds a thread (and the single admission slot) for those seconds and cannot
+be cancelled or killed; the worker can. The key is not a cache-fingerprint or revision input,
+because both paths return byte-identical results (pinned by a corpus comparison against `0`).
+Per spawn, expect a few hundred milliseconds of launch plus about 0.33 s of import CPU, which is
+why small pages stay in-thread: median HTML is tens of KiB, far under the default.
+
 #### Advisory memory rule
 
 The boot check reads cgroup v2 `memory.max`, not an environment-variable string.
@@ -972,8 +1079,9 @@ They bound queued and classified text, which the 10 MB fetch cap already bounds 
 `extraction.extraction_concurrency` is: a fetched PDF spawns the same bounded child under
 the same `child_address_space_bytes` rlimit, so N fetch slots would put N × 384 MiB of
 worker address space in a 1 GiB container. The constraint is worker address space, not
-fetched-body size — which means an HTML-only deployment, whose fetch path spawns no worker
-at all, is throttled to single flight by a bound sized for PDFs. That is accepted; sizing
+fetched-body size — which means an HTML-only deployment, whose large pages (above
+`html_worker_threshold_bytes`) spawn the same worker, is throttled to single flight by a
+bound sized for PDFs. That is accepted; sizing
 the envelope is covered in [Sizing the container](#sizing-the-container), without
 widening these worker counts.
 
@@ -993,7 +1101,11 @@ queued by depth and three by bytes — the byte bound binds first — so the fif
 **Worst-case queue latency** is a derived number, not a knob:
 `admission_queue_depth / fetch_concurrency × max(fetch timeout 30 s, PDF worker wall clock)`
 — at the defaults, 4 × 30 s = **120 s** before a queued request reaches the fetch, plus the
-stage-1 time of the requests ahead of it.
+stage-1 time of the requests ahead of it. A request ahead of you may be a fetched PDF or a
+large HTML page in the worker, so the wall-clock term is the worker's `wall_clock_seconds`
+(90 s at the default), not only the fetch timeout: `max(fetch timeout, worker wall clock)`
+applies to HTML above the threshold exactly as it does to PDFs. The in-thread path keeps
+today's latency.
 
 **Memory, honestly.** At most `fetch_concurrency` bodies are alive during fetch and stage 1;
 a queued request holds nothing; the queue is bounded in depth and reserved bytes; a request
@@ -1005,14 +1117,17 @@ runs, so an in-flight page costs three to five times the 10 MB body term, and th
 bounds the body term only. What is **not** bounded is the population of classification
 waiters: `uvicorn` runs with no `--limit-concurrency` and both middlewares gate on `/extract`
 alone, so admission bounds the *rate* through stage 1, not the number of requests past it.
-Each such waiter costs at most `max_extracted_characters(256)` ≈ 459 KB of text for at most
-`promptguard_wait_seconds`, so the waiter term is
-`arrival rate × promptguard_wait_seconds × ≤ 0.5 MB`. `--limit-concurrency` is the envelope
+At the default budget of 64 chunks each such waiter costs at most
+`max_extracted_characters(64)` ≈ 115 KB of text for at most `promptguard_wait_seconds`, so
+the waiter term is `arrival rate × promptguard_wait_seconds × ≤ 0.12 MB`. Under the `0`
+opt-out a waiter's text is unbounded except by the 10 MB fetch cap. `--limit-concurrency` is the envelope
 knob that bounds it, and the resource-envelope spec owns it.
 
-**Disk.** The HTML path writes nothing to disk: the fetched body lives in memory, inside the
-slot, and nowhere else. The PDF path (`hardening-retrieve-parity` US-003) spools the fetched
-body to a `0600` `forage-retrieve-*` file in the process-private spool directory and parses
+**Disk.** An HTML body at or below `html_worker_threshold_bytes` writes nothing to disk: it
+lives in memory, inside the slot, and nowhere else. A larger one is spooled like a PDF
+(`0600`, `forage-retrieve-html-*`, the request URL in a small header rather than argv) and
+unlinked after the worker is reaped, on every outcome — including cancellation. The PDF path (`hardening-retrieve-parity` US-003) spools the fetched
+body to a `0600` `forage-retrieve-pdf-*` file in the process-private spool directory and parses
 it in `/extract`'s spawned, rlimited worker, under `extraction.max_promptguard_chunks`
 rather than this block's budget; the file is unlinked as soon as the worker returns, on
 every outcome. See "The spool directory (`TMPDIR`)" above for the requirement, the footprint and
@@ -1020,8 +1135,12 @@ the spawn latency. Every fetched-PDF failure is a 422 — `extraction_failed` wi
 `pdf_encrypted`, `pdf_no_text`, `pdf_extraction_error` or `pdf_spool_error`, or
 `content_too_large` / `promptguard_budget` over the ceiling — never a 500. Stage 1 runs on the default thread pool (`asyncio.to_thread`, shared
 with stage 3's inference), which is uncancellable — the slot is what keeps hostile pages from
-starving the classifier of threads. No wall clock is put on HTML extraction; the 30 s fetch
-timeout and the 10 MB cap bound its input.
+starving the classifier of threads. No wall clock is put on **in-thread** HTML extraction
+(bodies at or below the threshold); the 30 s fetch timeout, the 10 MB cap and the threshold
+bound its input. A larger body runs in the worker under `extraction.wall_clock_seconds`,
+`child_cpu_seconds` and `child_address_space_bytes`, and a failure there is a 422
+`extraction_failed` / `html_extraction_error` (a spool fault is `pdf_spool_error`, as for
+PDFs) — never a 500.
 
 There is **no environment-variable override for any key below**. `config.yaml` is copied
 into the image, so changing one in a deployed container means bind-mounting a replacement
@@ -1029,9 +1148,10 @@ file — the procedure the resource-envelope spec documents.
 
 | Key | Default | Allowed range | Purpose |
 |-----|---------|---------------|---------|
-| `max_promptguard_chunks` | `0` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. `0` means **no pre-check** and no `max_chunks` handed to the classifier — today's behaviour — and boot logs one WARNING `retrieve_budget_unset coming_default=256`. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (458,752 at the coming default of 256); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. Ships at `0` for one minor release; the next MINOR flips the default to `256`, and `0` stays a legal opt-out (`contract/GOVERNANCE.md` ruling (g)). |
+| `max_promptguard_chunks` | `64` | 0 – 1024 | PromptGuard chunk budget for one **fetched page**. Non-zero derives the classifiable character ceiling `(512 − 64) × chunks × 4` (114,688 at the default of 64); a page over it is refused 422 `content_too_large` with reason `promptguard_budget`. `0` is the explicit opt-out: **no pre-check** and no `max_chunks` handed to the classifier, the pre-1.4.0 behaviour. Default set to 64 in 1.4.0 (owner ruling 2026-10-07, measured; `256` had been announced) — `contract/GOVERNANCE.md` ruling (g). Every refusal on this budget (the character pre-check, a fetched PDF over the ceiling, and the classifier's own backstop) increments `retrieve.promptguard_budget_refusals` on `/metrics`; it stays `0` under the `0` opt-out. |
 | `fetch_concurrency` | `1` | 1 – 1 | Admission slots: concurrent `/retrieve` fetch-and-stage-1 work. Fixed at one for the PDF worker budget above; widening remains deferred. |
 | `admission_queue_depth` | `4` | 0 – 16 | Requests allowed to wait for the fetch slot, holding no body while they wait. Beyond it a request is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). `0` means refuse immediately whenever the slot is taken. Worst-case queue latency is `admission_queue_depth / fetch_concurrency × 30 s` — 120 s at the defaults. |
+| `html_worker_threshold_bytes` | `524288` (512 KiB) | 0 – 1048576 (1 MiB) | Fetched HTML bodies **larger than** this many bytes (compared on the fetched byte length, before decoding) parse in the rlimited worker inside the admission slot; a body of exactly this size parses in-thread. `0` routes every body to the worker. A worker failure is 422 `extraction_failed` / `html_extraction_error`. **Security-relevant: raising it weakens the bound** — see [HTML worker threshold](#html-worker-threshold). Not a cache-fingerprint or `sanitizer_revision` input, because the served output is byte-identical on either path. |
 | `max_queued_fetch_bytes` | `31457280` (30 MiB) | 10 MiB – 160 MiB | Bytes reserved for queued requests, one 10 MB fetch-cap reservation each — three at the default. A request whose reservation would exceed it is refused 422 `busy` / `admission_queue_full` (`retrieve.busy_rejections`). Deliberately **not** `admission_queue_depth × 10 MB`, so at the shipped defaults the byte bound binds before the depth bound and both are exercisable. |
 
 ### Top-level PromptGuard policy keys
@@ -1052,7 +1172,7 @@ it has not landed yet.
 |-----|---------|---------------|-------|---------|
 | `promptguard_fail_closed_floor` | `false` | `true` / `false` | `/retrieve` and `/search` | Effective flag is `request.promptguard_fail_closed or floor`: `true` blocks STANDARD/UNTRUSTED content when the classifier is absent or the classification wait expires, even if the caller requests fail-open. `false` imposes no floor. Every 200 reports `effective_promptguard_fail_closed`; trust-tier exemptions remain. Set through the deployed-container bind mount described above. |
 | `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | `/retrieve` and `/search` | Effective threshold is `min(requested value or validated config default, ceiling)` where only null/omitted selects the default (zero remains zero). The default is resolved **before** capping. A lower ceiling blocks at a lower classifier score; `1.0` imposes no ceiling. Every 200 reports `effective_promptguard_threshold`, including retrieve cache hits. Set through the deployed-container bind mount described above. |
-| `promptguard_wait_seconds` | `30.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/search`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. On `/search` it is one budget for the whole request, not per result. `/extract` takes the same permit but waits without a deadline. |
+| `promptguard_wait_seconds` | `90.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/search`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. On `/search` it is one budget for the whole request, not per result. `/extract` takes the same permit but waits without a deadline. |
 
 The threshold ceiling applies to both fetch routes, including their configured default.
 `/extract` stays permanently fail-closed with its own raw-value threshold guard;
@@ -1081,29 +1201,116 @@ wait — not that the model is missing. The fix is to raise `promptguard_wait_se
 lower `retrieve.max_promptguard_chunks`, and lowering the budget is the better of the two:
 it bounds the hold rather than waiting longer for an unbounded one.
 
-Until the resource-envelope spec measures the per-window number on the reference envelope,
-a **provisional** pairing: at an assumed 100 ms per window on a 2-vCPU container, the
-coming default of 256 chunks is a ~25.6 s hold, which the shipped `30.0` clears with
-little margin. An operator who cannot meet that on their hardware lowers
-`retrieve.max_promptguard_chunks` — to 128 for a ~12.8 s hold, to 64 for ~6.4 s — rather
-than raising the wait, because a longer wait parks more requests behind the same permit
-without making any of them finish sooner.
+#### Measured per-window cost
 
-One honest qualification: **while `retrieve.max_promptguard_chunks` is `0` the rule does
-not hold**, because there is no chunk budget to multiply — the worst-case hold is bounded
-only by the 10 MB fetch cap, which is far more windows than any wait in range covers. An
-operator who wants the sizing rule to apply sets the key explicitly; the
-`retrieve_budget_unset` boot WARNING says so. The shipped default pair (`0` and `30.0`) is
-recorded under Known risks for exactly that reason: on a CPU-bound classifier it makes
-wait timeouts likely under even modest concurrency.
+One window is one forward pass over 512 tokens (`MAX_SEQ_LEN`) at batch size 1: the
+classifier loops over chunks and runs `model(**inputs)` once per chunk, so a permit hold is
+`chunks × per-window latency`. Measured 2026-10-07 (`release-1-3-0` US-002) with a
+**weights-free** harness: `DebertaV2ForSequenceClassification` built from a random-init
+mDeBERTa-v3-base-shaped `DebertaV2Config` (the 86M's architecture; no network, no gated
+download), 512 random token ids, warm, median of 20, torch 2.14 / transformers 5.16.
 
-**Known risk — the shipped default pair.** `retrieve.max_promptguard_chunks: 0` with
-`promptguard_wait_seconds: 30.0` leaves the permit hold unbounded by anything but the fetch
-cap, so a single large fetched page can time out every other request's wait. The signal is
-`retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on
-`/metrics` rising while `/health` still reports `promptguard_loaded: true` — contention,
-not a missing model. Watch both counters after enabling `/retrieve` at volume, and set
-`retrieve.max_promptguard_chunks` to bound the hold.
+**Native x86 server (the reference for sizing).** Measured 2026-10-07 on an AMD Ryzen
+Threadripper 2970WX (24 cores / 48 threads, Zen+, AVX2, 4 NUMA nodes of which two have no
+local memory), Ubuntu, native Docker, the published `forage:1.2.2` image (torch 2.14 CPU,
+MKL), same weights-free harness, batch 1 × 512 tokens, warm, median of 15. `--cpus N` with
+`torch.set_num_threads(N)` unless noted.
+
+| CPUs (threads) | 22M ms/window | 86M ms/window | 86M windows/s at best concurrency |
+|---|---|---|---|
+| 1 | 1,135 | 3,315 | 0.30 |
+| 2 | 719 | 2,036 | 0.49 |
+| 4 | 634 | 1,446 | 0.69 |
+| 8 | 493 | 1,077 | 1.21 (`classification_concurrency` 4 × 2 threads) |
+| 16 | 494 | 1,080 | 1.33 (4 × 4 threads) |
+| 24 | 481 | 1,192 | 1.25 (3 × 8 threads) |
+| 12, `--cpuset-cpus 0-11` (memory-bearing NUMA nodes only) | — | **861** | 1.13 |
+
+What it shows:
+
+- **Per-window latency stops improving at about 8 CPUs.** One 512-token window does not
+  parallelise further. Cores beyond that buy only modest throughput through
+  `classification_concurrency`, never a shorter permit hold.
+- **The 22M is about 2.2× faster** at every size.
+- **NUMA placement matters on multi-die CPUs.** Pinning to memory-bearing nodes with
+  `cpuset` gained about 20% over a plain `--cpus` quota.
+- **GPU, for planning only (not supported by the image).** The same harness under CUDA
+  PyTorch on the server's RTX 4070 Ti measured **15.4 ms per window for both models**,
+  about 70× faster than the best CPU figure, so a 64-chunk page takes about 1 s. The shipped
+  image is CPU-only; GPU support is a separate epic.
+- This 2018 Zen+ part is about 3–4× slower per window than the Apple-silicon bare-host row
+  below, partly because torch's MKL backend is weak on AMD. Newer x86 parts will land
+  between the two.
+
+**Apple-silicon reference (development machine).**
+
+| Environment | 1 CPU/thread | 4 CPUs/threads |
+|---|---|---|
+| Repo image, `docker run --cpus 1` / `--cpus 4` (Docker Desktop, arm64 Linux VM on an M-series Mac) | **2,989 ms** | **694 ms** |
+| Same host, no container, `torch.set_num_threads(1)` / `(4)` | 283 ms | 189 ms |
+
+Caveats. The container row is the figure to size against; the bare-host row is a **lower
+bound** on hold time (no VM, a different torch build, no cgroup throttling). Random weights
+have the same arithmetic cost as trained ones, but this is not a production x86 server: a
+Linux host with native Docker will differ, and the 1-CPU container figure here is
+likely pessimistic. Re-measure on your own hardware before trusting either row —
+`scripts/bench_promptguard.py` is the end-to-end tool.
+
+**Permit hold, in seconds, against `promptguard_wait_seconds` (90.0).** The permit is shared
+by `/extract`, `/retrieve` and `/search` at `classification_concurrency: 1`, so a request
+that arrives with *k* holders queued ahead waits about *k* × the hold. The fit is a
+statement **per single holder** (k = 1); with more holders ahead, the budget that fits is
+the wait ÷ k.
+
+| Budget | Model, environment (native x86 unless noted) | Hold (k = 1) | k = 2 |
+|---|---|---|---|
+| 64 | 86M, 1 CPU | 212 s | 424 s |
+| 64 | 86M, 4 CPUs | 93 s | 185 s |
+| 64 | 86M, 8 CPUs (**recommended**) | 69 s | 138 s |
+| 64 | 86M, 12 CPUs pinned to memory-bearing NUMA nodes | 55 s | 110 s |
+| 64 | 22M, 4 CPUs | 41 s | 81 s |
+| 64 | 22M, 8 CPUs | 32 s | 63 s |
+| 64 | 86M, Docker Desktop container, 4 CPUs | 44 s | 89 s |
+
+**Recommended envelope (v1.3.0).** 8 CPUs (`FORAGE_CPUS=8`, `promptguard_threads: 8`) with
+the shipped pair `retrieve.max_promptguard_chunks: 64` and `promptguard_wait_seconds: 90.0`:
+a worst-case 64-chunk page holds the 86M permit about 69 s, which fits the 90 s wait at
+k = 1. On a multi-die CPU, pin the container to memory-bearing NUMA nodes (`cpuset`) for
+another ~20%. Below 8 CPUs, or for k = 2 headroom, lower the budget to
+`floor(wait / per-window latency)` for your host: at 90 s that is about **27** chunks at 1 CPU,
+**62** at 4 CPUs and **83** at 8 CPUs for the 86M; **79**, **141** and **182** for the 22M.
+Re-measure on your own hardware; per-window cost varies 3–4× across CPU generations.
+
+Raising the wait rather than lowering the budget trades queue latency for coverage: a
+request may wait up to 90 s behind a large page, but pages up to the 114,688-character
+ceiling are still classified rather than refused. The default was raised from 30.0 to 90.0
+in v1.3.0 for exactly that reason (owner ruling, 2026-10-07).
+
+**What a waiter gets when its wait expires.** Its stage 3 is not run. The request receives
+`stage3_promptguard.unavailable_result`: with `promptguard_fail_closed` off it is
+**`unavailable_allowed`** — served **unclassified**, verdict `SAFE`, penalty `-0.1`, skip
+reason `model_unavailable`. With `promptguard_fail_closed` on, STANDARD and UNTRUSTED tiers
+get `unavailable_blocked` (`INJECTION_DETECTED`, quarantined) instead; VERIFIED stays
+`unavailable_allowed`. The log line is `classification_wait_timeout route=…`, and the counters
+are `retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on
+`/metrics`. An `unavailable_allowed` body is never cached while the classifier is loaded.
+
+One honest qualification: **if an operator sets `retrieve.max_promptguard_chunks` to `0`
+the rule does not hold**, because there is no chunk budget to multiply — the worst-case hold
+is bounded only by the 10 MB fetch cap, which is far more windows than any wait in range
+covers.
+
+**Known risk.** The shipped pair (`64` and `90.0`) bounds the hold, and fits the wait at
+k = 1 only where the per-window cost is at most about 1.4 s: 8 or more native x86 CPUs for
+the 86M, or 4 or more for the 22M. Below that, or with several large pages queued, the
+budget exceeds the fitting one. The `0` opt-out removes the bound altogether. Any of these
+lets a large fetched page time out other requests' waits, and fail-open those requests
+serve unscanned. The signal is `retrieve.classification_wait_timeouts` and
+`search.classification_wait_timeouts` rising while `/health` still reports
+`promptguard_loaded: true`, which means contention, not a missing model. Watch both
+counters after enabling `/retrieve` at volume; set `promptguard_fail_closed` if unscanned
+service is unacceptable. GPU acceleration, which removes the hold almost entirely, is
+planned as a separate epic.
 
 ---
 

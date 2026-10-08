@@ -173,7 +173,7 @@ Forage never decides whether content is safe; it produces signals and, for the c
 | `exfil_beacon` | `suspicious` | a markdown image whose URL carries double-brace, `${`, or `%7B` templating |
 | `envelope_breakout` | `suspicious` | any `<`, `&lt;`, `&#60;`, or `&#x3c;` spelling of the `retrieved_content`, `retrieval_note`, `retrieval_warning`, or `retrieval_cache_note` tags |
 
-`/retrieve` pre-checks a fetched page's extracted text against the character ceiling derived from `retrieve.max_promptguard_chunks` **before** Stage 3 runs, and refuses an over-budget page 422 `content_too_large` with the fixed reason `promptguard_budget`, so one hostile page cannot burn unbounded classification CPU. The classifier's own `PromptGuardBudgetExceededError` is caught around the same call and mapped to the same refusal as a backstop. At the shipped default of `0` there is no pre-check (`contract/GOVERNANCE.md` ruling (g)).
+`/retrieve` pre-checks a fetched page's extracted text against the character ceiling derived from `retrieve.max_promptguard_chunks` **before** Stage 3 runs, and refuses an over-budget page 422 `content_too_large` with the fixed reason `promptguard_budget`, so one hostile page cannot burn unbounded classification CPU. The classifier's own `PromptGuardBudgetExceededError` is caught around the same call and mapped to the same refusal as a backstop. The shipped default is `64` chunks (ceiling 114,688 characters; owner ruling 2026-10-07, measured); `0` is the explicit opt-out and runs no pre-check (`contract/GOVERNANCE.md` ruling (g)).
 
 A blocking hit yields verdict `blocked` and quarantine. Each suspicious hit costs `-0.15` trust, capped at `-0.45` (`penalty = max(-0.45, -0.15 * suspicious_count)`); blocking always overrides suspicious. `tests/test_stage2_structural.py` (78 tests) has a class per category plus `TestMixedContent::test_blocking_overrides_suspicious` and `::test_penalty_cap`.
 
@@ -199,8 +199,12 @@ below is claimed to hold for text outside the corpus.
   `confusables.txt` (pinned by sha256) plus an owner-reviewed supplement, with a pre-NFKC table
   for mappings NFKC would otherwise destroy, and two readings of the ambiguous capital-I /
   lower-l class. It covers single-code-point look-alikes with an ASCII prototype, nothing more.
-  The fold is refused (never truncated) once it would exceed four times the decoded length;
-  the refusal adds an `encoded_payload` flag, so the result is `suspicious`, not `blocked`.
+  The fold is refused (never truncated) once it would exceed `max(2n, n + 256)` for a decoded
+  form of `n` characters, and the refusal is a **BLOCK** on every route and tier (`/retrieve`
+  trusted and default, `/extract`; `/search` omits the result), carrying an `encoded_payload`
+  flag. A flag would let expanding-character padding switch the fold off for a page still
+  served. The constant slack is not a bypass: text inside it is still folded and scanned, and
+  it keeps short real fields (a 6-character Arabic title ending in U+FDFA) from being blocked.
 - **Raw-markup subset.** `scan_raw_markup` runs `system_tag`, `private_ip_href` and
   `envelope_breakout` once each over the whitespace-collapsed raw source, first match only,
   because the parser consumes those triggers. It adds a verdict and cuts nothing.
@@ -372,11 +376,59 @@ See [`docs/configuration.md` § Sizing the container](../../docs/configuration.m
 
 ### The upload path
 
-In `retrieval_app.py`, `DocumentSizeLimitMiddleware` counts ASGI body bytes as they arrive and does **not** trust `Content-Length`; `_spool_upload` spools to a `0600` temp file under a second cap and always unlinks it — inside `pipeline.pdf_subprocess.spool_dir()`, the process-private `0700` `forage-spool-<uid>` directory (created with that mode, verified with `lstat` on every call and refused rather than repaired if it is a symlink, a non-directory, foreign-owned or group/other-accessible; the lifespan's check refuses boot); `_sanitize_upload_metadata` bounds `filename` and `mime_hint` to 255 characters, constrains `request_id` to `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, strips control characters, reduces `filename` to a basename, and rejects `""`, `.`, and `..`. `UploadProvenance` in `models.py` documents that `filename` and `mime_hint` are display-only and never used as filesystem paths.
+In `retrieval_app.py`, `DocumentSizeLimitMiddleware` counts ASGI body bytes as they arrive and does **not** trust `Content-Length`; `_spool_upload` spools to a `0600` temp file under a second cap and always unlinks it — inside `pipeline.worker_launch.spool_dir()` (re-exported by `pdf_subprocess`), the process-private `0700` `forage-spool-<uid>` directory (created with that mode, verified with `lstat` on every call and refused rather than repaired if it is a symlink, a non-directory, foreign-owned or group/other-accessible; the lifespan's check refuses boot); `_sanitize_upload_metadata` bounds `filename` and `mime_hint` to 255 characters, constrains `request_id` to `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, strips control characters, reduces `filename` to a basename, and rejects `""`, `.`, and `..`. `UploadProvenance` in `models.py` documents that `filename` and `mime_hint` are display-only and never used as filesystem paths.
 
 ### Content-type detection and process isolation
 
-`pipeline/stage1_upload.py` decides the format from bytes, not from the caller: `%PDF-` magic wins; otherwise the body must decode as strict UTF-8, contain no NUL byte, and have at most 5 % non-whitespace control characters (`_MAX_CONTROL_CHARACTER_RATIO = 0.05`); `mime_hint` is explicitly discarded (`del mime_hint`). PDF parsing runs in a spawned, killable subprocess (`pipeline/pdf_subprocess.py`) under `RLIMIT_CPU`, `RLIMIT_AS`, and a `setitimer` wall clock; the result comes back over a length-framed JSON pipe capped at `max_ipc_result_bytes`, and parser exceptions map to fixed status tokens so document-derived text never crosses the pipe. Since `hardening-retrieve-parity` US-003 this is true of **both** routes: a fetched PDF on `/retrieve` is spooled to a `0600` `forage-retrieve-*` file in the same private directory and parsed by the same worker under `/extract`'s rlimits, and every failure is a coded 422 (`extraction_failed` with a fixed reason, or `content_too_large` / `promptguard_budget`) rather than the 500 an in-process `pypdf` exception produced before. The spool file holds fetched third-party content; it is unlinked on every normal exit path, and an orphan left by a SIGKILL on a non-tmpfs `TMPDIR` is content-bearing (`docs/configuration.md`, "The spool directory").
+`pipeline/stage1_upload.py` decides the format from bytes, not from the caller: `%PDF-` magic wins; otherwise the body must decode as strict UTF-8, contain no NUL byte, and have at most 5 % non-whitespace control characters (`_MAX_CONTROL_CHARACTER_RATIO = 0.05`); `mime_hint` is explicitly discarded (`del mime_hint`). PDF parsing runs in a launched, killable subprocess (`pipeline/pdf_subprocess.py` on the shared `pipeline/worker_launch.py` launcher; see "Worker isolation" below) under `RLIMIT_CPU`, `RLIMIT_AS`, and a `setitimer` wall clock; the result comes back over a length-framed JSON pipe capped at `max_ipc_result_bytes`, and parser exceptions map to fixed status tokens so document-derived text never crosses the pipe. Since `hardening-retrieve-parity` US-003 this is true of **both** routes: a fetched PDF on `/retrieve` is spooled to a `0600` `forage-retrieve-pdf-*` file in the same private directory and parsed by the same worker under `/extract`'s rlimits, and every failure is a coded 422 (`extraction_failed` with a fixed reason, or `content_too_large` / `promptguard_budget`) rather than the 500 an in-process `pypdf` exception produced before. The spool file holds fetched third-party content; it is unlinked on every normal exit path, and an orphan left by a SIGKILL on a non-tmpfs `TMPDIR` is content-bearing until the next boot's sweep (`release-resource-bounds` US-004) unlinks it: regular, euid-owned, `forage-extract-`/`forage-retrieve-`/legacy `poppy-extract-` prefix, `mtime` older than `MAX_EXTRACTION_WALL_SECONDS` + 60 s (the bound, so a sibling process's live spool is never swept), `dir_fd`-relative after a no-follow `stat`, never recursing, logging only `spool_sweep removed=<n>` (`docs/configuration.md`, "The spool directory").
+
+### Worker isolation
+
+Extraction workers (today the PDF worker) are launched by `pipeline/worker_launch.py` as
+`subprocess.Popen([sys.executable, "-m", "pipeline.worker_entry", <kind>, ...])`, not
+`multiprocessing` spawn, which inherits `os.environ` and takes no per-process `env=`.
+
+- **Allowlisted environment.** The child receives only `PATH`, `HOME`, `LANG`, `LC_ALL`,
+  `LC_CTYPE`, `TMPDIR`, `PYTHONPATH`, `VIRTUAL_ENV`, `PYTHONHASHSEED` and
+  `PYTHONDONTWRITEBYTECODE`, each only when the parent has it (`WORKER_ENV_ALLOWLIST`; no
+  addition was needed for the parse path, and `HF_HOME` is deliberately absent). A credential
+  is therefore absent from the child's `os.environ`, its `/proc/self/environ` and its memory.
+  Platform-injected names (macOS `__CF_USER_TEXT_ENCODING`) are not granted and the test
+  tolerates them.
+- **fd-passed pipe.** The frame comes back on a pipe fd handed to the child alone
+  (`pass_fds`, `close_fds=True`, stdin/stdout/stderr `DEVNULL`); argv carries only the spool
+  path, the fd number and numeric limits. No `preexec_fn` (unsafe with threads).
+- **Fixed working directory.** `cwd=` is the project root, resolved from the `pipeline`
+  package, because the image installs with `--no-install-project`.
+- **Limits first, logging off.** `worker_entry` applies the rlimits and wall-clock timer before
+  importing any parser and then disables logging, so parser output cannot carry content.
+- **Kill and reap on every path.** The parent kills and waits in `finally`; a spawn `OSError`
+  maps to the worker's ordinary failure error.
+
+**Residual: verdict integrity.** The worker bounds **resource cost**; it does not protect the
+verdict against a *compromised* parser. A child under native-code control can return a
+well-formed CLEAN frame with scrubbed text. Frame validation catches malformed frames, not
+lies. Accepted.
+
+**Non-dumpable parent (Linux).** At lifespan start the parent calls
+`prctl(PR_SET_DUMPABLE, 0)` through `ctypes` (`make_process_non_dumpable()` in
+`pipeline/worker_launch.py`), so `/proc/<pid>/*` is root-owned and a compromised worker child's
+read of `/proc/<ppid>/environ` raises `PermissionError` (tested on Linux). The flag is inherited
+across fork and reset on exec, so workers are unaffected. Elsewhere it is a no-op and the
+`/proc` read is a Linux-only concern. Nothing in non-test Python reads `/proc` (grepped).
+Measured on Linux (python:3.12-slim, `nofile` 1,048,576): `subprocess` spawn of `/bin/true`
+with `close_fds=True` took 0.22 ms with dumpable 1 and 0.19 ms with dumpable 0 — no
+brute-force-close penalty.
+
+- **Operator cost.** A non-dumpable process writes no core dump, and `py-spy` and `gdb`
+  attach (and `strace -p`) fail unless run as root with the needed capability.
+- **Residual: same uid.** The guarantee holds only while Forage is the only same-uid process
+  in its PID namespace that holds secrets; a same-uid child can still read any *other*
+  same-uid process's `/proc/<pid>/environ`.
+- **Residual: named exceptions.** `docker run --init` / compose `init: true` (tini is PID 1
+  with the same uid and may hold the environment), a uvicorn master under `--workers`, a
+  wrapper shell that does not `exec`, and `shareProcessNamespace` pods.
+- **Residual: `CAP_SYS_PTRACE`.** The guarantee assumes the container lacks it.
 
 ### Admission control (the only rate limiting)
 
@@ -390,7 +442,7 @@ candidate, not the distinct pre-existing queued-waiter handoff residual below.
 |---|---|---|
 | `POST /extract` | `extraction_concurrency=1`, `admission_queue_depth=1` (configurable 0 to 4), `max_queued_upload_bytes` 50 MiB (`ExtractionAdmissionController`) | `429 {"error": "busy"}` |
 | PromptGuard inference, all routes | Shared `asyncio.Semaphore`, `classification_concurrency=1` shipped, configurable 1–8 under the memory rule; below-rule boot WARNING is advisory, not OOM protection | `/retrieve` and `/search` wait at most `promptguard_wait_seconds`, then take the classifier-unavailable outcome; `/extract` queues with **no wait timeout** |
-| `POST /retrieve` | a second `ExtractionAdmissionController` over fetch and stage 1 (`hardening-retrieve-parity` US-002): `retrieve.fetch_concurrency` (pinned 1), `retrieve.admission_queue_depth` (default 4, 0 to 16), `retrieve.max_queued_fetch_bytes` (default 30 MiB, one 10 MB reservation per queued request), a wait bounded by construction with no timer. A queued request holds no body; the body is released with the slot, before the classification wait. It bounds the *rate* through stage 1, not the population of classification waiters past it (no `--limit-concurrency`; each waiter holds at most ≈ 459 KB of extracted text) | `422 {"error": "busy", "reason": "admission_queue_full"}`, counted under `retrieve.busy_rejections`. PDF parsing inside the slot runs in the `/extract` worker under `/extract`'s rlimits (`child_cpu_seconds`, `child_address_space_bytes`, `wall_clock_seconds`, `max_pages`; `hardening-retrieve-parity` US-003); a worker failure is 422 `extraction_failed`, never a 500 |
+| `POST /retrieve` | a second `ExtractionAdmissionController` over fetch and stage 1 (`hardening-retrieve-parity` US-002): `retrieve.fetch_concurrency` (pinned 1), `retrieve.admission_queue_depth` (default 4, 0 to 16), `retrieve.max_queued_fetch_bytes` (default 30 MiB, one 10 MB reservation per queued request), a wait bounded by construction with no timer. A queued request holds no body; the body is released with the slot, before the classification wait. It bounds the *rate* through stage 1, not the population of classification waiters past it (no `--limit-concurrency`; at the default budget of 64 chunks each waiter holds at most ≈ 115 KB of extracted text; under the `0` opt-out it is unbounded except by the 10 MB fetch cap) | `422 {"error": "busy", "reason": "admission_queue_full"}`, counted under `retrieve.busy_rejections`. PDF parsing inside the slot runs in the `/extract` worker under `/extract`'s rlimits (`child_cpu_seconds`, `child_address_space_bytes`, `wall_clock_seconds`, `max_pages`; `hardening-retrieve-parity` US-003); a worker failure is 422 `extraction_failed`, never a 500 |
 | `POST /search`, `GET /health`, `GET /metrics` | none | not applicable |
 
 "All routes" in that middle row was aspirational until `hardening-retrieve-parity` US-006; it is literally true now. All three classifying routes take the same permit around **stage 3 only** — `/extract` moved its acquisition inward from the outer `async with` that used to wrap stages 2, 3 and 4 — through one `_bounded_permit` context manager in `pipeline/orchestrator.py`, whose release runs only when the permit was actually acquired, so a timed-out wait can never strand it.

@@ -639,7 +639,8 @@ components:
             busy arrives on /retrieve only, at 422, as the admission refusal (reason admission_queue_full);
             the same literal is /extract's 429. extraction_failed arrives on /retrieve only,
             as a fetched PDF the worker could not parse or spool (reason pdf_encrypted, pdf_no_text,
-            pdf_extraction_error or pdf_spool_error).
+            pdf_extraction_error or pdf_spool_error) or a large fetched HTML body the worker
+            could not parse (reason html_extraction_error).
           enum:
           - blocked_domain
           - busy
@@ -748,6 +749,16 @@ components:
           description: Refusals keyed by the /retrieve error code.
           title: Errors
           type: object
+        html_worker_refusals:
+          description: Worker spawns that produced no result and were refused 422 `extraction_failed`
+            / `html_extraction_error`. A spool fault is not counted.
+          title: Html Worker Refusals
+          type: integer
+        html_worker_spawns:
+          description: Fetched HTML bodies above `retrieve.html_worker_threshold_bytes` handed
+            to the rlimited extraction worker. A spool fault counts a spawn.
+          title: Html Worker Spawns
+          type: integer
         policy_invalid_domain_entry:
           description: 'Dropped request domain entries, one increment per entry: invalid entries
             in any list or the over-budget remainder of an allowlist. The two allowlist drop
@@ -761,6 +772,12 @@ components:
             classification is unavailable, even if classification is available on this request.
             Exact matches through bare entries do not increment it.
           title: Policy Suffix Trusted Skip
+          type: integer
+        promptguard_budget_refusals:
+          description: '`/retrieve` requests refused 422 `content_too_large` / `promptguard_budget`
+            because the extracted text exceeded the `retrieve.max_promptguard_chunks` budget.
+            Zero when the budget is 0 (no limit).'
+          title: Promptguard Budget Refusals
           type: integer
         promptguard_contiguity_detections:
           description: Retrievals blocked by the contiguity rule, including both-rule verdicts.
@@ -797,6 +814,9 @@ components:
       - semaphore_saturation
       - busy_rejections
       - promptguard_contiguity_detections
+      - html_worker_spawns
+      - html_worker_refusals
+      - promptguard_budget_refusals
       title: RetrieveMetricsResponse
       type: object
     RetrieveRequest:
@@ -1527,13 +1547,13 @@ components:
       description: 'One entry of the service''s redacted request-validation error list.
 
 
-        The handler emits the declared trio ``loc``, ``msg``, ``type``, capped at
+        The handler emits exactly the declared trio ``loc``, ``msg``, ``type``,
 
-        ``_MAX_VALIDATION_ERRORS`` entries. For contract 1.3.0 ``input``, ``ctx``
+        capped at ``_MAX_VALIDATION_ERRORS`` entries. ``input``, ``ctx`` and ``url``
 
-        and ``url`` are present with the fixed value ``"[redacted]"``; they are
+        were present with the fixed value ``"[redacted]"`` in contract 1.3.0 and
 
-        dropped at the next MINOR (GOVERNANCE ruling (l)).'
+        are gone from 1.4.0 (GOVERNANCE ruling (l)).'
       properties:
         loc:
           description: Path to the offending field within the request.
@@ -1573,7 +1593,7 @@ info:
     Forage is not a trust boundary. A `healthy` Forage is not a promise that the content it
     returned is safe. See `docs/configuration.md`, "Deployment posture".'
   title: Forage
-  version: 1.3.0
+  version: 1.4.0
 openapi: 3.1.0
 paths:
   /extract:
@@ -1649,9 +1669,8 @@ paths:
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Extract Extract Post
           description: Document failure (coded body, carrying sanitizer_revision) or request
-            validation failure (redacted loc/msg/type entries, at most _MAX_VALIDATION_ERRORS
-            (100); input/ctx/url carry '[redacted]' in contract 1.3.0 and are dropped at the
-            next MINOR).
+            validation failure (redacted entries of exactly loc/msg/type, at most _MAX_VALIDATION_ERRORS
+            (100)).
         '429':
           content:
             application/json:
@@ -1762,8 +1781,7 @@ paths:
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Retrieve Retrieve Post
           description: Pipeline refusal (coded body) or request validation failure (redacted
-            loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry
-            '[redacted]' in contract 1.3.0 and are dropped at the next MINOR).
+            entries of exactly loc/msg/type, at most _MAX_VALIDATION_ERRORS (100)).
       summary: Retrieve
   /search:
     post:
@@ -1817,6 +1835,5 @@ paths:
                 - $ref: '#/components/schemas/HTTPValidationError'
                 title: Response 422 Search Search Post
           description: Pipeline refusal (coded body) or request validation failure (redacted
-            loc/msg/type entries, at most _MAX_VALIDATION_ERRORS (100); input/ctx/url carry
-            '[redacted]' in contract 1.3.0 and are dropped at the next MINOR).
+            entries of exactly loc/msg/type, at most _MAX_VALIDATION_ERRORS (100)).
       summary: Search

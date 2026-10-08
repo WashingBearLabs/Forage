@@ -115,7 +115,7 @@ file in the repo. |
 | `model_fetcher.py` | 1995 | Per-model weight acquisition. `_manifest_entry(path, model_id)` memoises both entries and failures; `resolve_revision(model_id)` is total (shaped override, selected pin, default-only fallback, otherwise `unpinned`). `acquire_and_load` refuses an unusable/unknown entry or unpinned revision before any snapshot lookup, then verifies cache → **Hugging Face → GHCR mirror**. All legs verify the requested pair against `weights_manifest.json.models`, exact-set and safetensors-only, with symlink containment and one-generation quarantine. The mirror extracts with `filter="data"` into bounded staging, verifies there and installs by rename. `_load_verified` independently re-derives requested and manifest snapshot paths, requiring equality and existence before loading from `$HF_HOME/hub` offline. `WeightAcquisition(model_id=...)` forwards identity through its single-flight, 30 s→10 min jittered retry loop. Six runtime environment variables since US-006: `resolve_model_id()` returns `(id, allowed)` for `FORAGE_MODEL_ID`; only the lifespan raises `ModelConfigurationError`, keeping revision fallbacks total. The allowlist is 22M and 86M; `DEFAULT_MODEL_ID` is the 86M since the 2026-10-06 owner ruling, and `DEFAULT_MODEL_REVISION` is its pin `a8ded8e697ce7c355e395a0df51f94adb4a2fd27`. |
 | `pipeline/stage1_pdf.py` | 156 | PDF branch of stage 1. |
 | `pipeline/stage3_promptguard.py` | 282 | ML injection scan: strict max-score rule OR opt-in consecutive-window contiguity rule; trusted domains skip both. Frozen `PromptGuardSettings`, `PromptGuardConfigurationError` and the once-at-boot `promptguard_settings_from_config` builder live beside the rule. Windows `0` ships disabled, otherwise 2–8; threshold defaults to an absolute server-side 0.5. Flags union window indices in document order; stage 4 remains unchanged and publishes diagnostic labels only. |
-| `pipeline/contract.py` | 358 | The versioned response contract (`contract_version`, currently **1.3.0**), the 18-code error vocabulary, and the `ContentKind` Literal. |
+| `pipeline/contract.py` | 358 | The versioned response contract (`contract_version`, currently **1.4.0**), the 18-code error vocabulary, and the `ContentKind` Literal. |
 | `contract_smoke.py` | 759 | CI's published-image smoke: polls a running container's `/health`, validates it against the same `HealthResponse` model the golden test pins, and reads every wire value from `pipeline/contract.py` at run time. Two modes via `--expect-status`: `degraded` (the default, CI's weights-free image) and `healthy` (a container started with weights — the three PromptGuard-coupled checks invert, every other check is identical); the wait polls until `/health` answers 200 with the expected `status`, not merely the first 200. With `--image` (US-004) it also `cat`s `/app/contract/openapi.yaml` out of the candidate image, hashes it against the `--anchor` file (default the committed anchor) and compares its `info.version` with the version the container serves. Ships in no image. |
 | `searxng_smoke.py` | 779 | CI's companion-image smoke: creates an egress-free Docker network, runs SearXNG beside a Valkey and probes it from a third container. Docker goes through an injected runner and every judgement is a pure function, so `tests/test_searxng_smoke.py` covers the failure branches without a daemon. Ships in no image. |
 | `scripts/vendor_weights.py` | 1198 | Operator-only, supervised: `--model-id` (default `DEFAULT_MODEL_ID`, now the 86M; no environment selection) and `--revision` flow through download, per-model manifest merge and scoped diff, deterministic symlink-dereferenced tarball, real-verifier self-check and revision-tagged push. The safetensors allowlist is enforced **at generation time**, other model entries are preserved, and GHCR privacy is checked after push. No credential reaches an argv. Ships in no image; `docs/weights.md` is the procedure. |
@@ -144,7 +144,7 @@ per-result `scan_structural` over bounded fields stays on the loop.
 
 **Both routes parse PDFs in the worker.** Since `hardening-retrieve-parity` US-003 a fetched
 PDF on `/retrieve` goes through `extract_pdf_bytes_in_subprocess`, which spools the body to a
-`0600` `forage-retrieve-*` file in `spool_dir()` (`<TMPDIR>/forage-spool-<uid>`, `0700`,
+`0600` `forage-retrieve-pdf-*` file in `spool_dir()` (`<TMPDIR>/forage-spool-<uid>`, `0700`,
 created on first use and verified with `lstat` on every call, never repaired) and calls the
 same `extract_pdf_in_subprocess` `/extract`'s uploads use — spawned, under `/extract`'s
 rlimits and `extraction.max_promptguard_chunks` — inside `asyncio.to_thread` and the
@@ -225,7 +225,7 @@ reproducing `840c78fa…` exactly). A twentieth rotation — **not** behaviour-c
 came with `run_retrieve_pipeline`'s five new keyword-only dependencies and the pre-checked
 chunk budget (`6f0fa2de…` → `e55b5f06…`, `hardening-retrieve-parity` US-001 —
 `orchestrator.py` + `contract.py`, each reverted in turn, both-reverted control landing on
-`6f0fa2de…`; the shipped default `retrieve.max_promptguard_chunks: 0` runs no pre-check, and
+`6f0fa2de…`; the default then was `retrieve.max_promptguard_chunks: 0` (64 since 1.4.0) and ran no pre-check, and
 the new `pipeline/retrieve_limits.py` and `pipeline/config_bounds.py` are not hashed).
 A twenty-first — also **not** behaviour-changing — came with the classification semaphore on
 `/retrieve` and `/search` (`e55b5f06…` → `d0433876…`, `hardening-retrieve-parity` US-006 —
@@ -475,8 +475,8 @@ cassettes are keyed by the sha256 of stage-3 input. Everything new is scan-only:
   (`decode_scan_text`: one `html.unescape` level after a parse, two otherwise, then control strip
   and `normalize_text`), and the confusable fold of the decode (`fold_scan_forms`:
   `PRE_NFKC_TABLE` → NFKC → `FOLD_TABLE`, one form per I/l reading, deduplicated). The fold is
-  built in NFKC-safe chunks and refused past four times the decoded length; a refusal surfaces
-  as an `encoded_payload` flag, never a truncated fold. `scan_structural_forms` consumes the
+  built in NFKC-safe chunks and refused past `max(2n, n + 256)`; a refusal surfaces as a BLOCKED
+  result carrying an `encoded_payload` flag (`/search` omits the result), never a truncated fold. `scan_structural_forms` consumes the
   generator and keeps the worst verdict; `combine_scan_results` merges results from other
   forms (as-is flags win ties, because the wire carries one entry per span).
 - Every pattern is linear by construction: gaps are tempered tokens
@@ -487,7 +487,8 @@ cassettes are keyed by the sha256 of stage-3 input. Everything new is scan-only:
   `_PATTERNS`) runs in `scan_raw_markup`: one `search()` per pattern over the
   whitespace-collapsed raw source, line number 0, nothing cut. Raw source, never re-serialised
   markup (lxml round-trips drop stray end tags).
-- On `/retrieve`, `_extract_html_and_scan_inline` runs inside the stage-1 thread: it parses once,
+- On `/retrieve`, `html_subprocess.extract_html_and_scan` runs inside the stage-1 thread (or, above
+  `retrieve.html_worker_threshold_bytes`, in the rlimited worker): it parses once,
   scans the inline-joined text through the forms and the raw HTML through `scan_raw_markup`, and
   returns only a combined `StructuralScanResult` (via `sanitize_and_structure`'s `extra_scans`),
   so no page-sized scan text or markup outlives the thread. `/search` builds each field's inline
@@ -497,7 +498,16 @@ cassettes are keyed by the sha256 of stage-3 input. Everything new is scan-only:
 - `pipeline/confusables.py` is regenerated by `scripts/generate_confusables.py`, never edited.
 
 The epic's nine rotations (forty-fourth to fifty-second) end at `46b8d1bb…`; per-rotation
-controls are in `docs/bootstrap-notes.md`.
+controls are in `docs/bootstrap-notes.md`. The fifty-third rotation (`release-resource-bounds`
+US-001, stage 1 made linear, output byte-identical) moves it to `0ace27ca…`; the fifty-fourth
+(US-006, large `/retrieve` HTML bodies routed to the worker, output byte-identical) moves it to
+`54aa9649…`; the fifty-fifth (US-007, contract `1.4.0` announcement, `contract.py` alone) moves it to
+`ff18b0bf…`; the fifty-sixth (US-008, `/search` parse moved to a worker thread, `orchestrator.py` alone,
+output byte-identical) moves it to `d582f8da…`; the fifty-seventh (`release-padding-gate` US-001, a refused
+look-alike fold BLOCKS at `max(2n, n + 256)`, `stage2_structural.py` and `orchestrator.py`, the eighteenth
+sanitization-behaviour-changing rotation) moves it to `23444fe4…`; the fifty-eighth (`release-1-3-0` US-003, the final
+1.4.0 entry and a stale comment, text only, not behaviour-changing) moves it to `91455b21…`; the fifty-ninth (the
+v1.3.0 validation fix rewording that entry, text only) moves it to `2c6d0382…`.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public

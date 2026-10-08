@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: release-1-3-0
-status: active
+status: completed
 session_ready: true
 depends_on: [release-resource-bounds, release-padding-gate]
 vision_ref: "T2 hardening follow-through — bound the remaining CPU costs and cut v1.3.0"
@@ -11,7 +11,8 @@ epic: forage-v1-3-0-release
 epic_seq: 3
 epic_final: true
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
+completed: 2026-10-08
 ---
 
 # Feature Spec: Release 1.3.0 — Close the Two Windows, Finalise Contract 1.4.0, Prepare the Tag
@@ -141,22 +142,22 @@ classification permit past the wait other requests are given.
 - **No rotation:** record `derive_sanitizer_revision()` before and after (equal).
 
 **Acceptance Criteria:**
-- [ ] `RETRIEVE_MAX_PROMPTGUARD_CHUNKS == 64`, and `COMING_MAX_PROMPTGUARD_CHUNKS` appears nowhere
+- [x] `RETRIEVE_MAX_PROMPTGUARD_CHUNKS == 64`, and `COMING_MAX_PROMPTGUARD_CHUNKS` appears nowhere
       (grep).
-- [ ] An empty config gives 64 and a ceiling of 114,688. An explicit `0` gives no pre-check and
+- [x] An empty config gives 64 and a ceiling of 114,688. An explicit `0` gives no pre-check and
       no `max_chunks` (tests).
-- [ ] No `retrieve_budget_unset` record under empty, 64 or 0 config (test).
-- [ ] An over-budget fetched page under the default config is refused `422 content_too_large` /
+- [x] No `retrieve_budget_unset` record under empty, 64 or 0 config (test).
+- [x] An over-budget fetched page under the default config is refused `422 content_too_large` /
       `promptguard_budget` (test).
-- [ ] The corpus baseline regenerates with zero outcome changes, and `sanitizer_revision` is
+- [x] The corpus baseline regenerates with zero outcome changes, and `sanitizer_revision` is
       unchanged (values recorded).
-- [ ] The doc-sweep greps find no current statement of a `0` or `256` default outside the allowed
+- [x] The doc-sweep greps find no current statement of a `0` or `256` default outside the allowed
       historical list. The commands and hits are recorded. `GOVERNANCE.md:499` carries the
       dated 64 closure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: Measure the 86M per-window cost and rewrite the budget sizing guidance
 
@@ -212,14 +213,14 @@ outcome.
 - Docs only, so no rotation.
 
 **Acceptance Criteria:**
-- [ ] The per-window median at 1 and 4 threads (or CPUs) is recorded in Implementation Notes,
+- [x] The per-window median at 1 and 4 threads (or CPUs) is recorded in Implementation Notes,
       with the config source, every hyperparameter used, batch size, window length, machine and
       command.
-- [ ] The `docs/configuration.md` sizing section gives the measured figures, labelled as lower
+- [x] The `docs/configuration.md` sizing section gives the measured figures, labelled as lower
       bounds where they are host-thread figures. It states the hold at 64 and 256 for 1 and 4
       CPUs against 30 s, the fitting budget per CPU count, and the waiter outcome and its
       counters. The bench table is captioned as end-to-end latency.
-- [ ] No provisional "100 ms" figure remains (grep). The default is unchanged by this story.
+- [x] No provisional "100 ms" figure remains (grep). The default is unchanged by this story.
 
 ### US-003: Drop the validation-422 placeholder keys, add the budget-refusal counter, finalise contract 1.4.0
 
@@ -297,30 +298,30 @@ vendor matches the closed windows and the new refusals are visible.
   reverted alone, plus a both-reverted control.
 
 **Acceptance Criteria:**
-- [ ] On `/search`, `/retrieve` and `/extract`, every request-validation 422 item has exactly
+- [x] On `/search`, `/retrieve` and `/extract`, every request-validation 422 item has exactly
       `loc`, `msg`, `type` (one test per route). `_VALIDATION_PLACEHOLDER`,
       `_VALIDATION_WINDOW_KEYS` and `_strip_window_keys` no longer exist (grep).
-- [ ] The existing `_VALIDATION_MARKER` parametrization asserts the marker is in no 422 item's
+- [x] The existing `_VALIDATION_MARKER` parametrization asserts the marker is in no 422 item's
       `msg` and in no log record at any level (tests).
-- [ ] Ruling (l)'s other invariants pass unchanged.
-- [ ] The `:1673` value is untouched.
-- [ ] `retrieve.promptguard_budget_refusals` increments on a budget refusal from each of the
+- [x] Ruling (l)'s other invariants pass unchanged.
+- [x] The `:1673` value is untouched.
+- [x] `retrieve.promptguard_budget_refusals` increments on a budget refusal from each of the
       three refusal sites (tests through the handler), appears on `/metrics`, and is named in
       `docs/configuration.md`.
-- [ ] The `orchestrator.py` "coming default" comment is gone.
-- [ ] The 1.4.0 bullet is final.
+- [x] The `orchestrator.py` "coming default" comment is gone.
+- [x] The 1.4.0 bullet is final.
   - It covers every change in `git diff 7fe91c0..HEAD -- pipeline/contract.py
     contract/openapi.yaml`, with the reconciliation listed in Implementation Notes.
   - The tense guard and the 1.4.0 metric-addition test pass.
-- [ ] The held 1.4.0 golden, `openapi.yaml`, its anchor and the fixture twin are regenerated and
+- [x] The held 1.4.0 golden, `openapi.yaml`, its anchor and the fixture twin are regenerated and
       green.
-- [ ] The anchor quotes are updated.
-- [ ] Goldens 1.0.0–1.3.0 are byte-unchanged.
-- [ ] The rotation is recorded per the procedure (two files).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The anchor quotes are updated.
+- [x] Goldens 1.0.0–1.3.0 are byte-unchanged.
+- [x] The rotation is recorded per the procedure (two files).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-004: Close the windows in GOVERNANCE and write the consumer note
 
@@ -359,14 +360,14 @@ and rulings (g) and (l) record the closure. `docs/bootstrap-notes.md` carries th
 - Docs only, so no rotation.
 
 **Acceptance Criteria:**
-- [ ] `contract/GOVERNANCE.md` states that no compatibility window is open.
-- [ ] GOVERNANCE.md :71 names v1.3.0 and 1.4.0.
-- [ ] Rulings (g) and (l) carry dated closure lines.
-- [ ] `tests/test_governance_docs.py` passes.
-- [ ] A `1\.3\.0` grep shows no remaining current-version statement outside history, with the
+- [x] `contract/GOVERNANCE.md` states that no compatibility window is open.
+- [x] GOVERNANCE.md :71 names v1.3.0 and 1.4.0.
+- [x] Rulings (g) and (l) carry dated closure lines.
+- [x] `tests/test_governance_docs.py` passes.
+- [x] A `1\.3\.0` grep shows no remaining current-version statement outside history, with the
       files checked listed.
-- [ ] The consumer note covers the five items.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] The consumer note covers the five items.
+- [x] Full test suite passes (`uv run pytest`)
 
 ### US-005: Prepare the v1.3.0 release tree
 
@@ -462,21 +463,21 @@ merging and the owner gates are all that remain.
   9. Fill `index digest`, `tagged commit` and the smoke record, and remove NOT YET PUBLISHED.
 
 **Acceptance Criteria:**
-- [ ] `docs/releases.md` has a `### v1.3.0` NOT YET PUBLISHED entry with an empty Unreleased
+- [x] `docs/releases.md` has a `### v1.3.0` NOT YET PUBLISHED entry with an empty Unreleased
       heading above it, using `c933673`'s placeholder wording.
-- [ ] The entry's `contract:` is 1.4.0. Its anchor equals `contract/openapi.yaml.sha256` and its
+- [x] The entry's `contract:` is 1.4.0. Its anchor equals `contract/openapi.yaml.sha256` and its
       final revision equals `derive_sanitizer_revision()` at the final commit (checked by a
       command recorded in Implementation Notes).
-- [ ] The entry covers each of the 14 listed items, each with a link where one exists.
-- [ ] Every `git grep -n '1\.2\.2'` hit is classified in a recorded table as rewritten or history,
+- [x] The entry covers each of the 14 listed items, each with a link where one exists.
+- [x] Every `git grep -n '1\.2\.2'` hit is classified in a recorded table as rewritten or history,
       and every rewrite now names `1.3.0`. Every file in `git show --stat c933673` is accounted
       for. `tests/test_compose_fragments.py` passes.
-- [ ] SYNOPSIS and MILESTONES are updated. TESTING_GUIDE and `CLAUDE.md` counts equal the
+- [x] SYNOPSIS and MILESTONES are updated. TESTING_GUIDE and `CLAUDE.md` counts equal the
       `--collect-only` total.
-- [ ] Implementation Notes list the findings ready to resolve and the exact nine-step owner
+- [x] Implementation Notes list the findings ready to resolve and the exact nine-step owner
       sequence. No tag is created or pushed.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
 
 ## Edge Cases
 
@@ -528,6 +529,123 @@ merging and the owner gates are all that remain.
 - `git show c933673` (the v1.2.2 prepare precedent)
 
 ## Implementation Notes
+
+### US-001 — `/retrieve` chunk budget default 64
+- `derive_sanitizer_revision()` before and after: `23444fe43e67bab3768e8e095bb3231f91a76a5f9e500b83dcff05338f7c5925`
+  (equal) under `{}`, `config.yaml` and `bench/config.yaml`.
+- Corpus: `python -m scripts.corpus.report --write-baseline` left `tests/corpus/baseline.json`
+  byte-identical (zero outcome changes).
+- Doc sweep command: `grep -rInE "coming[_ ]default|retrieve_budget_unset|COMING_MAX" docs kit_tools README.md CLAUDE.md contract SECURITY.md pipeline scripts retrieval_app.py config.yaml bench tests/*.py`.
+  Remaining hits (all historical or intentional): `docs/releases.md:199,257` (v1.2.x release text,
+  each now carries a "closed in 1.4.0 at 64" note), `contract/GOVERNANCE.md:502` (ruling (g)
+  step 2, with dated continuation), `pipeline/contract.py:91` (frozen 1.3.0 entry),
+  `pipeline/orchestrator.py:675` (hashed; fixed in US-003), `tests/test_app.py` (absence assertions),
+  plus specs, `bootstrap-notes.md` and `SESSION_LOG.md`.
+- Attempt 2, prose sweep (the token grep above missed prose): `grep -rnE "default of .?0\b|459 KB|458,?752|0\.5 MB" docs kit_tools/arch kit_tools/docs README.md CLAUDE.md contract SECURITY.md config.yaml bench/config.yaml pipeline/retrieve_limits.py retrieval_app.py`
+  now returns **no hits**. It caught three current statements the first attempt left: the
+  hinted `SECURITY.md:176` is `kit_tools/arch/SECURITY.md:176` (root `SECURITY.md` is the
+  short disclosure policy and held nothing), now "shipped default 64, ceiling 114,688; `0` is
+  the explicit opt-out"; and the per-waiter figure at `docs/configuration.md` (~:1116) and
+  `kit_tools/arch/SECURITY.md:445`, now `max_extracted_characters(64)` ≈ 115 KB (waiter term
+  ≤ 0.12 MB), unbounded except by the 10 MB fetch cap under the `0` opt-out.
+  A wider grep (`chunks?.{0,40}256|256.{0,40}chunk|defaults to .?0|max_promptguard_chunks: 0`)
+  leaves only allowed hits: `GOTCHAS.md:758` and `DECISIONS.md:644` (rotation history),
+  `docs/releases.md:198-199,256-257` (v1.2.x release text, annotated closed in 1.4.0),
+  `CLAUDE.md:288` / `CODE_ARCH.md:228` (rotation history, annotated "64 since 1.4.0"),
+  `docs/configuration.md` opt-out discussion and the 256 sizing example, and specs.
+- Three markup-probe tests in `tests/test_orchestrator.py` send a 2 MB page and now pass
+  `RetrieveSettings(max_promptguard_chunks=0)` explicitly.
+
+### US-002 — per-window cost and sizing guidance
+- **Harness:** `/tmp/pgbench/bench.py` (scratchpad, not kept; `scripts/bench_promptguard.py` is the
+  end-to-end tool). `DebertaV2ForSequenceClassification(DebertaV2Config(...))`, random init, no
+  network. No local 86M `config.json` snapshot exists (HF cache holds only all-MiniLM-L6-v2), so the
+  mDeBERTa-v3-base hyperparameters from the story were used verbatim: hidden 768, layers 12, heads 12,
+  intermediate 3072, vocab 251000, relative_attention, position_buckets 256, max_relative_positions -1,
+  pos_att_type [p2c, c2p], norm_rel_ebd layer_norm, share_att_key, position_biased_input False,
+  num_labels 2. Input: 512 random ids, **batch size 1** (`classifier.py` runs `model(**inputs)` per
+  chunk). Warm (3 warmups), median of 20, torch 2.14 / transformers 5.16.1.
+- **Per-window median:** bare host (M-series Mac) **283 ms @ 1 thread, 189 ms @ 4 threads** (lower
+  bounds). Repo image `forage:release-1.2.1-candidate` under `docker run --network none --cpus N`
+  (Docker Desktop arm64 VM): **2,989 ms @ 1 CPU, 694 ms @ 4 CPUs**.
+- **Finding that departs from the hint:** the container figures are ~10x the bare host, so the
+  shipped 64 x 30 s pair does **not** fit on this Docker Desktop envelope (64 x 2.99 s = 191 s); it
+  fits on the bare-host lower bounds. The docs say so and give the fitting budgets (10 / 43 container,
+  105 / 158 bare host). Native Linux Docker was not available to confirm; the 1-CPU container figure
+  is likely pessimistic.
+- Docs: `docs/configuration.md` bench table header/caption re-labelled end-to-end; "Sizing" section
+  rewritten (measured table, k = 1-3 holds, wait-expiry behaviour via `unavailable_result`, Known
+  risk). `grep -n "100 ms" docs/configuration.md` is empty. No hashed file touched; no rotation.
+
+### US-003 — 422 key drop, budget-refusal counter, final 1.4.0 entry
+
+*(Added after the epic run, closing validation finding 2026-10-07-004.)*
+
+- **1.4.0 reconciliation** (`git diff 7fe91c0..HEAD -- pipeline/contract.py contract/openapi.yaml`). Every
+  wire-visible change is named in the final 1.4.0 docstring entry:
+  - `info.version` `1.3.0` → `1.4.0`;
+  - `Pipeline422ErrorResponse` / `/retrieve` 422 description names `html_extraction_error` beside the PDF reasons;
+  - `RetrieveMetricsResponse` gains `html_worker_spawns`, `html_worker_refusals`, `promptguard_budget_refusals`
+    (required, integer);
+  - `ValidationErrorDetail` and the three route 422 descriptions: exactly `loc`/`msg`/`type`; the `"[redacted]"`
+    `input`/`ctx`/`url` placeholders are gone (ruling (l));
+  - `retrieve.max_promptguard_chunks` default 64 with `0` the opt-out (configuration, stated in the entry, no schema
+    field);
+  - sanitizer outcomes (fold BLOCK, ruling (m)) stated not to be contract changes.
+- **Rotation:** the fifty-eighth (`23444fe4…` → `91455b21…`, `contract.py` + `orchestrator.py`, text only). Full
+  values in `docs/bootstrap-notes.md` "The fifty-eighth rotation". The entry's wording about 256 was later corrected
+  by the fifty-ninth rotation (`91455b21…` → `2c6d0382…`, finding 2026-10-07-003).
+
+### US-004 — GOVERNANCE closure and consumer note
+
+*(Added after the epic run, closing validation finding 2026-10-07-005.)*
+
+- **Grep:** `git grep -n '1\.3\.0' -- docs kit_tools README.md CLAUDE.md contract`, classifying each hit as a
+  current-version statement (rewritten) or history (kept).
+- **Files checked and rewritten:** `CLAUDE.md` (invariant 4), `README.md` (:70, :293), `docs/releases.md`
+  (Unreleased line), `contract/GOVERNANCE.md` (:71, the window paragraph, rulings (g) and (l) closure lines),
+  `kit_tools/docs/CI_CD.md` (:320), `kit_tools/docs/API_GUIDE.md` (:43), `kit_tools/arch/CODE_ARCH.md` (:118).
+- **Checked and kept as history:** `README.md` :78/:253 (published `v1.2.2 / 1.3.0` pin), remaining
+  `docs/releases.md` and `GOVERNANCE.md` hits (per-release history, ruling (m)), `CODE_ARCH.md` :404/:467 (rotation
+  history), `kit_tools/PRODUCT_VISION.md` :110 and `kit_tools/arch/DECISIONS.md` :1107 (dated structural-hardening
+  outcome records).
+- **Consumer note:** `docs/bootstrap-notes.md` "Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0" (five items).
+
+### US-005 — prepare the v1.3.0 release tree
+- `docs/releases.md`: Unreleased is now empty; a `### v1.3.0 — <publication date> (NOT YET PUBLISHED)`
+  entry sits above v1.2.2 with `contract: 1.4.0`, anchor `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`
+  (= `contract/openapi.yaml.sha256`), placeholder `index digest` / `tagged commit` / publish run / smoke record, and the
+  14 listed items. Final revision `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78` (superseded by the fifty-ninth rotation, `2c6d0382…`)
+  (= `derive_sanitizer_revision({})`); rotations 43rd-58th = sixteen from `021378ef…`.
+- No hashed source changed: no rotation. `contract_version` stays 1.4.0; `export_contract --check` untouched.
+- **`1\.2\.2` classification** (`git grep -n '1\.2\.2'` outside `kit_tools/specs`, after the edit):
+
+  | Site | Class |
+  |---|---|
+  | `compose/minimal.yml`, `compose/full.yml`, `tests/test_compose_fragments.py:78`, `contract_smoke.py` (:66, :97-99) | rewritten → 1.3.0 |
+  | `README.md:78`, `:253` | rewritten (v1.3.0 prepared); remaining mentions say "latest published v1.2.2" |
+  | `kit_tools/SYNOPSIS.md`, `roadmap/MILESTONES.md:13`, `AGENT_README.md:74/79` | rewritten; remaining v1.2.2 text = latest-published/history |
+  | `arch/INFRA_ARCH.md`, `arch/SERVICE_MAP.md`, `docs/CI_CD.md`, `docs/DEPLOYMENT.md`, `docs/LOCAL_DEV.md`, `docs/TROUBLESHOOTING.md`, `docs/MONITORING.md` | rewritten (pins, current-release, `TAG=`, `info.version` examples); remaining hits name v1.2.2 as the latest published or its closed window |
+  | `testing/TESTING_GUIDE.md:157` | rewritten (pin) |
+  | `docs/releases.md` v1.2.2 entry and prose, `docs/bootstrap-notes.md`, `SESSION_LOG.md`, `DECISIONS.md`, `GOTCHAS.md` header/table, `PRODUCT_VISION.md:105`, `BACKLOG.md:39`, MILESTONES :75/:115, `docs/weights.md:4`, `contract/GOVERNANCE.md:71` (US-004's), archived specs, injection-corpus epic wrapper | history, kept |
+- Full suite: 5551 passed, 6 skipped (= 5557 collected); ruff check and format clean.
+- Counts: `uv run pytest --collect-only -q | tail -1` = **5557 tests collected**; `CLAUDE.md`, `TESTING_GUIDE.md` and `SYNOPSIS.md` match.
+- **Findings ready to resolve** (`kit_tools/AUDIT_FINDINGS.md` not edited): `2026-10-06-001`; `2026-10-04-060`
+  (dismissed-as-residual, now fixed: re-status it); `2026-10-07-002`.
+- **Owner sequence (no story runs any of it):**
+  1. Real-weights candidate smoke on an image built from the merge commit: the 86M at `1536m`, `/health` healthy,
+     `promptguard_model` 86M, `/extract` 200 `scanned`, `/retrieve` of a large page returning `html_extraction_error`.
+     Also: an over-budget page (> 114,688 extracted characters, under the worker threshold) returns `promptguard_budget`
+     and increments `retrieve.promptguard_budget_refusals`; an at-budget page classifies within the wait, latency recorded;
+     peak memory recorded, no OOM.
+  2. Merge.
+  3. `git switch main && git pull`.
+  4. Confirm the six gates are green.
+  5. `git tag v1.3.0 && git push origin v1.3.0`.
+  6. Watch `publish`.
+  7. Anonymous pull of `1.3.0`.
+  8. Boot the published image with the 86M and confirm it is healthy.
+  9. Fill `index digest`, `tagged commit` and the smoke record, and remove NOT YET PUBLISHED.
 
 ## Refinement Notes
 

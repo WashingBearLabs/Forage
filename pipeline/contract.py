@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
-CONTRACT_VERSION = "1.3.0"
+CONTRACT_VERSION = "1.4.0"
 """The retrieval sidecar's wire-shape version, carried on ``/health``.
 
 Bump MAJOR when a field is removed/renamed or its semantics change; bump
@@ -173,6 +173,34 @@ MINOR when fields are only added.
   at the next MINOR (GOVERNANCE ruling (l)).
   Every addition above is additive except the request-validation 422 trim
   (ruling (l)); a consumer comparing MAJOR keeps working untouched.
+* ``1.4.0`` — ``extraction_failed`` on ``/retrieve`` gains the reason
+  ``html_extraction_error``: a fetched HTML body above
+  ``retrieve.html_worker_threshold_bytes`` is parsed in the rlimited worker,
+  and one the worker cannot turn into a result (deadline, CPU or address-space
+  kill, oversized or forged frame, spawn failure) is refused 422 where it was
+  previously parsed in-process. The causes are deliberately indistinguishable.
+  A spool fault on this path reuses ``pdf_spool_error``. This is a served-outcome
+  change for large pages, not a new enum member: the ``Pipeline422ErrorResponse``
+  ``error`` description names the reason. ``/metrics`` adds
+  ``retrieve.html_worker_spawns`` (large bodies handed to the worker) and
+  ``retrieve.html_worker_refusals`` (the worker's refusals, a spool fault
+  excluded). Both are pinned by ``tests/test_contract_metrics.py``, not the
+  schema golden. ``retrieve.promptguard_budget_refusals`` counts ``/retrieve``
+  requests refused 422 ``content_too_large`` / ``promptguard_budget``; it is
+  pinned the same way. ``retrieve.max_promptguard_chunks`` now defaults to 64
+  (a budget of 114 688 characters) where it defaulted to 0: a page above the
+  budget is refused with that reason instead of classified in full. ``0`` is
+  the explicit opt-out (no pre-check). 256 had been announced; the owner
+  ruling of 2026-10-07 shipped 64 instead, after measuring the 86M hold.
+  A budget refusal is a served-outcome change at the shipped default, not a
+  new enum member. The request-validation 422 items are now exactly ``loc``,
+  ``msg`` and ``type``: the ``input``, ``ctx`` and ``url`` placeholders that
+  1.3.0 carried as ``"[redacted]"`` are dropped, as GOVERNANCE ruling (l)
+  scheduled; a consumer still reading them must stop. Sanitizer outcomes, such
+  as a refused look-alike fold now blocking, are not contract changes
+  (GOVERNANCE ruling (m)). Every addition above is additive except the
+  placeholder-key drop (ruling (l)); a consumer comparing MAJOR keeps working
+  untouched.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
@@ -398,6 +426,10 @@ spooled for it. Its reasons — ``RETRIEVE_PDF_ENCRYPTED``,
 ``RETRIEVE_PDF_NO_TEXT``, ``RETRIEVE_PDF_EXTRACTION_ERROR``,
 ``RETRIEVE_PDF_SPOOL_ERROR`` — are reasons under ``extraction_failed``, not
 members of this alias, even where the literal matches an ``/extract`` code.
+``html_extraction_error`` (contract ``1.4.0``,
+``RETRIEVE_HTML_EXTRACTION_ERROR``) is a fifth reason under the same code: a
+large fetched HTML body the bounded worker could not parse. A spool fault on
+that path is ``RETRIEVE_PDF_SPOOL_ERROR``.
 """
 
 RETRIEVE_ERROR_CODES = frozenset(get_args(RetrieveErrorCode))
@@ -545,3 +577,11 @@ RETRIEVE_PDF_FAILURE_REASONS = frozenset(
         RETRIEVE_PDF_SPOOL_ERROR,
     }
 )
+
+# A large fetched HTML body (above `retrieve.html_worker_threshold_bytes`) the
+# bounded worker could not turn into a result: a deadline, CPU or address-space
+# kill, an oversized or forged frame, or a spawn failure. The causes are
+# deliberately indistinguishable. Logged once as the closed WARNING token
+# `retrieve_html_extraction_failed`. A spool fault on this path reuses
+# `RETRIEVE_PDF_SPOOL_ERROR`.
+RETRIEVE_HTML_EXTRACTION_ERROR = "html_extraction_error"

@@ -63,6 +63,19 @@ cap). A pinned-looking rewrite of `exfil_image` was still quadratic on `![![![�
 or edited pattern must pass it; disable GC while timing, because match-dense runs otherwise look
 superlinear.
 
+### A refused look-alike fold blocks; the limit is also a cost bound
+
+`fold_scan_forms` refuses a fold past `max(_FOLD_EXPANSION_LIMIT * n, n + _FOLD_SLACK)` (2n, slack 256) and
+`scan_structural_forms` turns the refusal into a **BLOCKED** result on every route and tier (`/search` omits
+the result). A flag is not enough: padding with expanding characters forces the refusal, and a merely
+flagged page was still served, unscanned in its fold, on the trusted tier where stage 3 is skipped.
+The limit is the accepted cost as well: raising `_FOLD_EXPANSION_LIMIT` or `_FOLD_SLACK` widens the
+worst fold the service will build, so re-run `tests/test_stage2_complexity.py` and re-derive its ceiling.
+Keep the maximal sweep shape **ASCII first** (`"a" * 16 + "\ufdfa"`): `_fill` truncates the repeated unit, and
+a trailing U+FDFA with too few ASCII after it pushes the total over 2n, so the sweep would time the
+refusal instead of the fold (the sweep asserts the large input is not refused). Boundary tests build
+their texts to the exact length and recompute it, so a `FOLD_TABLE` change cannot silently move them.
+
 ### A story verifier can pass a sanctioned fallback that guts the spec's intent
 
 `corpus-benign` US-001 allowed a synthetic stand-in "with a recorded reason" when an external
@@ -716,7 +729,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved fifty-two times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved fifty-nine times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -775,11 +788,18 @@ were recorded at their implementation boundaries:
 | `structural-markup-surface` US-011 | `3cfe54c9…` | Fiftieth, **the fifteenth sanitization-behaviour-changing rotation**: `scan_raw_markup` is wired into `/retrieve` (stage-1 thread, `extra_scans`) and `/search` (raw field value, one more loop entry). `orchestrator.py` alone moves; reverting it reproduces `9c8bb9a6…` under default and shipped config. No span cut. `ben-0288`/`ben-0289` flip by named exemption; cassettes unchanged |
 | `structural-wire-closure` US-001 | `919fa977…` | Fifty-first, **the sixteenth sanitization-behaviour-changing rotation**: `finalize_quarantine` returns `title=None` for stage-2 BLOCKED, stage-3 INJECTION_DETECTED and `unavailable_blocked`. `stage4_structuring.py` alone moves; reverting it reproduces `3cfe54c9…` under default and shipped config. GOVERNANCE ruling (m), no bump; openapi byte-identical; cassettes unchanged |
 | `structural-wire-closure` US-002 | `46b8d1bb…` | Fifty-second, **the seventeenth sanitization-behaviour-changing rotation**: `extract_html` prunes inline-hidden body descendants from the served `main_content` (`_prune_hidden`; `raw_text`, metadata and `/search` unchanged) and sets `ExtractionResult.main_content_is_fallback` only when something was pruned, which `extract_summary` honours; `/retrieve` and `/extract` bodies lose hidden text. `stage1_extraction.py`, `stage4_structuring.py` and `orchestrator.py` move (each reverted alone; all-reverted control reproduces `919fa977…` under default and shipped config). GOVERNANCE ruling (m), no bump; cassettes unchanged |
+| `release-resource-bounds` US-001 | `0ace27ca…` | Fifty-third, **not a sanitization-behaviour change**: `stage1_extraction.py` alone. The three `copy.copy(soup)` sites are gone: `_extract_raw_text` is a non-mutating walk, `_prune_hidden(soup, html)` re-parses `html`, and the pruned fallback strips its private `pruned_soup` in place. Every `ExtractionResult` field is byte-identical (1,484 frozen digests); stage 3's input is unchanged. |
+| `release-resource-bounds` US-006 | `54aa9649…` | Fifty-fourth, **not a sanitization-behaviour change**: `orchestrator.py` (the byte-length routing branch, the 422 `html_extraction_error` and spool mapping, the spawn/refusal counters, `_extract_html_and_scan_inline` deleted) and `contract.py` (`RETRIEVE_HTML_EXTRACTION_ERROR`). Each reverted alone against `HEAD`; the both-reverted control reproduces `0ace27ca…`. The served response is byte-identical on either path (corpus comparison against `0`); only a worker refusal is a new, coded 422. |
+| `release-resource-bounds` US-007 | `ff18b0bf…` | Fifty-fifth, **not a sanitization-behaviour change**: only `contract.py` moves among the hashed sources (`CONTRACT_VERSION` `1.4.0` and the in-progress 1.4.0 entry naming `html_extraction_error` and the two worker counters). A read-only whole-file reversal against `HEAD` reproduces `54aa9649…` under default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` (the metrics fields and the 422 description) is not hashed. |
+| `release-resource-bounds` US-008 | `d582f8da…` | Fifty-sixth, **not a sanitization-behaviour change**: only `orchestrator.py` moves among the hashed sources (one `asyncio.to_thread` per `/search` result for the title/snippet parse and both raw-markup scans, inside `completed_thread`). A read-only whole-file reversal against `HEAD` reproduces `ff18b0bf…` under default, `config.yaml` and `bench/config.yaml`. Output byte-identical. |
+| `release-padding-gate` US-001 | `23444fe4…` | Fifty-seventh, **the eighteenth sanitization-behaviour-changing rotation**: the confusable-fold limit is `max(2n, n + 256)` (was 4n) and a refused fold is a **BLOCK** (penalty 0.0, `encoded_payload` flag kept) where it was a SUSPICIOUS flag; `/search` omits the result as `structural_blocked` with the field's name. `stage2_structural.py` and `orchestrator.py` move (each reverted alone; all-reverted control reproduces `d582f8da…` under default, `config.yaml` and `bench/config.yaml`). GOVERNANCE ruling (m), no bump; corpus baseline, floors and cassettes byte-unchanged. |
+| `release-1-3-0` US-003 | `91455b21…` | Fifty-eighth, **not a sanitization-behaviour change**: `contract.py` (final 1.4.0 entry) and `orchestrator.py` (a stale comment) move among the hashed sources, both text only. Each read-only reversal against `616beed` gives `53280032…` (contract alone) and `78c55633…` (orchestrator alone); the both-reverted control reproduces `23444fe4…` under default, `config.yaml` and `bench/config.yaml`. |
+| v1.3.0 validation fix (2026-10-07-003) | `2c6d0382…` | Fifty-ninth, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.4.0 entry no longer calls 256 the announced next default). A read-only whole-file reversal against `2ab79d0` reproduces `91455b21…` under default, `config.yaml` and `bench/config.yaml`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-three of the fifty-two rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-nine of the fifty-nine rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),
@@ -788,8 +808,9 @@ the forty-second release-gate policy repair, the forty-third (the 86M default), 
 forty-fifth (newline-crossing, linear Stage 2), forty-sixth (the decoded scan form),
 forty-seventh (the confusable fold forms), forty-eighth (the inline-joined form), forty-ninth
 (the widened `system_tag` and raw-markup primitive), fiftieth (the raw-markup scan wired),
-fifty-first (quarantined titles) and fifty-second (the served-body visibility pass) — are the
-nineteen that did, and the seventeenth
+fifty-first (quarantined titles), fifty-second (the served-body visibility pass) and
+fifty-seventh (a refused look-alike fold blocks) — are the
+twenty that did, and the seventeenth
 (US-004, contract `1.3.0`) does not join them** — hostname policy can now skip
 classification on an opted-in trusted suffix; search-sanitization US-001's
 is that `/search` scans `title` and `snippet` newline-preserved now, so line-anchored Stage 2

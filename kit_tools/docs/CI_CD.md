@@ -317,7 +317,7 @@ Steps, in order:
    `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`, `FORAGE_CACHE_HMAC_KEY`), run over the published image config
    JSON for all platforms.
 8. **On `v*` tags only — Release.** `CONTRACT_VERSION` is grepped out of the *tagged tree's*
-   `pipeline/contract.py` (currently `1.3.0`; a non-semver read fails the step), and the
+   `pipeline/contract.py` (currently `1.4.0`; a non-semver read fails the step), and the
    same step copies that version's **per-version entry** — its bullet at column 0 in the
    `CONTRACT_VERSION` docstring plus the two-space-indented lines under it — into
    `${RUNNER_TEMP}/contract-entry.md` with a POSIX `awk` program; an empty file (a contract
@@ -349,7 +349,7 @@ verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`
 minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
 `06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
 `docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
-The latest published release, **v1.2.2 / contract 1.3.0** (a PATCH; contract
+`v1.3.0` / contract `1.4.0` is prepared and not yet published (compose pins it ahead of the cut). The latest published release, **v1.2.2 / contract 1.3.0** (a PATCH; contract
 unchanged from v1.2.1), published 2026-10-04 and verified: `latest`, `1.2` and
 `1.2.2` resolve to `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`; `corpus-86m-enablement` US-004 records the cut.
 The previous release, **v1.2.1 / contract 1.3.0**, published and passed
@@ -453,7 +453,7 @@ of those bytes. The same file also verifies the checker can fail (a committed
 un-regenerated twin under `tests/fixtures/contract/`), that rendering is byte-stable across
 `PYTHONHASHSEED`s, and that `/extract` is in the document even though the route is off by default.
 
-The anchor (`74b9db01ab0b536e92cc54efe20c58ba4ed18ec531fe42a8ed4872f01115fa72` at HEAD) is
+The anchor (`dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db` at HEAD) is
 the trust root every other copy is verified against: `smoke` hashes the in-image copy
 against it, `publish` hashes the Release assets against it, and consumers verify the copy
 they vendor against the anchor *at the same tag*, never against another copy. Whether a
@@ -520,7 +520,7 @@ gh cache delete <id>                # delete each index-publish-* entry
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
 and the image tag and `contract_version` are independent semvers:
-image `v1.2.2` (published 2026-10-04, verified) serves contract `1.3.0`, unchanged from `v1.2.1`.
+image `v1.3.0` (prepared, not yet published) serves contract `1.4.0`; the latest published, `v1.2.2`, serves `1.3.0`.
 
 `v1.2.2` is cut and published; never re-run a cut for an existing tag. For any
 later release, choose a new version and repeat all owner gates (`vX.Y.Z` below).
@@ -543,10 +543,9 @@ not a release.
 deploy stage to revert. Re-pin the previous tag in the consumer's compose file
 (`image: ghcr.io/washingbearlabs/forage:<previous>`) and `docker compose -f <file> up -d`.
 `kit_tools/docs/DEPLOYMENT.md` has the operator view, including the pull/pin/verify
-sequence. The compose fragments pin the published, verified `1.2.2` (pin commit
-`c933673`); the merge-to-publication window (PR #36 merged as `c213bbf` at 2026-10-03T23:18:28Z; published 2026-10-04) is closed. A future pin that lands ahead of its tag reopens such a
+sequence. The compose fragments pin `1.3.0`, which is **not yet published**: the merge-to-publication window is open until the owner cuts the tag (the v1.2.2 window, PR #36 merged as `c213bbf` at 2026-10-03T23:18:28Z and published 2026-10-04, is closed). A future pin that lands ahead of its tag reopens such a
 window: cut from the release PR's merge commit in the same sitting or revert the
-pin commit, and name it in the release PR description. The previous pin, `1.2.1`,
+pin commit, and name it in the release PR description. The previous pin, `1.2.2`,
 remains published and verified; never restore withdrawn v1.2.0.
 Finalize withdrawal notices before deleting a tag: editing the old Release
 after deletion recreated its tag at `main` during this recovery.

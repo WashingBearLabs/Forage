@@ -12,64 +12,7 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 
 ## Unreleased
 
-Not yet tagged; the version number is decided at the release gate. Contract stays `1.3.0`.
-
-- **The 86M is the default model** (owner ruling 2026-10-06). With `FORAGE_MODEL_ID`
-  unset the service now loads `meta-llama/Llama-Prompt-Guard-2-86M`;
-  `meta-llama/Llama-Prompt-Guard-2-22M` stays allowlisted as the opt-out. On the injection
-  corpus the 86M catches 15 stage-3 attack texts the 22M does not, with no measured benign
-  false positive (`docs/corpus.md` "Decision inputs"). `/health.promptguard_model` reports
-  the 86M id by default. **Upgrade checks:** the Hugging Face token needs the 86M
-  repository's own gated grant (otherwise `degraded` / `promptguard_unavailable` until it
-  has one); first acquisition is ~1.1 GiB; classification is about 2× slower per window.
-- **Compose's `FORAGE_MEM_LIMIT` default is `1536m`** (was `1024m`) — the boot memory rule
-  is 1,397 MiB for the 86M at shipped settings. The 22M opt-out still fits `1024m`.
-- **`sanitizer_revision` rotates** `021378ef…` → `b5e91fd6…` at the default model (old
-  cache entries become misses). Setting `FORAGE_MODEL_ID=…22M` keeps `021378ef…`.
-- **Contiguity gating stays off** (owner ruling 2026-10-06).
-- **`/retrieve` bounds its decoder:** fetched bodies are read through Forage's bounded
-  decoder (`pipeline/bounded_body.py`), with `Accept-Encoding: gzip, deflate` pinned. A body
-  in any other encoding, or a truncated/concatenated compressed stream, is now refused as
-  `fetch_error` (reason ending `unsupported_encoding` / `malformed_body`); previously such a
-  body was passed through undecoded into extraction. Oversized bodies keep
-  `content_too_large`.
-- **Stage 2 catches more variants of the same 24 patterns** (`epic-forage-structural-hardening`).
-  Besides the extracted text as-is, stage 2 now scans scan-only derived forms of it: an
-  entity-decoded form (one level after an HTML parse, two for uploads), a confusable-folded
-  form under both readings of the ambiguous I/l class, and, for HTML, an inline-joined form
-  in which an inline tag no longer splits a keyword. The patterns are case-insensitive, the two
-  gap patterns cross a newline (the `disregard … instructions` gap stops at a blank line),
-  and three markup patterns (`<system>` tags,
-  private-IP `href`/`src`, envelope tags) also run on the raw markup the parser would
-  consume. Pages and search results using those case, entity, newline-split, confusable,
-  inline-tag-split or markup-consumed variants are now `blocked` or `suspicious` where they
-  previously passed. Stage 3's input is byte-unchanged; a fold that would expand past 4× is
-  refused and the page flagged `suspicious` (`encoded_payload`), never truncated.
-- **Quarantined responses now carry `title: null`.** A `/retrieve` or `/extract` response
-  that is blocked (stage-2 block, stage-3 injection, or `unavailable_blocked`) no longer
-  echoes the document's `<title>`; the body was already replaced and now the title goes
-  with it. The field is unchanged in shape (`string | null`); contract stays `1.3.0`
-  (GOVERNANCE ruling (m)). Consumers that displayed the title of a blocked page should
-  treat `null` as expected.
-- **The served `body` omits text a browser would not show.** `/retrieve` and `/extract` drop
-  inline-hidden content (`hidden`, `aria-hidden="true"`, `display:none`, zero opacity, and
-  similar inline signals) from `body`, best effort; stylesheet and class rules are not
-  resolved. Scanning still reads the full text. `body` is free text, so the contract stays
-  `1.3.0` (GOVERNANCE ruling (m)). Pages that rely on `hidden` tab panels or `opacity:0`
-  blocks will serve less text.
-- **Two over-defence probes now trip stage 2 by decision.** The raw-markup scan blocks a
-  search snippet with a literal `<system>` tag and flags one with a private-IP link; the
-  corpus records `ben-0288` and `ben-0289` are re-pinned under a named exemption
-  (`kit_tools/arch/DECISIONS.md`, 2026-10-06). Consumers whose results legitimately carry
-  such markup will see them omitted or marked `suspicious`.
-- **`sanitizer_revision` rotates nine more times on this branch** (the forty-fourth to the
-  fifty-second rotations in `docs/bootstrap-notes.md`): `b5e91fd6…` → `46b8d1bbc79f3fc4fe273e4ca2488b0e0ba0c281658910b3dd8cfad2924a2d21`
-  at the default model. They land together, so a deployment sees **one** cache-invalidating
-  window (every old entry becomes a miss), not nine. The hash now covers ten sources
-  (`pipeline/confusables.py` joined) plus a `unicodedata@<version>` input, so a Python
-  Unicode-database change also rotates it.
-- GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
-  the default-model change (no known third-party consumers).
+Not yet tagged; the version number is decided at the release gate.
 
 ## Released versions
 
@@ -77,6 +20,82 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 `tagged commit:` lines are the same fields `search-release` US-003's handoff record carries
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
+
+### v1.3.0 — `<publication date>` (NOT YET PUBLISHED)
+
+NOT YET PUBLISHED — prepared on `epic/forage-v1-3-0-release`; the owner cut
+(`release-1-3-0` US-005 owner sequence) fills the placeholders below.
+
+- contract: 1.4.0
+- anchor: `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`
+- index digest: `<index digest>`
+- tagged commit: `<tag commit>`
+
+Compose is pinned ahead of the cut; the tag lands with `v1.3.0`. Until then
+v1.2.2 above is the latest published, verified tag. The recorded index digest
+is the **pinnable form** (`ghcr.io/washingbearlabs/forage@sha256:…`) for
+deployments that need immutability; the full-semver tag pin remains the
+quickstart default.
+
+Publication: `<publish run>`. Real-weights candidate smoke on the exact
+commit to be tagged (86M at `1536m`): `<candidate smoke record>`.
+
+**Outstanding unpublished-tag window:** merging the release PR makes `main`'s
+quickstart pull an unpublished tag until the owner runs the sequence. Cut from
+that merge commit in the same sitting; if the gate is not run, use
+`git revert <v1.3.0 pin commit>` before leaving that window open. Neither
+publication nor post-release verification is complete.
+
+What ships (draft, pending the owner cut):
+
+1. **The 86M is the default model** (owner ruling 2026-10-06). With `FORAGE_MODEL_ID`
+   unset the service loads `meta-llama/Llama-Prompt-Guard-2-86M`; the 22M stays allowlisted
+   as the opt-out ([`docs/weights.md`](weights.md), [`docs/corpus.md`](corpus.md)). The
+   Hugging Face token needs the 86M repository's own gated grant (otherwise `degraded` /
+   `promptguard_unavailable`), and Compose's `FORAGE_MEM_LIMIT` default is now `1536m`
+   ([`docs/configuration.md`](configuration.md)).
+2. **`/retrieve` bounds its decoder** (`pipeline/bounded_body.py`): `Accept-Encoding: gzip,
+   deflate` is pinned, and an unsupported or malformed body is `fetch_error`
+   (`unsupported_encoding` / `malformed_body`) instead of being passed through undecoded.
+3. **Stage 2 scans more forms of the same 24 patterns**: entity-decoded, confusable-folded,
+   inline-joined and raw-markup forms, case-insensitively. **Quarantined responses carry
+   `title: null`** (GOVERNANCE ruling (m)); stage 3's input is byte-unchanged.
+4. **Hidden text is removed from the served `body`** (inline signals only, best effort;
+   scanning still reads the full text). Two over-defence probes, `ben-0288` and `ben-0289`,
+   are re-pinned under a named exemption (`kit_tools/arch/DECISIONS.md`, 2026-10-06).
+5. **Stage 1 is linear**: BeautifulSoup trees are no longer deep-copied, so deeply nested or
+   unclosed-tag pages no longer cost quadratic time. Output is byte-identical.
+6. **Large `/retrieve` HTML parses in the rlimited worker.** Bodies above
+   `retrieve.html_worker_threshold_bytes` (512 KiB default) go to the worker; a page it
+   refuses is a coded 422 `html_extraction_error`, the large-page envelope is documented in
+   [`docs/configuration.md`](configuration.md).
+7. **Worker isolation:** extraction workers launch with an allowlisted environment and the
+   parent is non-dumpable on Linux; stale spool files are swept at startup.
+8. **`/search` parses titles and snippets off the event loop**, one worker thread per result.
+   Output is byte-identical.
+9. **A refused look-alike fold BLOCKs** at `max(2n, n + 256)` (was 4n, and a SUSPICIOUS flag)
+   on every route and tier; `/search` omits the result as `structural_blocked`.
+10. **`retrieve.max_promptguard_chunks` defaults to 64.** `256` was announced; `64` shipped
+    because the measured per-window cost of the 86M does not fit 256 windows in the wait
+    ([`docs/configuration.md`](configuration.md) "Sizing"). Over-budget bodies are refused
+    `promptguard_budget`; `0` stays a legal opt-out and the boot warning is retired.
+11. **Request-validation 422 items are exactly `loc`, `msg`, `type`.** The `"[redacted]"`
+    `input` / `ctx` / `url` placeholder keys are dropped (GOVERNANCE ruling (l)).
+12. **Three new `/metrics` counters:** `retrieve.html_worker_spawns`,
+    `retrieve.html_worker_refusals` and `retrieve.promptguard_budget_refusals`.
+13. **`promptguard_wait_seconds` defaults to 90.0** (was 30.0), and the recommended envelope is
+    8 CPUs. Measured on a native x86 server, the 86M holds the permit ~55-70 s for a
+    64-chunk page even at 8+ CPUs, so a 30 s wait would have timed concurrent requests out
+    into unclassified service. Sizing tables for both models: [`docs/configuration.md`](configuration.md).
+14. **`sanitizer_revision` rotates seventeen times** (the forty-third to the fifty-ninth
+    rotations in [`docs/bootstrap-notes.md`](bootstrap-notes.md)): `021378ef…` →
+    `2c6d0382cd0f94158a64710db7b5beb8b26ea411d4f65eabd0d0ca03c1572591` at the default model.
+    A deployment sees **one** cache-invalidating window. Setting
+    `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` no longer reproduces `021378ef…`.
+15. **Compatibility windows: none open.** The `max_promptguard_chunks` window closed at `64`
+    and the 422 placeholder window closed with the key drop; GOVERNANCE worked example 6's
+    announce-then-flip window was waived by the owner for the default-model change (no known
+    third-party consumers). The consumer note is in `docs/bootstrap-notes.md`.
 
 ### v1.2.2 — 2026-10-04
 
@@ -170,14 +189,15 @@ What is unchanged:
   for that consumer: the same contract 1.3.0 as v1.2.1, plus the 86M as an
   opt-in `FORAGE_MODEL_ID`. Compare contracts, not `sanitizer_revision`.
 
-**Compatibility windows — both still open:**
+**Compatibility windows — both closed in 1.4.0:**
 
 - `retrieve.max_promptguard_chunks` still defaults to `0` and boot still warns
-  `retrieve_budget_unset coming_default=256`; the next MINOR flips the default
-  to `256` (`0` stays a legal opt-out).
+  `retrieve_budget_unset coming_default=256`; the next MINOR was to flip the
+  default (`0` stays a legal opt-out). *Closed in 1.4.0 at `64`, not `256`
+  (owner ruling 2026-10-07, measured); the warning is retired.*
 - Request-validation 422s still carry `input` / `ctx` / `url` as
-  `"[redacted]"`; the next MINOR drops them. Consumers reading
-  `detail[].input` must still stop.
+  `"[redacted]"`; the next MINOR drops them. *Closed in 1.4.0: the items carry
+  exactly `loc`, `msg` and `type`.* Consumers reading `detail[].input` must stop.
 
 ### v1.2.1 — 2026-09-23
 
@@ -230,8 +250,9 @@ What shipped (hardening changes carried forward):
   `pdf_extraction_error` or `pdf_spool_error`. PDF chunk overflows use
   `content_too_large` / `promptguard_budget`.
 - The page-level `retrieve.max_promptguard_chunks` budget ships at `0` for
-  this compatibility window, warning `retrieve_budget_unset`; the next MINOR
-  defaults to `256`, with `0` retained as an explicit opt-out.
+  this compatibility window, warning `retrieve_budget_unset`; `0` is retained
+  as an explicit opt-out. *Closed in 1.4.0 at `64` (owner ruling 2026-10-07,
+  measured), not the announced `256`; the warning is retired.*
 - Both fetch responses report `effective_promptguard_fail_closed` and
   `effective_promptguard_threshold` on every 200, including cache hits.
   Omitted/null thresholds use the validated configured default (shipped 0.85)
@@ -445,7 +466,8 @@ A tag pushed onto a red tree still *runs* the gates. They fail, and `publish`
 never starts.
 
 **The contract 1.3.0 window is closed and v1.2.1 is published and verified;**
-**v1.2.2 (PATCH, contract 1.3.0 unchanged) is published (2026-10-04) and verified.**
+**v1.2.2 (PATCH, contract 1.3.0 unchanged) is published (2026-10-04) and verified;**
+**v1.3.0 (MINOR, contract 1.4.0) is prepared, not yet published.**
 `hardening-release` US-002 froze the six-model
 `tests/golden/contract_1_3_0.json` and `_EXPECTED_ONE_THREE_ZERO_DIFF`.
 The exact-additions sweep and the release-entry completeness/tense guards run
@@ -453,13 +475,12 @@ in the hermetic suite. Historical goldens remain untouched; no further
 in-place regeneration is permitted. That freeze is not authorization to cut
 a tag: US-003's owner gate and its full-suite pre-flight still apply.
 
-**The `retrieve.max_promptguard_chunks` compatibility window.** The release that ships
-contract `1.3.0` keeps that key's default at **`0`** — no pre-check on `/retrieve`, exactly
-the behaviour that shipped before the key existed — and boot logs one WARNING,
-`retrieve_budget_unset coming_default=256`. The **next MINOR** flips the default to `256`;
-`0` remains a legal, documented opt-out after the flip, so no MAJOR is ever cut for it.
-That is worked example 6 step 1 with the window named, and it belongs in this release's
-Release body as well as here (`contract/GOVERNANCE.md` ruling (g)).
+**The `retrieve.max_promptguard_chunks` compatibility window (closed).** The release that
+shipped contract `1.3.0` kept that key's default at `0` — no pre-check on `/retrieve` — with
+a boot WARNING announcing a flip to `256`. **1.4.0 closes it at `64`** (owner ruling
+2026-10-07, measured; `256` was announced, `64` shipped): the default is now bounded, the
+character ceiling is 114,688, and the warning is retired. `0` remains a legal, documented
+opt-out, so no MAJOR is cut for it (`contract/GOVERNANCE.md` ruling (g)).
 
 **Consumer note for the shipped hardening release (spec 8 handoff).** From
 `hardening-retrieve-parity`, a caller sending `promptguard_fail_closed: false` is

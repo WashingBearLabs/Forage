@@ -92,8 +92,8 @@ BLOCKING_ERRORS: Final[tuple[BlockingError, ...]] = (
     # The classifiable ceiling: the character pre-check, or the window budget
     # through PromptGuardBudgetExceededError.
     BlockingError("/extract", 422, "content_too_large_to_classify", None),
-    # The retrieve classification budget; inert at the shipped
-    # `retrieve.max_promptguard_chunks: 0`.
+    # The retrieve classification budget; live at the shipped
+    # `retrieve.max_promptguard_chunks: 64` (character ceiling 114,688).
     BlockingError("/retrieve", 422, "content_too_large", contract.PROMPTGUARD_BUDGET),
 )
 """The closed map of error responses that are outcomes, and the only one.

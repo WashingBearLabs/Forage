@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.3.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.4.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, add a golden fixture
 under `tests/golden/` (older ones are retained, never edited), and note the change for the
 consuming repo.
@@ -128,7 +128,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev     # environment (creates .venv)
-uv run pytest           # hermetic blocking CI gate; 5389 collected, no xfails (count: TESTING_GUIDE.md)
+uv run pytest           # hermetic blocking CI gate; 5557 collected, no xfails (count: TESTING_GUIDE.md)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate
@@ -284,8 +284,8 @@ chunk budget (`hardening-retrieve-parity` US-001): `orchestrator.py` for the sig
 and the `PromptGuardBudgetExceededError` backstop; `contract.py` for `PROMPTGUARD_BUDGET`
 and the `1.3.0` continuation line. Two hashed files, each measured by reverting it in turn,
 with a both-reverted control landing exactly on `6f0fa2de…`. It does not join the four
-behaviour-changing rotations because the shipped default is
-`retrieve.max_promptguard_chunks: 0` — no pre-check, no `max_chunks` handed to the
+behaviour-changing rotations because the shipped default was then
+`retrieve.max_promptguard_chunks: 0` (64 since 1.4.0) — no pre-check, no `max_chunks` handed to the
 classifier, byte-for-byte the previous behaviour; the new module
 `pipeline/retrieve_limits.py` and the migrated `pipeline/config_bounds.py` are **not**
 `_REVISION_SOURCES` members, so they do not move this hash on their own.
@@ -664,6 +664,74 @@ with an all-reverted control reproducing `919fa977…` under default and shipped
 `smart_extraction.py` is not hashed. GOVERNANCE ruling (m): sanitizer outcome, no bump.
 The six leaked `css_offscreen`/`hidden_div` records are neutralised; no benign page moves;
 cassettes byte-unchanged. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The fifty-third rotation is `46b8d1bb…` → `0ace27ca…` for
+`release-resource-bounds` US-001 — **not a sanitization-behaviour change**: stage 1 no
+longer deep-copies BeautifulSoup trees (`copy.copy` was quadratic on deep and unclosed-tag
+pages). Only `pipeline/stage1_extraction.py` moves; a read-only whole-file reversal against
+`HEAD` reproduces `46b8d1bb…` under default and shipped config. Every `ExtractionResult` field
+is byte-identical across all page records and the synthetic fixtures under all four
+`with_inline`/`prune_hidden` combinations (and the forced trafilatura-`None` fallback), so
+stage 3's input and both cassettes are unchanged. Not replayed to Poppy. Full values:
+`docs/bootstrap-notes.md`.
+
+The fifty-fourth rotation is `0ace27ca…` → `54aa9649…` for
+`release-resource-bounds` US-006 — **not a sanitization-behaviour change**: `/retrieve` HTML
+bodies above `retrieve.html_worker_threshold_bytes` (512 KiB default) parse in the rlimited
+worker inside the admission slot, and `orchestrator._extract_html_and_scan_inline` is gone in
+favour of `html_subprocess.extract_html_and_scan`. Two hashed files move: `orchestrator.py`
+(the routing branch, the 422 mapping, the spawn/refusal counters) and `contract.py`
+(`RETRIEVE_HTML_EXTRACTION_ERROR`). Each was reverted alone, read-only, against `HEAD`, with a
+both-reverted control reproducing `0ace27ca…` under default and shipped config. A served
+outcome moves only for a page the worker refuses (a coded 422); within bounds the response is
+byte-identical (corpus comparison against `0`, in-process for all page records and by real
+spawn on a sample). Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The fifty-fifth rotation is `54aa9649…` → `ff18b0bf…` for
+`release-resource-bounds` US-007 — **not a sanitization-behaviour change**: the held
+contract `1.4.0` entry in `pipeline/contract.py` announces `html_extraction_error` and
+`retrieve.html_worker_spawns` / `html_worker_refusals`. `contract.py` is the only hashed file
+that moves; a read-only whole-file reversal against `HEAD` reproduces `54aa9649…` under
+default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` is not hashed. Not replayed
+to Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The fifty-sixth rotation is `ff18b0bf…` → `d582f8da…` for
+`release-resource-bounds` US-008 — **not a sanitization-behaviour change**: `/search`
+builds each result's title and snippet scan forms and runs both raw-markup scans in one
+`asyncio.to_thread` per result, inside `completed_thread`, so the event loop is not held for
+a whole parse. `orchestrator.py` is the only hashed file that moves; reverting it alone
+(and so all-reverted) against `HEAD` reproduces `ff18b0bf…` under default, `config.yaml` and
+`bench/config.yaml`. Wire output and the six `8e449fc` captures are byte-identical. Not
+replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The fifty-seventh rotation is `d582f8da…` → `23444fe4…` for
+`release-padding-gate` US-001 — **the eighteenth sanitization-behaviour-changing
+rotation**: the look-alike fold limit becomes `max(2n, n + 256)` (was 4n) and a refused fold
+**BLOCKS** on every route and tier (penalty 0.0, `encoded_payload` flag kept) where it was a
+SUSPICIOUS flag; `/search` omits the result as `structural_blocked`. `stage2_structural.py`
+and `orchestrator.py` move, each reverted alone read-only against `74e47e5` (`42b2c131…`
+and `3e789a3d…`), with an all-reverted control reproducing `d582f8da…` under default,
+`config.yaml` and `bench/config.yaml`. GOVERNANCE ruling (m): no bump; the corpus baseline,
+floors and both cassettes are byte-unchanged. Not replayed to Poppy. Full values:
+`docs/bootstrap-notes.md`.
+
+The fifty-eighth rotation is `23444fe4…` → `91455b21…` for
+`release-1-3-0` US-003 — **not a sanitization-behaviour change**: the held contract `1.4.0`
+entry in `pipeline/contract.py` is finalised (the placeholder-key drop, the budget default
+and `retrieve.promptguard_budget_refusals`) and `orchestrator.py` loses a stale "coming
+default of 256" comment. Both are text only. Each was reverted alone, read-only, against
+`HEAD` (`78c55633…` with only the orchestrator reverted, `53280032…` with only the contract
+reverted), with a both-reverted control reproducing `23444fe4…` under default, `config.yaml`
+and `bench/config.yaml`. The validation-422 placeholder keys and the counter live in
+`retrieval_app.py`, which is not hashed. Not replayed to Poppy. Full values:
+`docs/bootstrap-notes.md`.
+
+The fifty-ninth rotation is `91455b21…` → `2c6d0382…` for the v1.3.0 validation fix
+(finding 2026-10-07-003) — **not a sanitization-behaviour change**: only `contract.py`
+moves, rewording the final 1.4.0 entry so it no longer calls 256 "the announced next
+default" (the owner ruling shipped 64). A read-only whole-file reversal against `2ab79d0`
+reproduces `91455b21…` under default, `config.yaml` and `bench/config.yaml`. Text only;
+old cache keys invalidate. Full values: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

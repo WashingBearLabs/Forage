@@ -572,6 +572,9 @@ async def test_metrics_covers_search_retrieve_and_cache_sections(
         "semaphore_saturation": 0,
         "busy_rejections": 0,
         "promptguard_contiguity_detections": 0,
+        "html_worker_spawns": 0,
+        "html_worker_refusals": 0,
+        "promptguard_budget_refusals": 0,
     }
     assert set(body["cache"]) == {
         "reconnect_attempts",
@@ -1524,7 +1527,7 @@ async def test_health_answers_while_a_fetched_page_is_being_extracted(
                 new=AsyncMock(return_value=("93.184.216.34", "example.com")),
             ),
             patch("pipeline.orchestrator.fetch_url", new=fetch),
-            patch("pipeline.orchestrator.extract_html", new=_blocking_extract_html),
+            patch("pipeline.html_subprocess.extract_html", new=_blocking_extract_html),
         ):
             async with _running_app(cache_connected=True) as client:
                 retrieve = asyncio.create_task(
@@ -3310,16 +3313,16 @@ async def test_served_empty_search_measures_but_pre_loop_refusal_does_not(
 class TestRetrieveSettingsReader:
     """`retrieve_settings_from_config` — defaults, bounds, and the derivation."""
 
-    def test_an_empty_config_is_todays_behaviour(self) -> None:
+    def test_an_empty_config_is_bounded_at_64_chunks(self) -> None:
         settings = retrieve_settings_from_config({})
-        assert settings.max_promptguard_chunks == 0
-        assert settings.max_extracted_characters is None
+        assert settings.max_promptguard_chunks == 64
+        assert settings.max_extracted_characters == 114_688
         assert settings.fetch_concurrency == 1
         assert settings.admission_queue_depth == 4
         assert settings.max_queued_fetch_bytes == 31457280
         assert settings.promptguard_fail_closed_floor is False
         assert settings.promptguard_threshold_ceiling == 1.0
-        assert settings.promptguard_wait_seconds == 30.0
+        assert settings.promptguard_wait_seconds == 90.0
 
     def test_the_byte_bound_binds_before_the_depth_bound_at_the_defaults(self) -> None:
         """Both bounds are exercisable — the default is not depth x 10 MB."""
@@ -3542,35 +3545,28 @@ async def test_lifespan_refuses_an_unsafe_spool_directory(
 
 
 @pytest.mark.parametrize(
-    ("config", "expected"),
+    "config",
     [
-        ({}, True),
-        ({"retrieve": {"max_promptguard_chunks": 0}}, True),
-        ({"retrieve": {"max_promptguard_chunks": 256}}, False),
+        {},
+        {"retrieve": {"max_promptguard_chunks": 64}},
+        {"retrieve": {"max_promptguard_chunks": 0}},
     ],
+    ids=["empty", "64", "explicit-zero"],
 )
-async def test_lifespan_warns_exactly_once_while_the_budget_is_unset(
+async def test_lifespan_logs_no_retrieve_budget_record(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     config: dict[str, object],
-    expected: bool,
 ) -> None:
-    """One closed-token WARNING naming the coming default, nothing more."""
+    """The announced-default WARNING is retired: no config spelling emits it."""
     monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
 
     probe_app = FastAPI()
-    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+    with caplog.at_level(logging.DEBUG, logger="retrieval_app"):
         async with lifespan(probe_app):
             pass
 
-    warnings = [
-        record.getMessage()
-        for record in caplog.records
-        if "retrieve_budget_unset" in record.getMessage()
-    ]
-    assert warnings == (
-        ["retrieve_budget_unset coming_default=256"] if expected else []
-    )
+    assert "retrieve_budget_unset" not in caplog.text
 
 
 async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
@@ -3578,7 +3574,7 @@ async def test_the_module_level_fallback_publishes_settings_and_logs_nothing(
 ) -> None:
     """The lifespan-free path exists for tests, so it emits no boot warning."""
     assert isinstance(retrieval_app.app.state.retrieve_settings, RetrieveSettings)
-    assert retrieval_app.app.state.retrieve_settings.max_promptguard_chunks == 0
+    assert retrieval_app.app.state.retrieve_settings.max_promptguard_chunks == 64
     assert "retrieve_budget_unset" not in caplog.text
 
 
@@ -6110,3 +6106,21 @@ async def test_health_unrelated_fields_are_unaffected_by_search_provider_state(
     assert data["promptguard_loaded"] is False
     assert data["cache_connected"] is True
     assert data["cache_backend"] == "memory"
+
+
+async def test_lifespan_marks_the_process_non_dumpable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup asks for ``PR_SET_DUMPABLE`` 0 before anything else runs."""
+    calls: list[str] = []
+
+    def record() -> bool:
+        calls.append("called")
+        return True
+
+    monkeypatch.setattr("retrieval_app.make_process_non_dumpable", record)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _blocking_acquisition(threading.Event())
+    )
+    async with _running_app():
+        assert calls == ["called"]

@@ -22,13 +22,12 @@ from pipeline.config_bounds import bounded_bool, bounded_float, bounded_int
 from pipeline.extraction_limits import max_extracted_characters
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 
-# ``0`` means "no pre-check, and no ``max_chunks`` passed to the classifier" —
-# exactly the behaviour that shipped before this key existed. It is the
-# shipped default for one minor release (``contract/GOVERNANCE.md`` ruling (g),
-# worked example 6 step 1); the next MINOR flips it to
-# ``COMING_MAX_PROMPTGUARD_CHUNKS`` and ``0`` stays a legal opt-out after that.
-RETRIEVE_MAX_PROMPTGUARD_CHUNKS = 0
-COMING_MAX_PROMPTGUARD_CHUNKS = 256
+# The default is 64 chunks (owner ruling 2026-10-07, measured; closed in 1.4.0,
+# ``contract/GOVERNANCE.md`` ruling (g)), so one large fetched page cannot hold
+# the classification permit past the wait other requests are given. ``0`` is the
+# explicit opt-out: "no pre-check, and no ``max_chunks`` passed to the
+# classifier" — the behaviour that shipped before this key existed.
+RETRIEVE_MAX_PROMPTGUARD_CHUNKS = 64
 _MAX_RETRIEVE_PROMPTGUARD_CHUNKS = 1024
 
 # Pinned at exactly one, the way ``extraction.extraction_concurrency`` is: a
@@ -49,13 +48,27 @@ MAX_QUEUED_FETCH_BYTES = 3 * DEFAULT_MAX_CONTENT_BYTES
 _MIN_QUEUED_FETCH_BYTES = DEFAULT_MAX_CONTENT_BYTES
 _MAX_QUEUED_FETCH_BYTES = 16 * DEFAULT_MAX_CONTENT_BYTES
 
+# The fetched-body size above which an HTML page parses in the bounded worker
+# instead of the request thread. Calibrated on two axes (docs/configuration.md,
+# "HTML worker threshold"): the largest power-of-two KiB at which the worst
+# pinned stage-1 shape parses in-thread in <= 2 s AND the parent's peak-RSS
+# delta stays <= 25% of the 1536 MiB Compose default. The maximum is twice the
+# default: raising the key weakens the bound, and `0` sends every body to the
+# worker. Not a cache-fingerprint or revision input: the output is
+# byte-identical either way.
+RETRIEVE_HTML_WORKER_THRESHOLD_BYTES = 512 * 1024
+_MAX_RETRIEVE_HTML_WORKER_THRESHOLD_BYTES = 2 * RETRIEVE_HTML_WORKER_THRESHOLD_BYTES
+
 PROMPTGUARD_FAIL_CLOSED_FLOOR = False
 PROMPTGUARD_THRESHOLD_CEILING = 1.0
 
 # A float, not an int: ``sanitize_and_structure`` takes
 # ``classification_wait_seconds: float | None`` and the tests that exercise the
 # timeout need sub-second values inside the range.
-PROMPTGUARD_WAIT_SECONDS = 30.0
+# 90 s, not 30: measured on a native x86 server (docs/configuration.md, "Measured
+# per-window cost"), the 86M holds the permit ~55-70 s for a 64-chunk page even at 8+
+# CPUs, so a 30 s wait would time concurrent requests out into unavailable_allowed.
+PROMPTGUARD_WAIT_SECONDS = 90.0
 _MIN_PROMPTGUARD_WAIT_SECONDS = 0.05
 _MAX_PROMPTGUARD_WAIT_SECONDS = 300.0
 
@@ -70,12 +83,12 @@ class RetrieveSettings:
 
     At most one fetched body is held, from fetch through stage 1; none while
     waiting on classification. The PDF branch spawns the bounded pypdf worker
-    ``/extract`` uses, which is why ``fetch_concurrency`` is pinned at one; the
-    HTML branch spawns no worker and inherits the same slot for its stage-1
-    memory peak (body + decoded copy + extraction result), so an HTML-only
-    deployment is throttled to single flight by a bound sized for PDFs. That is
-    accepted and stated here so a later reader does not re-derive it; spec 6
-    widens the range when it sizes the envelope.
+    ``/extract`` uses, which is why ``fetch_concurrency`` is pinned at one. The
+    HTML branch spawns the same kind of worker for a body above
+    ``html_worker_threshold_bytes`` and parses smaller ones in the request
+    thread; both run inside the one admission slot, so an HTML-only deployment
+    is throttled to single flight by a bound sized for PDFs. That is accepted
+    and stated here so a later reader does not re-derive it.
     """
 
     max_promptguard_chunks: int = RETRIEVE_MAX_PROMPTGUARD_CHUNKS
@@ -85,6 +98,7 @@ class RetrieveSettings:
     promptguard_fail_closed_floor: bool = PROMPTGUARD_FAIL_CLOSED_FLOOR
     promptguard_threshold_ceiling: float = PROMPTGUARD_THRESHOLD_CEILING
     promptguard_wait_seconds: float = PROMPTGUARD_WAIT_SECONDS
+    html_worker_threshold_bytes: int = RETRIEVE_HTML_WORKER_THRESHOLD_BYTES
 
     @property
     def max_extracted_characters(self) -> int | None:
@@ -166,6 +180,14 @@ def retrieve_settings_from_config(config: dict[str, Any]) -> RetrieveSettings:
             PROMPTGUARD_WAIT_SECONDS,
             minimum=_MIN_PROMPTGUARD_WAIT_SECONDS,
             maximum=_MAX_PROMPTGUARD_WAIT_SECONDS,
+            error=RetrieveConfigurationError,
+        ),
+        html_worker_threshold_bytes=bounded_int(
+            retrieve_config,
+            "html_worker_threshold_bytes",
+            RETRIEVE_HTML_WORKER_THRESHOLD_BYTES,
+            minimum=0,
+            maximum=_MAX_RETRIEVE_HTML_WORKER_THRESHOLD_BYTES,
             error=RetrieveConfigurationError,
         ),
     )

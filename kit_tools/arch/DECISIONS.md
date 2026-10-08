@@ -1132,7 +1132,8 @@ table (unreviewable or single-maintainer; rejected).
    UTS #39 data plus an owner-reviewed supplement, with a generated pre-NFKC table and **two**
    readings of the ambiguous I/l class. The module is a hashed source and `unicodedata@<version>`
    a revision input, because NFKC depends on the interpreter's Unicode database. A fold that would
-   pass four times the decoded length is refused and flagged, never truncated.
+   pass `max(2n, n + 256)` (four times the decoded length when this was written) is refused,
+   never truncated, and the refusal blocks (`release-padding-gate` US-001).
 4. **A block-allowlist linear walk** builds the inline-joined form: unknown elements join (the
    closed direction for catch), and no tree is mutated.
 5. **A first-match raw-source markup scan** for three patterns (`system_tag`, `private_ip_href`,
@@ -1152,7 +1153,8 @@ re-recording. Acceptance was written per technique class, not per leaked row, be
 attackers defeat row-shaped fixes (arXiv 2510.09023).
 
 **Consequences:** Nine `sanitizer_revision` rotations (forty-fourth to fifty-second) end at
-`46b8d1bb…`; they ship as one cache-invalidating window. Stage 2 remains an evidence signal, not a
+`46b8d1bb…`; they ship as one cache-invalidating window (the v1.3.0 `release-resource-bounds` US-001 adds a
+fifty-third, `0ace27ca…`, with byte-identical output, US-006 a fifty-fourth, `54aa9649…`, US-007 a fifty-fifth, `ff18b0bf…`, US-008 a fifty-sixth, `d582f8da…`, and `release-padding-gate` US-001 a fifty-seventh, `23444fe4…`, which makes a refused look-alike fold a BLOCK, and `release-1-3-0` US-003 a fifty-eighth, `91455b21…`, text only, and the validation fix a fifty-ninth, `2c6d0382…`, text only). Stage 2 remains an evidence signal, not a
 boundary: the unmitigated technique classes are listed in `kit_tools/arch/SECURITY.md` ("Stage 2
 scan forms"). Feeding normalised text to stage 3 is a later epic with an owner recording gate.
 
@@ -1161,3 +1163,38 @@ scan forms"). Feeding normalised text to stage 3 is a later epic with an owner r
 `feature-structural-wire-closure.md` (Research Findings, Implementation Notes);
 `kit_tools/specs/archive/feature-structural-closeout.md`; `contract/GOVERNANCE.md` ruling (m);
 `docs/bootstrap-notes.md` (forty-fourth to fifty-second rotations).
+
+### 2026-10-07: Extraction workers launch through `subprocess.Popen` with an allowlisted environment
+
+**Decision:** The PDF worker moved from `multiprocessing` spawn to `pipeline/worker_launch.py`:
+`Popen(env=<allowlist>, cwd=<project root>, pass_fds=(write_fd,), close_fds=True)` running
+`pipeline.worker_entry`, which applies rlimits first, disables logging, then imports the parser.
+The result is one length-prefixed JSON frame on the passed fd, capped and parent-re-validated as before.
+
+**Rationale:** `multiprocessing` cannot give a child a different environment: clearing it in the
+child leaves secrets in `/proc/self/environ`, and swapping `os.environ` around `start()` races
+request threads. The allowlist is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TMPDIR`,
+`PYTHONPATH`, `VIRTUAL_ENV`, `PYTHONHASHSEED`, `PYTHONDONTWRITEBYTECODE`. `cwd` is pinned because
+the image does not install the project.
+
+**Consequences:** `/proc/<ppid>/environ` stays readable until US-003 (since added; see the next entry). Verdict integrity against a
+compromised parser is an accepted residual (SECURITY.md, "Worker isolation"). No hashed file
+changed, so `sanitizer_revision` does not rotate: default and shipped config both remain
+`0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911` (`0ace27ca…`).
+
+**Source:** `kit_tools/specs/feature-release-resource-bounds.md` US-002.
+
+### 2026-10-07: The parent marks itself non-dumpable on Linux
+
+**Decision:** The lifespan calls `make_process_non_dumpable()` (`prctl(PR_SET_DUMPABLE, 0)` via
+`ctypes`; no-op off Linux) before anything else.
+
+**Rationale:** The allowlisted environment keeps secrets out of the worker's own environ, but a
+same-uid child could still read `/proc/<ppid>/environ`. Non-dumpable makes that raise
+`PermissionError`. Spawn latency was unchanged (0.22 ms vs 0.19 ms, `nofile` 1,048,576).
+
+**Consequences:** No core dumps or `py-spy`/`gdb` attach. Residuals (same-uid peers, `--init`,
+`--workers`, non-exec wrappers, shared PID namespaces, `CAP_SYS_PTRACE`) are in SECURITY.md. No
+hashed file changed; `sanitizer_revision` stays `0ace27ca…`.
+
+**Source:** `kit_tools/specs/feature-release-resource-bounds.md` US-003.

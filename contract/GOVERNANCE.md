@@ -26,7 +26,7 @@ response, and does every name it already knows still mean what it meant?
 | Schema fixtures | `tests/golden/contract_X_Y_Z.json` | by hand, one per contract version |
 | What the running service serves | `/openapi.json` `info.version`, `/health`'s `contract_version` | from `CONTRACT_VERSION` at import |
 
-The current contract version is **1.3.0**. *(That sentence is checked against
+The current contract version is **1.4.0**. *(That sentence is checked against
 `pipeline/contract.py` by `tests/test_governance_docs.py`; a bump that leaves it stale is
 a red test, not a stale doc.)*
 
@@ -68,11 +68,15 @@ contract `1.3.0`, whose window opened in
 US-002. Withdrawing a defective image does not withdraw its contract version.
 The archived release spec's US-005 handoff records replacement verification;
 `docs/releases.md` records completed recovery and withdrawal.
-The next mapping is **published**: image `v1.2.2` (2026-10-04, verified), a
-PATCH that makes the opt-in 86M classifier selectable, serves contract
-`1.3.0`, unchanged from `v1.2.1`. It is not the next MINOR, so both "next MINOR" windows below
-(ruling (g)'s `retrieve.max_promptguard_chunks` flip and the 422 field drop)
-stay open. A process built from this tree reports `1.3.0` on `/health`.
+The last published mapping is image `v1.2.2` (2026-10-04, verified), a PATCH that makes
+the opt-in 86M classifier selectable and serves contract `1.3.0`, unchanged from `v1.2.1`.
+The next mapping is **prepared, not yet published**: image `v1.3.0` serves contract `1.4.0`,
+the next MINOR. Both "next MINOR" windows are **closed in 1.4.0** (2026-10-07): ruling (g)'s
+`retrieve.max_promptguard_chunks` flip (to `64`) and ruling (l)'s validation-422 key drop.
+**No compatibility window is open.** A process built from this tree reports `1.4.0` on
+`/health`; `contract_1_4_0.json` is regenerated until the tag. Image `v1.0.0` serving
+contract `1.4.0` is not a mapping that exists; the example above stays the one that shows
+the two semvers diverging.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the
 last unmechanized integrity claim in the release path, so it is not a human line. The
@@ -497,7 +501,8 @@ accepted the request.
    `1.3.0` keeps the default at `0`; the next MINOR flips it to `256`. That window is
    stated in `docs/releases.md` and belongs in the Release body, and boot logs one WARNING
    `retrieve_budget_unset coming_default=256` so an operator finds it without reading
-   either.
+   either. *Continuation (2026-10-07): closed in 1.4.0 at `64`, owner ruling 2026-10-07,
+   measured; `256` was announced. The WARNING is retired and `0` stays the opt-out.*
 3. *The MAJOR is never reached.* Step 3 cuts a MAJOR when the old behaviour is removed.
    It is not removed: `0` stays a legal, documented opt-out after the flip, so an operator
    who needs the old behaviour keeps it by configuration rather than by pinning a version.
@@ -696,6 +701,11 @@ network placement as the control.
 The closure is limited to request-validation 422s on the three POST routes.
 Pipeline 422 `reason` is unchanged; ruling (d)'s private-IP echo survives.
 Both extraction middlewares still refuse before routing.
+
+**Closure (2026-10-07):** step 3 is executed in contract 1.4.0 (`release-1-3-0` US-003).
+Request-validation 422 items carry exactly `loc`, `msg`, `type`; the `"[redacted]"`
+`input`/`ctx`/`url` placeholders, their window constants and the test helper are deleted.
+Announced as a MINOR (the carve-out in step 3), not a MAJOR. No window remains open.
 
 **Source:** `retrieval_app.py`; `tests/test_contract_errors.py` (per-field
 marker liveness, interpolating-validator counterexample, never-raises guards

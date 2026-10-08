@@ -2429,3 +2429,245 @@ camouflage, non-px offsets, tiny non-zero fonts, the 1px visually-hidden clip, `
 overridden by an inline `display`, and `aria-hidden` text browsers still render. Accepted
 benign costs (fixtured): ARIA tab panels using `hidden` and `opacity:0` hero blocks are
 pruned. **Not replayed to Poppy:** compare contracts, not revisions.
+
+### The fifty-third rotation: stage 1 made linear (`release-resource-bounds` US-001)
+
+`pipeline/stage1_extraction.py` no longer imports `copy`. `_extract_raw_text` is a non-mutating
+iterative walk (dangerous subtrees and non-text nodes skipped, the `_extract_inline_text`
+pattern); `_prune_hidden(soup, html)` re-parses `html` instead of copying the tree; the pruned
+fallback strips its private `pruned_soup` in place (`_strip_in_place_raw_text`) and is never a
+re-parse of the input, so hidden text stays out.
+
+| State | Revision (default and shipped config) |
+|---|---|
+| Before (`HEAD`) / `stage1_extraction.py` reverted | `46b8d1bbc79f3fc4fe273e4ca2488b0e0ba0c281658910b3dd8cfad2924a2d21` |
+| After | `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911` |
+
+One hashed file moved, so the single reversal is also the all-reverted control; it was loaded
+read-only from `git show HEAD:` into a temp directory. Not a sanitization-behaviour change:
+1,484 frozen SHA-256 digests of the full `ExtractionResult` (every corpus page record plus
+synthetic hidden-element, dangerous-tag, no-body and forced trafilatura-`None` pages, under
+all four `with_inline`/`prune_hidden` combinations) were generated from the pre-change module
+and match (`tests/golden/stage1_equivalence.json`). Stage 3's input is byte-identical.
+Best-of-1/3 seconds, `extract_html(with_inline=True, prune_hidden=True)`, 64 KiB / 256 KiB:
+
+| Shape | Before | After |
+|---|---|---|
+| sibling-dense | 0.197 / 0.802 | 0.130 / 0.533 |
+| deep span | 0.337 / 3.403 | 0.043 / 0.152 |
+| attribute-heavy | 0.066 / 0.247 | 0.060 / 0.224 |
+| unclosed span | 1.792 / 26.323 | 0.118 / 0.453 |
+| deep span, hidden | 0.704 / 9.930 | 0.077 / 0.288 |
+| unclosed span, hidden | 3.460 / 52.141 | 0.208 / 0.825 |
+
+`/search` field parse, one 8,000-character unclosed-span snippet: 47.7 ms before, 14.5 ms after.
+**Not replayed to Poppy:** compare contracts, not revisions.
+
+### The fifty-fourth rotation: large `/retrieve` HTML bodies use the worker (`release-resource-bounds` US-006)
+
+`run_retrieve_pipeline` compares the **fetched byte length** (before any decode) with
+`retrieve.html_worker_threshold_bytes`. At or below it, stage 1 runs in the request thread through
+`html_subprocess.extract_html_and_scan`; `orchestrator._extract_html_and_scan_inline` is deleted
+(no second copy). One byte over, or any body when the key is `0`, goes to
+`extract_html_bytes_in_subprocess` inside the admission slot, awaited through `completed_thread`
+so cancellation releases admission only after the worker is reaped and the spool unlinked.
+`HTMLExtractionError` maps to 422 `extraction_failed` / `html_extraction_error` with the closed
+WARNING token `retrieve_html_extraction_failed`; a spool `OSError` / `SpoolDirectoryError` maps to
+`pdf_spool_error` with `retrieve_spool_error`. `RetrieveMetrics.html_worker_spawns` and
+`html_worker_refusals` are plain attributes (not in `RetrieveMetricsResponse`; US-007 exposes them).
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`HEAD`) / `orchestrator.py` and `contract.py` both reverted | `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911` |
+| `orchestrator.py` alone reverted | `3f6665030a34211600ab5e770974cdbd87f659d228d132ea9c45baa2526ac923` |
+| `contract.py` alone reverted | `0905fed7ddfb7de59370da7fccd7b04071cfe5836d0f40f7b494df90617e4e4c` |
+| After | `54aa96492868e3e2785dba28008815b0ea5f76e3bb1c4c5336b3d15fd2efa3ca` |
+
+Each reversal loaded the pre-story bytes read-only (`git show HEAD:<path>` into a copy of the tree
+in a temp directory). `html_subprocess.py`, `retrieve_limits.py` and `retrieval_app.py` are not
+hashed, so the new knob moves nothing on its own. The knob is neither a cache-fingerprint nor a
+revision input: the served response is byte-identical on either path.
+
+Calibration (pinned `tests/stage1_shapes.py` shapes on the linear stage 1, GC off, median of 3, a
+fresh process per sample, macOS arm64; seconds / parent peak-RSS delta in MiB):
+
+| Shape | 256 KiB | 512 KiB | 1 MiB | 2 MiB |
+|---|---|---|---|---|
+| sibling-dense | 0.408 / 78.3 | 0.878 / 155.8 | 2.275 / 312.5 | 5.237 / 624.1 |
+| deep span | 0.174 / 39.4 | 0.287 / 48.2 | 0.518 / 65.7 | 0.969 / 102.3 |
+| attribute-heavy | 0.175 / 38.8 | 0.350 / 76.3 | 0.698 / 152.3 | 1.405 / 318.9 |
+| unclosed span | 0.340 / 37.2 | 0.683 / 74.6 | 1.379 / 147.0 | 2.722 / 295.9 |
+| deep span, hidden | 0.272 / 48.3 | 0.483 / 65.7 | 0.898 / 101.7 | 1.756 / 175.9 |
+| unclosed span, hidden | 0.598 / 74.2 | 1.192 / 149.0 | 2.386 / 302.5 | 4.788 / 607.5 |
+
+The default is 512 KiB (524,288): the largest power-of-two KiB where the worst shape (unclosed span,
+hidden) parses in <= 2 s (1.19 s) and the RSS delta is <= 25% of 1536 MiB = 384 MiB (149 MiB).
+1 MiB fails the time axis (2.39 s), so the maximum (2x the default, 1 MiB) is a documented
+weakening, not a safe value. Share of pages that pay for a spawn at the default: the 359 corpus
+page records are synthetic (median 591 B, largest 15,640 B), so none spawns; for real pages, whose
+median HTML is tens of KiB, only the tail above 512 KiB does — each costing a few hundred
+milliseconds of launch plus about 0.33 s of import CPU, in exchange for a killable parse.
+
+Equivalence: default-versus-`0` served responses are equal (modulo `request_id` and
+`retrieved_at`) for all 359 page records through the in-process frame round trip, at chunk budgets
+`0` and `64`, and for a 12-record sample through real spawns. Stage 3's input is byte-identical
+and both cassettes are unchanged. Not replayed to Poppy.
+
+### HTML extraction worker (`release-resource-bounds` US-005)
+
+`pipeline/html_subprocess.py` (new, **unhashed**) holds `extract_html_and_scan`, a copy of
+`orchestrator._extract_html_and_scan_inline`, and `extract_html_bytes_in_subprocess`, which spools
+the page (URL in a header, never in argv; prefix `forage-retrieve-html-`) and runs the US-002
+launcher with kind `html`. `worker_entry.py` (unhashed) gained the `html` kind. `orchestrator.py`
+is **not** edited; US-006 re-points it. No rotation: default, `config.yaml` and
+`bench/config.yaml` revisions all stay `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911`.
+
+Field bounds: `extract_html` caps none of `title`, `author` and `date` (it takes the tag
+text, attribute or JSON-LD value as is), so each is bounded by `MAX_HTML_FRAME_BYTES`, like
+`raw_text` and `main_content`.
+
+Frame cap (`MAX_HTML_FRAME_BYTES` = 96 MiB), parent peak RSS while receiving, decoding and
+validating (fresh interpreter, 54.4 MiB baseline, macOS arm64):
+
+| Case | Frame | Peak RSS | Increase |
+|---|---|---|---|
+| budget off, 10 MiB body of C0 controls, both fields (6x) | 120 MiB | 442.4 MiB | 388.0 MiB (over 384) |
+| at the cap | 96 MiB | 390.8 MiB | 336.4 MiB |
+| 10 MiB of U+FFFD, both fields (3x) | 60 MiB | 269.8 MiB | 215.3 MiB |
+| 64 chunks, 114,688 chars per field, controls | 1.3 MiB | 57.3 MiB | 2.8 MiB |
+
+Linux envelope for realistic pages (Docker `--cpus 1 -m 1536m`, aarch64, no rlimits): child
+`VmPeak` / CPU including import: 0.5 MiB 143.3 MiB / 1.30 s; 1 MiB 215.4 MiB / 2.50 s;
+2 MiB 361.9 MiB / 5.82 s; 2.1 MiB 376.9 MiB / 6.00 s; 2.2 MiB 388.2 MiB / 6.44 s (over the
+384 MiB cap); 4 MiB 642.9 MiB / 16.41 s. Largest page that fits: about 2.1 MiB. Kill-test shape:
+768 KiB sibling-dense is 2.0-2.3 s CPU and a 316 MiB `VmPeak`, so it trips a 1 s CPU limit and
+not the address-space cap (512 KiB measured 1.27 s on macOS, 1.61 s / 235 MiB on Linux).
+
+### The fifty-fifth rotation: contract `1.4.0` announces the HTML worker (`release-resource-bounds` US-007)
+
+`CONTRACT_VERSION` moves to the held `1.4.0`. The in-progress entry names the `html_extraction_error`
+reason under `extraction_failed`, `retrieve.html_worker_spawns` and `retrieve.html_worker_refusals`, and the
+large-page refusal as a served-outcome change; spec 3 US-004 finalises it. `RetrieveMetricsResponse` gains the
+two counters (wired from `RetrieveMetrics`) and the `Pipeline422ErrorResponse.error` description names the
+reason. `tests/golden/contract_1_4_0.json` is new and held; goldens 1.0.0-1.3.0 are byte-unchanged.
+`contract/openapi.yaml`, its anchor and the fixture twin are regenerated.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`HEAD`) / `contract.py` reverted | `54aa96492868e3e2785dba28008815b0ea5f76e3bb1c4c5336b3d15fd2efa3ca` |
+| After | `ff18b0bfb436e14ea19269c54d1582991797eec9c055ea35260ff80959a0528c` |
+
+`contract.py` is the only hashed source that moved (`git diff --name-only`); the reversal loaded
+`git show HEAD:pipeline/contract.py` into a copy of the tree in a temp directory, read-only. `retrieval_app.py`
+and `models.py` are not hashed. Not a sanitization-behaviour change. Not replayed to Poppy.
+
+### The fifty-sixth rotation: `/search` parses off the event loop (`release-resource-bounds` US-008)
+
+`run_search_pipeline` runs `_scan_search_result_fields` (both fields' `extract_html` scan forms and both
+`scan_raw_markup` scans) in one `asyncio.to_thread` per result, inside `completed_thread`, after the URL
+verdict, so a rejected result parses nothing and a zero-result provider makes no hop. The loop scans the
+precomputed markup results instead of calling `scan_raw_markup` itself. Wire output and the six `8e449fc`
+captures are unchanged.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`HEAD`) / `orchestrator.py` reverted (= all-reverted control) | `ff18b0bfb436e14ea19269c54d1582991797eec9c055ea35260ff80959a0528c` |
+| After | `d582f8dad7ce7c37d41faf5bca47ec5daf9c1edfba9eefc0086560513b4a523c` |
+
+`orchestrator.py` is the only hashed source that moved; the reversal copied the working tree to a temp
+directory and replaced it with `git show HEAD:pipeline/orchestrator.py`, read-only. Not a
+sanitization-behaviour change. Not replayed to Poppy.
+
+### The fifty-seventh rotation: a refused look-alike fold blocks (`release-padding-gate` US-001)
+
+`fold_scan_forms` refuses a fold past `max(2n, n + 256)` (was 4n), both passes against the same limit, strictly `>`.
+`scan_structural_forms` returns BLOCKED (penalty `0.0`, the `encoded_payload` refusal flag appended to any flags
+already found) instead of SUSPICIOUS, so `/retrieve` (trusted and default tier) and `/extract` quarantine
+(`title: null`, GOVERNANCE ruling (m)) and `/search` omits the result under `structural_blocked` with
+`field=title|snippet` (title before snippet, fold before inline). Stage 3's input is unchanged and a blocked page
+skips stage 3. This is the **eighteenth sanitization-behaviour-changing rotation**: padding with expanding
+characters can no longer switch the look-alike scan off for a page that is still served.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`74e47e5`) / both files reverted (= all-reverted control) | `d582f8dad7ce7c37d41faf5bca47ec5daf9c1edfba9eefc0086560513b4a523c` |
+| `stage2_structural.py` reverted alone | `42b2c13127cfd7e137ad91259e1dac35a13fd3e73419d6d2ab0bb8a256051c66` |
+| `orchestrator.py` reverted alone | `3e789a3d5514581c8cfa459c2093d933c0ba1c8972fc3447cf1d83dfd082ee70` |
+| After | `23444fe43e67bab3768e8e095bb3231f91a76a5f9e500b83dcff05338f7c5925` |
+
+Every reversal was read-only: the working tree's `pipeline/` and `url_validator.py` were copied to a temp directory and
+the file replaced by `git show 74e47e5:pipeline/<file>`. Pre-change measurement (732 benign stage-2 fields, every
+route form): maximum fold/n ratio 1.0-1.18 per genre, **0** fields over `max(2n, n + 256)` (and 0 over the old
+4n). Cost at 2 MiB, back to back in one process, GC off, median of 5: pre shape (U+FDFA + 5 ASCII, old limit)
+4.141 s, post shape (16 ASCII + U+FDFA, new limit) 2.263 s, ratio 54.6% (an earlier pre-shape median of 3 was 4.100 s).
+The corpus baseline and floors regenerate byte-identically, `floors_diff` reports 0 problems and `--baseline-fpr`
+0 rises (exempt `ben-0288`, `ben-0289`), and both cassettes are byte-unchanged. Not replayed to Poppy.
+
+### The fifty-eighth rotation: contract 1.4.0 finalised (`release-1-3-0` US-003)
+
+`pipeline/contract.py` replaces the in-progress 1.4.0 entry with the final one: the validation-422
+items are exactly `loc`, `msg`, `type` (the `"[redacted]"` `input`/`ctx`/`url` placeholders of 1.3.0 are
+dropped, GOVERNANCE ruling (l)), `retrieve.max_promptguard_chunks` defaults to 64 with `0` the explicit
+opt-out, `html_extraction_error`, and the three `retrieve.*` counters (`html_worker_spawns`,
+`html_worker_refusals`, `promptguard_budget_refusals`); sanitizer outcomes are stated not to be contract
+changes. `orchestrator.py` loses the stale "coming default of 256" comment. This is **not** a
+sanitization-behaviour change: both edits are text only. The counter is incremented at the handler in
+`retrieval_app.py` (`exc.reason == contract.PROMPTGUARD_BUDGET`), which is not hashed.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`616beed`) / both files reverted (= all-reverted control) | `23444fe43e67bab3768e8e095bb3231f91a76a5f9e500b83dcff05338f7c5925` |
+| `contract.py` reverted alone | `53280032427c6aea44818e7687dc39f716a7ce61e293b5da89d5681b9eae213c` |
+| `orchestrator.py` reverted alone | `78c5563313f6f35978d24211f5392eb4fe846e56b5a8046fd6eb2d178800aa23` |
+| After | `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78` |
+
+Every reversal was read-only: the working tree was copied to a temp directory and the file replaced by
+`git show 616beed:pipeline/<file>`. Goldens 1.0.0-1.3.0 are byte-unchanged; the held 1.4.0 golden regenerates
+byte-identical (no model in it changed), and `contract/openapi.yaml`, its anchor and the fixture twin were
+regenerated. Not replayed to Poppy.
+
+### The fifty-ninth rotation: 1.4.0 entry wording (v1.3.0 validation, finding 2026-10-07-003)
+
+The final 1.4.0 entry in `pipeline/contract.py` said "256 is the announced next default". The owner ruling of
+2026-10-07 shipped 64 and withdrew 256, and the entry is extracted into the v1.3.0 Release body, so it now reads
+"256 had been announced; the owner ruling of 2026-10-07 shipped 64 instead". Text only, **not** a
+sanitization-behaviour change; only `contract.py` moves among the hashed sources.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`2ab79d0`) / `contract.py` reverted alone (read-only temp copy) | `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78` |
+| After | `2c6d0382cd0f94158a64710db7b5beb8b26ea411d4f65eabd0d0ca03c1572591` |
+
+Goldens and `contract/openapi.yaml` are unchanged: the docstring is not part of the OpenAPI document. Not replayed
+to Poppy.
+
+### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
+
+Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over
+`1.3.0`. No compatibility window is open any more (GOVERNANCE rulings (g) and (l) carry closure lines).
+
+1. **Validation-422 key drop (ruling (l), step 3).** `detail[]` items on the three POST routes carry exactly
+   `loc`, `msg`, `type`. The `"[redacted]"` `input`/`ctx`/`url` placeholders of 1.3.0 are gone; a consumer
+   still reading `detail[].input` must stop. Declared properties are unchanged, hence MINOR.
+2. **Activation.** `1.4.0` is a MINOR over `1.3.0`: a consumer that refuses only on a major mismatch
+   activates without change. Re-vendor `contract/openapi.yaml` from the `v1.3.0` tag and verify it against
+   that tag's `openapi.yaml.sha256` anchor.
+3. **`html_extraction_error`.** A new `RetrieveErrorCode`: a fetched HTML body above
+   `retrieve.html_worker_threshold_bytes` (512 KiB default) that the rlimited worker refuses returns a coded
+   422 instead of being parsed in-process. Within bounds the response is byte-identical.
+4. **Budget default 64 (ruling (g), dated continuation).** `retrieve.max_promptguard_chunks` now defaults to
+   `64` (was `0`; `256` had been announced). A page whose extracted text exceeds the derived character ceiling
+   returns 422 `content_too_large` with reason `promptguard_budget`. `0` stays the explicit opt-out. Container
+   sizing is in `docs/configuration.md`.
+5. **Three new `/metrics` counters** under `retrieve.*`: `html_worker_spawns`, `html_worker_refusals`,
+   `promptguard_budget_refusals`. Additive.
+
+Files checked for current-version prose (`1\.3\.0` grep across `docs/`, `kit_tools/`, `README.md`, `CLAUDE.md`,
+`contract/`): `CLAUDE.md` (invariant 4 already `1.4.0`; the rest is rotation history), `README.md` (:70 and :293
+rewritten; :78 and :253 state the published `v1.2.2 / 1.3.0` pin and stay), `docs/releases.md` (Unreleased line
+rewritten; the rest is per-release history), `contract/GOVERNANCE.md` (:71 rewritten; remaining hits, e.g. ruling
+(m), are history), `kit_tools/docs/CI_CD.md` (:320 rewritten), `kit_tools/docs/API_GUIDE.md` (:43 rewritten),
+`kit_tools/arch/CODE_ARCH.md` (:118 rewritten; :404 and :467 are rotation history). `kit_tools/PRODUCT_VISION.md`
+:110 and `kit_tools/arch/DECISIONS.md` :1107 were reviewed and left: both are the dated outcome record of
+`structural-hardening` (which did not bump), not a statement of the current version. No sanitizer-revision
+rotation: docs only (`91455b21…` unchanged).
