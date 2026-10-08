@@ -359,14 +359,14 @@ and rulings (g) and (l) record the closure. `docs/bootstrap-notes.md` carries th
 - Docs only, so no rotation.
 
 **Acceptance Criteria:**
-- [ ] `contract/GOVERNANCE.md` states that no compatibility window is open.
-- [ ] GOVERNANCE.md :71 names v1.3.0 and 1.4.0.
-- [ ] Rulings (g) and (l) carry dated closure lines.
-- [ ] `tests/test_governance_docs.py` passes.
-- [ ] A `1\.3\.0` grep shows no remaining current-version statement outside history, with the
+- [x] `contract/GOVERNANCE.md` states that no compatibility window is open.
+- [x] GOVERNANCE.md :71 names v1.3.0 and 1.4.0.
+- [x] Rulings (g) and (l) carry dated closure lines.
+- [x] `tests/test_governance_docs.py` passes.
+- [x] A `1\.3\.0` grep shows no remaining current-version statement outside history, with the
       files checked listed.
-- [ ] The consumer note covers the five items.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] The consumer note covers the five items.
+- [x] Full test suite passes (`uv run pytest`)
 
 ### US-005: Prepare the v1.3.0 release tree
 
