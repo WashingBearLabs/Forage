@@ -297,30 +297,30 @@ vendor matches the closed windows and the new refusals are visible.
   reverted alone, plus a both-reverted control.
 
 **Acceptance Criteria:**
-- [ ] On `/search`, `/retrieve` and `/extract`, every request-validation 422 item has exactly
+- [x] On `/search`, `/retrieve` and `/extract`, every request-validation 422 item has exactly
       `loc`, `msg`, `type` (one test per route). `_VALIDATION_PLACEHOLDER`,
       `_VALIDATION_WINDOW_KEYS` and `_strip_window_keys` no longer exist (grep).
-- [ ] The existing `_VALIDATION_MARKER` parametrization asserts the marker is in no 422 item's
+- [x] The existing `_VALIDATION_MARKER` parametrization asserts the marker is in no 422 item's
       `msg` and in no log record at any level (tests).
-- [ ] Ruling (l)'s other invariants pass unchanged.
-- [ ] The `:1673` value is untouched.
-- [ ] `retrieve.promptguard_budget_refusals` increments on a budget refusal from each of the
+- [x] Ruling (l)'s other invariants pass unchanged.
+- [x] The `:1673` value is untouched.
+- [x] `retrieve.promptguard_budget_refusals` increments on a budget refusal from each of the
       three refusal sites (tests through the handler), appears on `/metrics`, and is named in
       `docs/configuration.md`.
-- [ ] The `orchestrator.py` "coming default" comment is gone.
-- [ ] The 1.4.0 bullet is final.
+- [x] The `orchestrator.py` "coming default" comment is gone.
+- [x] The 1.4.0 bullet is final.
   - It covers every change in `git diff 7fe91c0..HEAD -- pipeline/contract.py
     contract/openapi.yaml`, with the reconciliation listed in Implementation Notes.
   - The tense guard and the 1.4.0 metric-addition test pass.
-- [ ] The held 1.4.0 golden, `openapi.yaml`, its anchor and the fixture twin are regenerated and
+- [x] The held 1.4.0 golden, `openapi.yaml`, its anchor and the fixture twin are regenerated and
       green.
-- [ ] The anchor quotes are updated.
-- [ ] Goldens 1.0.0–1.3.0 are byte-unchanged.
-- [ ] The rotation is recorded per the procedure (two files).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The anchor quotes are updated.
+- [x] Goldens 1.0.0–1.3.0 are byte-unchanged.
+- [x] The rotation is recorded per the procedure (two files).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-004: Close the windows in GOVERNANCE and write the consumer note
 
