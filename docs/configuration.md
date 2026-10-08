@@ -580,11 +580,15 @@ recommendations, not measured throughput guarantees. The reference envelope (1 v
 `1536m` (raised from `1024m` with the 86M default), threads `0` and classification
 concurrency `1`, not the tuned first row below.
 
-| Host envelope | FORAGE_CPUS | FORAGE_MEM_LIMIT | promptguard_threads | classification_concurrency | cache.max_bytes | `/extract` classify latency, warm p50 (one window / max budget) |
+| Host envelope | FORAGE_CPUS | FORAGE_MEM_LIMIT | promptguard_threads | classification_concurrency | cache.max_bytes | `/extract` end-to-end latency, fresh container (one window / max budget) |
 |---|---|---|---|---|---|---|
 | 1 vCPU / 1.5 GB (reference envelope) | 1 | 1536m (`1024m` for the 22M) | 1 | 1 | 33554432 | measured at `1024m`: 86M **26.2 s / 1,316 s** (55 windows); 22M **13.1 s / 501 s** (40 windows) |
 | 2 / 2 GB | 2 | 2048m | 2 | 1 | 67108864 | not measured |
 | 4 / 4 GB | 4 | 4096m | 2 | 2 | 134217728 | not measured at this row's settings; at `--cpus 4`, `1024m`, default threads: 22M **3.1 s / 104 s**, 86M **6.4 s / 368 s** |
+
+The latency column is **end-to-end `/extract` latency in a fresh container** (model load, fetch
+and every stage), not the per-window classification cost; for that, see
+[Measured per-window cost](#measured-per-window-cost) below.
 
 Measured 2026-10-02 by `corpus-86m-enablement` US-003 on one host (AMD Ryzen Threadripper
 2970WX, Docker 29.5.2, cgroup v2; image commit `43279910`, manifest revisions 22M
@@ -1197,27 +1201,76 @@ wait — not that the model is missing. The fix is to raise `promptguard_wait_se
 lower `retrieve.max_promptguard_chunks`, and lowering the budget is the better of the two:
 it bounds the hold rather than waiting longer for an unbounded one.
 
-Until the resource-envelope spec measures the per-window number on the reference envelope,
-a **provisional** pairing: at an assumed 100 ms per window on a 2-vCPU container, the
-shipped default of 64 chunks is a ~6.4 s hold, which the shipped `30.0` clears with
-wide margin. An operator who sets a larger budget, or who cannot meet that on their
-hardware, adjusts `retrieve.max_promptguard_chunks` — 256 would be a ~25.6 s hold, 32
-would be ~3.2 s — rather than raising the wait, because a longer wait parks more requests behind the same permit
-without making any of them finish sooner.
+#### Measured per-window cost
+
+One window is one forward pass over 512 tokens (`MAX_SEQ_LEN`) at batch size 1: the
+classifier loops over chunks and runs `model(**inputs)` once per chunk, so a permit hold is
+`chunks × per-window latency`. Measured 2026-10-07 (`release-1-3-0` US-002) with a
+**weights-free** harness: `DebertaV2ForSequenceClassification` built from a random-init
+mDeBERTa-v3-base-shaped `DebertaV2Config` (the 86M's architecture; no network, no gated
+download), 512 random token ids, warm, median of 20, torch 2.14 / transformers 5.16.
+
+| Environment | 1 CPU/thread | 4 CPUs/threads |
+|---|---|---|
+| Repo image, `docker run --cpus 1` / `--cpus 4` (Docker Desktop, arm64 Linux VM on an M-series Mac) | **2,989 ms** | **694 ms** |
+| Same host, no container, `torch.set_num_threads(1)` / `(4)` | 283 ms | 189 ms |
+
+Caveats. The container row is the figure to size against; the bare-host row is a **lower
+bound** on hold time (no VM, a different torch build, no cgroup throttling). Random weights
+have the same arithmetic cost as trained ones, but this is not a production x86 server: a
+Linux host with native Docker will differ, and the 1-CPU container figure here is
+likely pessimistic. Re-measure on your own hardware before trusting either row —
+`scripts/bench_promptguard.py` is the end-to-end tool.
+
+**Permit hold, in seconds, against `promptguard_wait_seconds` (30.0).** The permit is shared
+by `/extract`, `/retrieve` and `/search` at `classification_concurrency: 1`, so a request
+that arrives with *k* holders queued ahead waits about *k* × the hold. Fitting 30 s is
+therefore a statement **per single holder** (k = 1); with more holders ahead, the budget
+that fits is 30 s ÷ k.
+
+| Budget | Environment | Hold (k = 1) | k = 2 | k = 3 |
+|---|---|---|---|---|
+| 64 | container, 1 CPU | 191 s | 383 s | 574 s |
+| 64 | container, 4 CPUs | 44 s | 89 s | 133 s |
+| 64 | bare host, 1 thread (lower bound) | 18 s | 36 s | 54 s |
+| 64 | bare host, 4 threads (lower bound) | 12 s | 24 s | 36 s |
+| 256 | container, 1 CPU | 765 s | 1,530 s | 2,296 s |
+| 256 | container, 4 CPUs | 178 s | 355 s | 533 s |
+| 256 | bare host, 1 thread (lower bound) | 72 s | 145 s | 217 s |
+| 256 | bare host, 4 threads (lower bound) | 48 s | 97 s | 145 s |
+
+The budget (k = 1) that fits 30 s is `floor(30 / per-window latency)`: **10** chunks at 1 CPU
+and **43** at 4 CPUs in the container; **105** and **158** on the bare host (lower bounds,
+so an upper bound on the budget). The shipped `64` fits on the bare-host rows at k = 1 but
+**not** on the container rows measured here — on hardware like that, lower
+`retrieve.max_promptguard_chunks` to the fitting budget rather than raising the wait,
+because a longer wait parks more requests behind the same permit without making any of
+them finish sooner. `256` fits at no row.
+
+**What a waiter gets when its wait expires.** Its stage 3 is not run. The request receives
+`stage3_promptguard.unavailable_result`: with `promptguard_fail_closed` off it is
+**`unavailable_allowed`** — served **unclassified**, verdict `SAFE`, penalty `-0.1`, skip
+reason `model_unavailable`. With `promptguard_fail_closed` on, STANDARD and UNTRUSTED tiers
+get `unavailable_blocked` (`INJECTION_DETECTED`, quarantined) instead; VERIFIED stays
+`unavailable_allowed`. The log line is `classification_wait_timeout route=…`, and the counters
+are `retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on
+`/metrics`. An `unavailable_allowed` body is never cached while the classifier is loaded.
 
 One honest qualification: **if an operator sets `retrieve.max_promptguard_chunks` to `0`
 the rule does not hold**, because there is no chunk budget to multiply — the worst-case hold
 is bounded only by the 10 MB fetch cap, which is far more windows than any wait in range
-covers. The shipped default pair (`64` and `30.0`) is bounded; the opt-out pair (`0` and
-`30.0`) is the known risk below.
+covers.
 
-**Known risk — the opt-out pair.** `retrieve.max_promptguard_chunks: 0` with
-`promptguard_wait_seconds: 30.0` leaves the permit hold unbounded by anything but the fetch
-cap, so a single large fetched page can time out every other request's wait. The signal is
-`retrieve.classification_wait_timeouts` and `search.classification_wait_timeouts` on
-`/metrics` rising while `/health` still reports `promptguard_loaded: true` — contention,
-not a missing model. Watch both counters after enabling `/retrieve` at volume, and drop the
-`0` opt-out (the default of 64 bounds the hold).
+**Known risk.** The shipped pair (`64` and `30.0`) bounds the hold, and fits the wait only
+where the per-window cost is at most about 0.47 s at k = 1 (the table above: it does on
+the bare-host rows, not on the Docker Desktop container rows). Two settings reopen the
+risk: the `0` opt-out, and any budget above the fitting one for your CPU count. Either lets
+a single large fetched page time out every other request's wait, and fail-open
+those requests serve unscanned. The signal is `retrieve.classification_wait_timeouts` and
+`search.classification_wait_timeouts` rising while `/health` still reports
+`promptguard_loaded: true` — contention, not a missing model. Watch both counters after
+enabling `/retrieve` at volume; set `promptguard_fail_closed` if unscanned service is
+unacceptable.
 
 ---
 

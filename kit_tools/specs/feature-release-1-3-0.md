@@ -555,6 +555,27 @@ merging and the owner gates are all that remain.
 - Three markup-probe tests in `tests/test_orchestrator.py` send a 2 MB page and now pass
   `RetrieveSettings(max_promptguard_chunks=0)` explicitly.
 
+### US-002 — per-window cost and sizing guidance
+- **Harness:** `/tmp/pgbench/bench.py` (scratchpad, not kept; `scripts/bench_promptguard.py` is the
+  end-to-end tool). `DebertaV2ForSequenceClassification(DebertaV2Config(...))`, random init, no
+  network. No local 86M `config.json` snapshot exists (HF cache holds only all-MiniLM-L6-v2), so the
+  mDeBERTa-v3-base hyperparameters from the story were used verbatim: hidden 768, layers 12, heads 12,
+  intermediate 3072, vocab 251000, relative_attention, position_buckets 256, max_relative_positions -1,
+  pos_att_type [p2c, c2p], norm_rel_ebd layer_norm, share_att_key, position_biased_input False,
+  num_labels 2. Input: 512 random ids, **batch size 1** (`classifier.py` runs `model(**inputs)` per
+  chunk). Warm (3 warmups), median of 20, torch 2.14 / transformers 5.16.1.
+- **Per-window median:** bare host (M-series Mac) **283 ms @ 1 thread, 189 ms @ 4 threads** (lower
+  bounds). Repo image `forage:release-1.2.1-candidate` under `docker run --network none --cpus N`
+  (Docker Desktop arm64 VM): **2,989 ms @ 1 CPU, 694 ms @ 4 CPUs**.
+- **Finding that departs from the hint:** the container figures are ~10x the bare host, so the
+  shipped 64 x 30 s pair does **not** fit on this Docker Desktop envelope (64 x 2.99 s = 191 s); it
+  fits on the bare-host lower bounds. The docs say so and give the fitting budgets (10 / 43 container,
+  105 / 158 bare host). Native Linux Docker was not available to confirm; the 1-CPU container figure
+  is likely pessimistic.
+- Docs: `docs/configuration.md` bench table header/caption re-labelled end-to-end; "Sizing" section
+  rewritten (measured table, k = 1-3 holds, wait-expiry behaviour via `unavailable_result`, Known
+  risk). `grep -n "100 ms" docs/configuration.md` is empty. No hashed file touched; no rotation.
+
 ## Refinement Notes
 
 ### Research Findings
