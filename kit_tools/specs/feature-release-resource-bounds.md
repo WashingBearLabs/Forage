@@ -345,24 +345,24 @@ fresh one, a symlink, a foreign-prefix file and a subdirectory entry all survive
 - **Docs.** The at-rest lifecycle goes in `docs/configuration.md` and SECURITY.md.
 
 **Acceptance Criteria:**
-- [ ] `/extract`'s spool prefix is `forage-extract-`, and the existing upload tests pass.
-- [ ] Startup removes an aged euid-owned regular file for each of the `forage-extract-`,
+- [x] `/extract`'s spool prefix is `forage-extract-`, and the existing upload tests pass.
+- [x] Startup removes an aged euid-owned regular file for each of the `forage-extract-`,
       `forage-retrieve-` and `poppy-extract-` prefixes. It keeps a fresh prefixed file, a
       symlink, a foreign-prefix file and an entry in a subdirectory (one test each, with `mtime`
       set via `os.utime`).
-- [ ] Unlinks are `dir_fd`-relative after a no-follow `stat`. Covered by two tests:
+- [x] Unlinks are `dir_fd`-relative after a no-follow `stat`. Covered by two tests:
   - a seam swaps the entry for a symlink to an outside file after the stat; the outside file
     survives;
   - `FileNotFoundError`, `IsADirectoryError` and `PermissionError` during unlink are swallowed
     without logging a name.
-- [ ] The PDF worker's spool prefix is `forage-retrieve-pdf-` (test). The age gate uses the
+- [x] The PDF worker's spool prefix is `forage-retrieve-pdf-` (test). The age gate uses the
       maximum permitted wall clock (test with a raised running value).
-- [ ] The log record is a closed token plus a count (test).
-- [ ] The configuration and security docs describe the lifecycle.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The log record is a closed token plus a count (test).
+- [x] The configuration and security docs describe the lifecycle.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-005: The HTML extraction worker — shared stage-1 function, strict frame, measured envelope
 
