@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: release-resource-bounds
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: "T2 hardening follow-through — bound the remaining CPU costs and cut v1.3.0"
@@ -11,7 +11,8 @@ epic: forage-v1-3-0-release
 epic_seq: 1
 epic_final: false
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
+completed: 2026-10-08
 ---
 
 # Feature Spec: Release Resource Bounds — Linear Stage 1, HTML Parse in a Scrubbed Rlimited Worker, `/search` off the Loop
