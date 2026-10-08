@@ -2577,3 +2577,28 @@ captures are unchanged.
 `orchestrator.py` is the only hashed source that moved; the reversal copied the working tree to a temp
 directory and replaced it with `git show HEAD:pipeline/orchestrator.py`, read-only. Not a
 sanitization-behaviour change. Not replayed to Poppy.
+
+### The fifty-seventh rotation: a refused look-alike fold blocks (`release-padding-gate` US-001)
+
+`fold_scan_forms` refuses a fold past `max(2n, n + 256)` (was 4n), both passes against the same limit, strictly `>`.
+`scan_structural_forms` returns BLOCKED (penalty `0.0`, the `encoded_payload` refusal flag appended to any flags
+already found) instead of SUSPICIOUS, so `/retrieve` (trusted and default tier) and `/extract` quarantine
+(`title: null`, GOVERNANCE ruling (m)) and `/search` omits the result under `structural_blocked` with
+`field=title|snippet` (title before snippet, fold before inline). Stage 3's input is unchanged and a blocked page
+skips stage 3. This is the **eighteenth sanitization-behaviour-changing rotation**: padding with expanding
+characters can no longer switch the look-alike scan off for a page that is still served.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`74e47e5`) / both files reverted (= all-reverted control) | `d582f8dad7ce7c37d41faf5bca47ec5daf9c1edfba9eefc0086560513b4a523c` |
+| `stage2_structural.py` reverted alone | `42b2c13127cfd7e137ad91259e1dac35a13fd3e73419d6d2ab0bb8a256051c66` |
+| `orchestrator.py` reverted alone | `3e789a3d5514581c8cfa459c2093d933c0ba1c8972fc3447cf1d83dfd082ee70` |
+| After | `23444fe43e67bab3768e8e095bb3231f91a76a5f9e500b83dcff05338f7c5925` |
+
+Every reversal was read-only: the working tree's `pipeline/` and `url_validator.py` were copied to a temp directory and
+the file replaced by `git show 74e47e5:pipeline/<file>`. Pre-change measurement (732 benign stage-2 fields, every
+route form): maximum fold/n ratio 1.0-1.18 per genre, **0** fields over `max(2n, n + 256)` (and 0 over the old
+4n). Cost at 2 MiB, back to back in one process, GC off, median of 5: pre shape (U+FDFA + 5 ASCII, old limit)
+4.141 s, post shape (16 ASCII + U+FDFA, new limit) 2.263 s, ratio 54.6% (an earlier pre-shape median of 3 was 4.100 s).
+The corpus baseline and floors regenerate byte-identically, `floors_diff` reports 0 problems and `--baseline-fpr`
+0 rises (exempt `ben-0288`, `ben-0289`), and both cassettes are byte-unchanged. Not replayed to Poppy.

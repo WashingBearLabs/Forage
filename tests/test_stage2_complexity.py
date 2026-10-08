@@ -29,6 +29,7 @@ import pytest
 from models import Stage2Verdict
 from pipeline.stage2_structural import (
     _PATTERNS,
+    fold_scan_forms,
     scan_structural,
     scan_structural_forms,
     structural_scan_forms,
@@ -238,14 +239,17 @@ def test_the_decoded_form_scales_linearly_on_entity_input(
     )
 
 
-# U+FDFA expands 18x under NFKC: refused past 4x, so its sweep times the refusal.
-# One U+FDFA plus five ASCII is 3.83x, the largest expansion the fold accepts,
-# so its sweep times the whole fold (both I/l readings) plus the scan of each form.
-# That input builds and scans two 8M-character forms, so it gets four times the
+# U+FDFA expands 18x under NFKC: refused past max(2n, n + 256), so its sweep
+# times the refusal. Sixteen ASCII then one U+FDFA is 34 out for 17 in, exactly
+# 2x, the largest expansion the fold accepts at 2 MiB, so its sweep times the
+# whole fold (both I/l readings) plus the scan of each form. ASCII goes first
+# because `_fill` truncates the repeated unit: a trailing U+FDFA with fewer than
+# sixteen ASCII after it would push the total over 2x and time the refusal. That
+# input builds and scans two 4M-character forms, so it gets a multiple of the
 # single-form ceiling; the ratio bound is what proves it linear.
 _FOLD_SHAPES: dict[str, str] = {
     "maximal_nfkc_expansion": "\ufdfa",
-    "maximal_accepted_expansion": "\ufdfa" + "a" * 5,
+    "maximal_accepted_expansion": "a" * 16 + "\ufdfa",
     "ambiguous_dense": "\u0406gnore ",
     "lookalike_dense": "\u0456gn\u043er\u0435 pr\u0435vi\u043eus ",
 }
@@ -259,12 +263,16 @@ def test_the_fold_forms_scale_linearly_through_the_whole_scan(shape: str) -> Non
         return scan_structural_forms(structural_scan_forms(text, html_parsed=False))
 
     small, large = _fill(unit, _SMALL), _fill(unit, _LARGE)
+    if shape == "maximal_accepted_expansion":
+        # The sweep must time the whole accepted fold, never the refusal.
+        assert fold_scan_forms(large).refused is False
+        assert fold_scan_forms(small).refused is False
     t_small = _best_of_three(lambda: scan(small))
     t_large = _best_of_three(lambda: scan(large))
-    # Measured ~6x calibration for the dense look-alike shapes and ~19x for the
-    # maximal accepted expansion (two 8M-character forms); ~2x headroom each.
+    # Measured ~6x calibration for the dense look-alike shapes and ~9.4x for the
+    # maximal accepted expansion (two 4M-character forms); ~2x headroom each.
     if shape == "maximal_accepted_expansion":
-        ceiling = _ceiling(40, floor=4 * _CEILING_SECONDS)
+        ceiling = _ceiling(19, floor=4 * _CEILING_SECONDS)
     else:
         ceiling = _ceiling(12)
     assert t_large <= ceiling, f"{shape}: {t_large:.2f}s at 2 MiB"

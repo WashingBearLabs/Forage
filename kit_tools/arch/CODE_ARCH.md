@@ -475,8 +475,8 @@ cassettes are keyed by the sha256 of stage-3 input. Everything new is scan-only:
   (`decode_scan_text`: one `html.unescape` level after a parse, two otherwise, then control strip
   and `normalize_text`), and the confusable fold of the decode (`fold_scan_forms`:
   `PRE_NFKC_TABLE` → NFKC → `FOLD_TABLE`, one form per I/l reading, deduplicated). The fold is
-  built in NFKC-safe chunks and refused past four times the decoded length; a refusal surfaces
-  as an `encoded_payload` flag, never a truncated fold. `scan_structural_forms` consumes the
+  built in NFKC-safe chunks and refused past `max(2n, n + 256)`; a refusal surfaces as a BLOCKED
+  result carrying an `encoded_payload` flag (`/search` omits the result), never a truncated fold. `scan_structural_forms` consumes the
   generator and keeps the worst verdict; `combine_scan_results` merges results from other
   forms (as-is flags win ties, because the wire carries one entry per span).
 - Every pattern is linear by construction: gaps are tempered tokens
@@ -503,7 +503,9 @@ US-001, stage 1 made linear, output byte-identical) moves it to `0ace27ca…`; t
 (US-006, large `/retrieve` HTML bodies routed to the worker, output byte-identical) moves it to
 `54aa9649…`; the fifty-fifth (US-007, contract `1.4.0` announcement, `contract.py` alone) moves it to
 `ff18b0bf…`; the fifty-sixth (US-008, `/search` parse moved to a worker thread, `orchestrator.py` alone,
-output byte-identical) moves it to `d582f8da…`.
+output byte-identical) moves it to `d582f8da…`; the fifty-seventh (`release-padding-gate` US-001, a refused
+look-alike fold BLOCKS at `max(2n, n + 256)`, `stage2_structural.py` and `orchestrator.py`, the eighteenth
+sanitization-behaviour-changing rotation) moves it to `23444fe4…`.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public

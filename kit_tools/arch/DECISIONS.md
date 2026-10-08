@@ -1132,7 +1132,8 @@ table (unreviewable or single-maintainer; rejected).
    UTS #39 data plus an owner-reviewed supplement, with a generated pre-NFKC table and **two**
    readings of the ambiguous I/l class. The module is a hashed source and `unicodedata@<version>`
    a revision input, because NFKC depends on the interpreter's Unicode database. A fold that would
-   pass four times the decoded length is refused and flagged, never truncated.
+   pass `max(2n, n + 256)` (four times the decoded length when this was written) is refused,
+   never truncated, and the refusal blocks (`release-padding-gate` US-001).
 4. **A block-allowlist linear walk** builds the inline-joined form: unknown elements join (the
    closed direction for catch), and no tree is mutated.
 5. **A first-match raw-source markup scan** for three patterns (`system_tag`, `private_ip_href`,
@@ -1153,7 +1154,7 @@ attackers defeat row-shaped fixes (arXiv 2510.09023).
 
 **Consequences:** Nine `sanitizer_revision` rotations (forty-fourth to fifty-second) end at
 `46b8d1bb…`; they ship as one cache-invalidating window (the v1.3.0 `release-resource-bounds` US-001 adds a
-fifty-third, `0ace27ca…`, with byte-identical output, US-006 a fifty-fourth, `54aa9649…`, US-007 a fifty-fifth, `ff18b0bf…`, and US-008 a fifty-sixth, `d582f8da…`). Stage 2 remains an evidence signal, not a
+fifty-third, `0ace27ca…`, with byte-identical output, US-006 a fifty-fourth, `54aa9649…`, US-007 a fifty-fifth, `ff18b0bf…`, US-008 a fifty-sixth, `d582f8da…`, and `release-padding-gate` US-001 a fifty-seventh, `23444fe4…`, which makes a refused look-alike fold a BLOCK). Stage 2 remains an evidence signal, not a
 boundary: the unmitigated technique classes are listed in `kit_tools/arch/SECURITY.md` ("Stage 2
 scan forms"). Feeding normalised text to stage 3 is a later epic with an owner recording gate.
 

@@ -26,3 +26,6 @@
 - Files: pipeline/contract.py, retrieval_app.py, tests/golden/contract_1_4_0.json
 [17:59] US-008: /search parse+markup scans moved to one to_thread per result; rotation 56th d582f8da
 - Files: pipeline/orchestrator.py, tests/test_search_parse_thread.py, docs
+[--:--] US-001 release-padding-gate: fold limit max(2n,n+256), refusal BLOCKs on all routes; rotation 57th d582f8da -> 23444fe4
+- Files: pipeline/stage2_structural.py, pipeline/orchestrator.py, tests/test_stage2_fold_forms.py, docs
+- Decision: /search refusal uses early continue (not hoisted blocked); per-source tests patch _scan_search_result_fields

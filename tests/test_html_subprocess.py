@@ -259,7 +259,7 @@ class TestFoldRefusalParity:
 
         assert self._tokens(caplog) == in_thread
         assert len(in_thread) == 1
-        assert scan is not None and scan.verdict == Stage2Verdict.SUSPICIOUS
+        assert scan is not None and scan.verdict == Stage2Verdict.BLOCKED
 
 
 class TestRealWorker:

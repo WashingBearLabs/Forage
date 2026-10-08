@@ -375,8 +375,8 @@ catch on an attack variant (`params.variant`) as the work of one of these forms:
 - **Confusable-folded** — the decoded form passed through the generated look-alike table,
   NFKC and the Latin fold, under **two** readings of the ambiguous capital-I / lower-l
   class (one reading each way, so neither hides the other). Closes `confusable` variants
-  that the table covers; a fold that would expand past its bound is refused and flagged,
-  never truncated.
+  that the table covers; a fold that would expand past its bound (`max(2n, n + 256)`) is refused, never
+  truncated, and the refusal is a block.
 - **Inline-joined** (HTML only) — the page flattened with inline elements joined into their
   text and line breaks only at block boundaries. Closes `split_tags` variants, where an
   inline tag split a keyword across text nodes.

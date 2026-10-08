@@ -704,6 +704,17 @@ a whole parse. `orchestrator.py` is the only hashed file that moves; reverting i
 `bench/config.yaml`. Wire output and the six `8e449fc` captures are byte-identical. Not
 replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
 
+The fifty-seventh rotation is `d582f8da…` → `23444fe4…` for
+`release-padding-gate` US-001 — **the eighteenth sanitization-behaviour-changing
+rotation**: the look-alike fold limit becomes `max(2n, n + 256)` (was 4n) and a refused fold
+**BLOCKS** on every route and tier (penalty 0.0, `encoded_payload` flag kept) where it was a
+SUSPICIOUS flag; `/search` omits the result as `structural_blocked`. `stage2_structural.py`
+and `orchestrator.py` move, each reverted alone read-only against `74e47e5` (`42b2c131…`
+and `3e789a3d…`), with an all-reverted control reproducing `d582f8da…` under default,
+`config.yaml` and `bench/config.yaml`. GOVERNANCE ruling (m): no bump; the corpus baseline,
+floors and both cassettes are byte-unchanged. Not replayed to Poppy. Full values:
+`docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

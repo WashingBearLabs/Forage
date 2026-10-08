@@ -1955,22 +1955,32 @@ async def run_search_pipeline(
 
         # Confusable fold forms of the two text fields' scan forms. URLs are
         # excluded: `_SEARCH_URL_RULES` already audits them. A refused fold
-        # (expansion past 4x) is flagged SUSPICIOUS, never silently skipped.
+        # (expansion past max(2n, n + 256)) omits the result as a structural
+        # block, never silently skipped: a flag would let padding switch the
+        # look-alike scan off for a result that is still served.
         title_fold = fold_scan_forms(title_scan_text)
         snippet_fold = fold_scan_forms(snippet_scan_text)
-        if title_fold.refused or snippet_fold.refused:
-            suspicious = True
         # The inline-joined text goes through the same builder (decode and
         # fold forms), one more entry per field; its first form is as-is.
         title_inline_forms = structural_scan_forms(title_inline, html_parsed=True)
         snippet_inline_forms = structural_scan_forms(snippet_inline, html_parsed=True)
         title_inline_list = list(title_inline_forms)
         snippet_inline_list = list(snippet_inline_forms)
-        if (
-            title_inline_forms.expansion_refused
-            or snippet_inline_forms.expansion_refused
-        ):
-            suspicious = True
+        # Title before snippet, fold before inline: the scan loop's own order.
+        refused_field: str | None = None
+        if title_fold.refused or title_inline_forms.expansion_refused:
+            refused_field = "title"
+        elif snippet_fold.refused or snippet_inline_forms.expansion_refused:
+            refused_field = "snippet"
+        if refused_field is not None:
+            logger.info(
+                "search_result_omitted reason=%s domain=%s field=%s",
+                contract.OMIT_STRUCTURAL_BLOCKED,
+                domain,
+                refused_field,
+            )
+            omitted_by_reason[contract.OMIT_STRUCTURAL_BLOCKED] += 1
+            continue
 
         # Stage 2: scan every model-visible field before exposing the result.
         blocked = False

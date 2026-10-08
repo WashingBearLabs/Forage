@@ -199,8 +199,12 @@ below is claimed to hold for text outside the corpus.
   `confusables.txt` (pinned by sha256) plus an owner-reviewed supplement, with a pre-NFKC table
   for mappings NFKC would otherwise destroy, and two readings of the ambiguous capital-I /
   lower-l class. It covers single-code-point look-alikes with an ASCII prototype, nothing more.
-  The fold is refused (never truncated) once it would exceed four times the decoded length;
-  the refusal adds an `encoded_payload` flag, so the result is `suspicious`, not `blocked`.
+  The fold is refused (never truncated) once it would exceed `max(2n, n + 256)` for a decoded
+  form of `n` characters, and the refusal is a **BLOCK** on every route and tier (`/retrieve`
+  trusted and default, `/extract`; `/search` omits the result), carrying an `encoded_payload`
+  flag. A flag would let expanding-character padding switch the fold off for a page still
+  served. The constant slack is not a bypass: text inside it is still folded and scanned, and
+  it keeps short real fields (a 6-character Arabic title ending in U+FDFA) from being blocked.
 - **Raw-markup subset.** `scan_raw_markup` runs `system_tag`, `private_ip_href` and
   `envelope_breakout` once each over the whitespace-collapsed raw source, first match only,
   because the parser consumes those triggers. It adds a verdict and cuts nothing.

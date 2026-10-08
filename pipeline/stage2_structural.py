@@ -375,11 +375,16 @@ def decode_scan_text(text: str, *, unescape_levels: int) -> str:
     return normalize_text(strip_control_chars(text))
 
 
-# The fold forms may be at most this many times the decoded form's length. NFKC
-# expands a character up to 18x (U+FDFA), and `/retrieve` text is not capped, so
-# the fold is built incrementally and refused -- loudly, never truncated -- once
-# it would pass the bound.
-_FOLD_EXPANSION_LIMIT = 4
+# The fold forms may be at most `max(2 * n, n + 256)` characters for a decoded
+# form of `n`. NFKC expands a character up to 18x (U+FDFA), and `/retrieve` text
+# is not capped, so the fold is built incrementally and refused once it would
+# pass the bound. A refusal BLOCKS (`scan_structural_forms`): padding must not be
+# a way to switch the look-alike scan off for a page that is still served. The
+# constant slack keeps short real fields (a 6-character title ending in U+FDFA
+# is 3.83x) folding normally, and is no bypass: text inside it is still folded
+# and scanned, and the bound on large inputs stays linear.
+_FOLD_EXPANSION_LIMIT = 2
+_FOLD_SLACK = 256
 _FOLD_CHUNK = 1 << 16
 
 _PRE_NFKC_MAP = {ord(k): v for k, v in PRE_NFKC_TABLE.items()}
@@ -434,12 +439,13 @@ def fold_scan_forms(decoded: str) -> FoldForms:
     normalisation. When the post-NFKC text holds any ``AMBIGUOUS_IL`` member a
     second form reads those as ``i`` instead of ``l``. Forms equal to
     ``decoded`` are not repeated. Built chunk by chunk; if the fold would pass
-    four times ``len(decoded)`` nothing is returned but the refusal, which the
-    caller must flag (a truncated fold would be a padding bypass).
+    ``max(2 * len(decoded), len(decoded) + 256)`` nothing is returned but the
+    refusal, which the caller must BLOCK on (a truncated fold would be a padding
+    bypass, and a merely flagged one switches the look-alike scan off).
     """
     if decoded.isascii():
         return FoldForms()
-    limit = _FOLD_EXPANSION_LIMIT * len(decoded)
+    limit = max(_FOLD_EXPANSION_LIMIT * len(decoded), len(decoded) + _FOLD_SLACK)
     # Pass one: the seams and the NFKC length alone, keeping nothing. The fold
     # is never shorter than its NFKC form, so a text that is over the limit
     # here is refused before a single (expensive) table translation runs.
@@ -558,7 +564,9 @@ def scan_structural_forms(forms: Iterable[str]) -> StructuralScanResult:
 
     BLOCKED is the maximum verdict, so stopping cannot change the outcome.
     When ``forms`` came from ``structural_scan_forms`` and its fold was refused
-    for expansion, the result also carries an ``encoded_payload`` flag.
+    for expansion, the result is BLOCKED (penalty 0.0, as ``scan_structural``
+    returns for BLOCKED), keeping any flags already found and adding the
+    ``encoded_payload`` refusal flag.
     """
     best = StructuralScanResult(verdict=Stage2Verdict.CLEAN)
     for form in forms:
@@ -566,12 +574,10 @@ def scan_structural_forms(forms: Iterable[str]) -> StructuralScanResult:
         if best.verdict == Stage2Verdict.BLOCKED:
             return best
     if isinstance(forms, ScanForms) and forms.expansion_refused:
-        flags = [*best.flags, expansion_refused_flag()]
-        suspicious_count = sum(1 for f in flags if f.category in _SUSPICIOUS_CATEGORIES)
         return StructuralScanResult(
-            verdict=Stage2Verdict.SUSPICIOUS,
-            flags=flags,
-            penalty=max(-0.45, -0.15 * suspicious_count),
+            verdict=Stage2Verdict.BLOCKED,
+            flags=[*best.flags, expansion_refused_flag()],
+            penalty=0.0,
         )
     return best
 

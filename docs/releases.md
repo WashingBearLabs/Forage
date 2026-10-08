@@ -43,8 +43,8 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   private-IP `href`/`src`, envelope tags) also run on the raw markup the parser would
   consume. Pages and search results using those case, entity, newline-split, confusable,
   inline-tag-split or markup-consumed variants are now `blocked` or `suspicious` where they
-  previously passed. Stage 3's input is byte-unchanged; a fold that would expand past 4× is
-  refused and the page flagged `suspicious` (`encoded_payload`), never truncated.
+  previously passed. Stage 3's input is byte-unchanged; a fold that would expand past
+  `max(2n, n + 256)` is refused and the page blocked (`encoded_payload`), never truncated.
 - **Quarantined responses now carry `title: null`.** A `/retrieve` or `/extract` response
   that is blocked (stage-2 block, stage-3 injection, or `unavailable_blocked`) no longer
   echoes the document's `<title>`; the body was already replaced and now the title goes
@@ -83,6 +83,14 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
 - **A fifty-sixth rotation, `ff18b0bf…` → `d582f8dad7ce7c37d41faf5bca47ec5daf9c1edfba9eefc0086560513b4a523c`**
   (`release-resource-bounds` US-008): `/search` parses titles and snippets in a worker thread
   (`orchestrator.py` alone). Output is byte-identical; old cache entries still become misses.
+- **A fifty-seventh rotation, `d582f8da…` → `23444fe43e67bab3768e8e095bb3231f91a76a5f9e500b83dcff05338f7c5925`**
+  (`release-padding-gate` US-001, the eighteenth sanitization-behaviour-changing rotation): the
+  look-alike fold limit is `max(2n, n + 256)` (was 4n) and a refused fold is a **BLOCK** on every
+  route and tier, where it was a SUSPICIOUS flag: `/retrieve` (trusted and default) and `/extract`
+  quarantine the page, `/search` omits the result as `structural_blocked`. Short real fields
+  (a 6-character title ending in U+FDFA) still fold. The worst accepted fold at 2 MiB costs about
+  55% of the old one. No response-shape change and no contract bump (GOVERNANCE ruling (m)); the
+  corpus baseline, floors and both cassettes are byte-unchanged; old cache entries become misses.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 
