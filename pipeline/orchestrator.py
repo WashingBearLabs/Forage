@@ -1087,6 +1087,42 @@ def _scan_forms_for_search_text(value: object, *, max_length: int) -> SearchScan
     return SearchScanForms(" ".join(scan_form.split()), scan_form, inline)
 
 
+@dataclass(frozen=True, slots=True)
+class _SearchResultScans:
+    """Every parse-bound derivation of one result's title and snippet."""
+
+    title: SearchScanForms
+    snippet: SearchScanForms
+    title_markup: StructuralScanResult
+    snippet_markup: StructuralScanResult
+
+
+def _scan_search_result_fields(raw: dict[str, Any]) -> _SearchResultScans:
+    """Build both fields' scan forms and raw-markup scans -- the thread body.
+
+    Everything in here is a pure function of the provider's raw ``title`` and
+    ``content``: the HTML parse (``extract_html``) and ``scan_raw_markup``.
+    ``run_search_pipeline`` runs it once per result in a worker thread so the
+    event loop is not held for a whole parse.
+    """
+    raw_title = raw.get("title", "")
+    raw_snippet = raw.get("content", "")
+    return _SearchResultScans(
+        title=_scan_forms_for_search_text(
+            raw_title, max_length=_MAX_SEARCH_TITLE_LENGTH
+        ),
+        snippet=_scan_forms_for_search_text(
+            raw_snippet, max_length=_MAX_SEARCH_SNIPPET_LENGTH
+        ),
+        title_markup=scan_raw_markup(
+            _search_markup_entry(raw_title, max_length=_MAX_SEARCH_TITLE_LENGTH)
+        ),
+        snippet_markup=scan_raw_markup(
+            _search_markup_entry(raw_snippet, max_length=_MAX_SEARCH_SNIPPET_LENGTH)
+        ),
+    )
+
+
 SearchUrlRule = Literal[
     "missing",
     "too_long",
@@ -1866,10 +1902,6 @@ async def run_search_pipeline(
         if len(sanitized_results) >= request.num_results:
             break
 
-        title, title_scan_text, title_inline = _scan_forms_for_search_text(
-            raw.get("title", ""),
-            max_length=_MAX_SEARCH_TITLE_LENGTH,
-        )
         url_outcome = _canonicalize_search_url(raw.get("url", ""))
         if url_outcome.domain is not None and any(
             hostname_matches(url_outcome.domain, entry, allow_suffix=True)
@@ -1901,10 +1933,17 @@ async def run_search_pipeline(
                 )
             omitted_by_reason[omission_reason or contract.OMIT_INVALID_URL] += 1
             continue
-        snippet, snippet_scan_text, snippet_inline = _scan_forms_for_search_text(
-            raw.get("content", ""),
-            max_length=_MAX_SEARCH_SNIPPET_LENGTH,
-        )
+        # One thread hop per result, after the cheap URL verdict so a rejected
+        # result parses nothing. `completed_thread` keeps this request from
+        # returning (and the caller from tearing down) until the thread is done,
+        # even under cancellation. The hop time counts toward the per-request
+        # classification deadline and `sanitization_latency_max_ms`.
+        async with completed_thread(
+            asyncio.to_thread(_scan_search_result_fields, raw)
+        ) as parse_worker:
+            scans = parse_worker.result()
+        title, title_scan_text, title_inline = scans.title
+        snippet, snippet_scan_text, snippet_inline = scans.snippet
         engine = _normalize_search_text(
             raw.get("engine"), max_length=_MAX_SEARCH_ENGINE_LENGTH
         )
@@ -1954,28 +1993,18 @@ async def run_search_pipeline(
             ("title", title),
             *(("title", form) for form in title_fold.forms),
             *(("title", form) for form in title_inline_list),
-            (
-                "title",
-                _search_markup_entry(
-                    raw.get("title", ""), max_length=_MAX_SEARCH_TITLE_LENGTH
-                ),
-            ),
+            ("title", scans.title_markup),
             ("url", url_outcome.scan_texts[0]),
             ("url", url_outcome.scan_texts[1]),
             ("snippet", snippet_scan_text),
             ("snippet", snippet),
             *(("snippet", form) for form in snippet_fold.forms),
             *(("snippet", form) for form in snippet_inline_list),
-            (
-                "snippet",
-                _search_markup_entry(
-                    raw.get("content", ""), max_length=_MAX_SEARCH_SNIPPET_LENGTH
-                ),
-            ),
+            ("snippet", scans.snippet_markup),
         ):
             scan = (
-                scan_raw_markup(field_text)
-                if isinstance(field_text, _RawMarkup)
+                field_text
+                if isinstance(field_text, StructuralScanResult)
                 else scan_structural(field_text)
             )
             if scan.verdict == Stage2Verdict.BLOCKED:

@@ -695,6 +695,15 @@ that moves; a read-only whole-file reversal against `HEAD` reproduces `54aa9649�
 default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` is not hashed. Not replayed
 to Poppy. Full values: `docs/bootstrap-notes.md`.
 
+The fifty-sixth rotation is `ff18b0bf…` → `d582f8da…` for
+`release-resource-bounds` US-008 — **not a sanitization-behaviour change**: `/search`
+builds each result's title and snippet scan forms and runs both raw-markup scans in one
+`asyncio.to_thread` per result, inside `completed_thread`, so the event loop is not held for
+a whole parse. `orchestrator.py` is the only hashed file that moves; reverting it alone
+(and so all-reverted) against `HEAD` reproduces `ff18b0bf…` under default, `config.yaml` and
+`bench/config.yaml`. Wire output and the six `8e449fc` captures are byte-identical. Not
+replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

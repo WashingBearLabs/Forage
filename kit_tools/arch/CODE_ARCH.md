@@ -502,7 +502,8 @@ controls are in `docs/bootstrap-notes.md`. The fifty-third rotation (`release-re
 US-001, stage 1 made linear, output byte-identical) moves it to `0ace27ca…`; the fifty-fourth
 (US-006, large `/retrieve` HTML bodies routed to the worker, output byte-identical) moves it to
 `54aa9649…`; the fifty-fifth (US-007, contract `1.4.0` announcement, `contract.py` alone) moves it to
-`ff18b0bf…`.
+`ff18b0bf…`; the fifty-sixth (US-008, `/search` parse moved to a worker thread, `orchestrator.py` alone,
+output byte-identical) moves it to `d582f8da…`.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public

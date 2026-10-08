@@ -80,6 +80,9 @@ Not yet tagged; the version number is decided at the release gate. Contract stay
   (`release-resource-bounds` US-007): the held contract `1.4.0` entry (`contract.py` alone)
   announces `html_extraction_error` and `retrieve.html_worker_spawns` / `html_worker_refusals`.
   No sanitization or served-body change; old cache entries still become misses.
+- **A fifty-sixth rotation, `ff18b0bf…` → `d582f8dad7ce7c37d41faf5bca47ec5daf9c1edfba9eefc0086560513b4a523c`**
+  (`release-resource-bounds` US-008): `/search` parses titles and snippets in a worker thread
+  (`orchestrator.py` alone). Output is byte-identical; old cache entries still become misses.
 - GOVERNANCE worked example 6's announce-then-flip window was **waived** by the owner for
   the default-model change (no known third-party consumers).
 

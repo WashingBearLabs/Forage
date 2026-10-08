@@ -2560,3 +2560,20 @@ reason. `tests/golden/contract_1_4_0.json` is new and held; goldens 1.0.0-1.3.0 
 `contract.py` is the only hashed source that moved (`git diff --name-only`); the reversal loaded
 `git show HEAD:pipeline/contract.py` into a copy of the tree in a temp directory, read-only. `retrieval_app.py`
 and `models.py` are not hashed. Not a sanitization-behaviour change. Not replayed to Poppy.
+
+### The fifty-sixth rotation: `/search` parses off the event loop (`release-resource-bounds` US-008)
+
+`run_search_pipeline` runs `_scan_search_result_fields` (both fields' `extract_html` scan forms and both
+`scan_raw_markup` scans) in one `asyncio.to_thread` per result, inside `completed_thread`, after the URL
+verdict, so a rejected result parses nothing and a zero-result provider makes no hop. The loop scans the
+precomputed markup results instead of calling `scan_raw_markup` itself. Wire output and the six `8e449fc`
+captures are unchanged.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`HEAD`) / `orchestrator.py` reverted (= all-reverted control) | `ff18b0bfb436e14ea19269c54d1582991797eec9c055ea35260ff80959a0528c` |
+| After | `d582f8dad7ce7c37d41faf5bca47ec5daf9c1edfba9eefc0086560513b4a523c` |
+
+`orchestrator.py` is the only hashed source that moved; the reversal copied the working tree to a temp
+directory and replaced it with `git show HEAD:pipeline/orchestrator.py`, read-only. Not a
+sanitization-behaviour change. Not replayed to Poppy.

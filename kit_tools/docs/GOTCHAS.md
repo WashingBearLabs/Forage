@@ -716,7 +716,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved fifty-five times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved fifty-six times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -778,11 +778,12 @@ were recorded at their implementation boundaries:
 | `release-resource-bounds` US-001 | `0ace27ca…` | Fifty-third, **not a sanitization-behaviour change**: `stage1_extraction.py` alone. The three `copy.copy(soup)` sites are gone: `_extract_raw_text` is a non-mutating walk, `_prune_hidden(soup, html)` re-parses `html`, and the pruned fallback strips its private `pruned_soup` in place. Every `ExtractionResult` field is byte-identical (1,484 frozen digests); stage 3's input is unchanged. |
 | `release-resource-bounds` US-006 | `54aa9649…` | Fifty-fourth, **not a sanitization-behaviour change**: `orchestrator.py` (the byte-length routing branch, the 422 `html_extraction_error` and spool mapping, the spawn/refusal counters, `_extract_html_and_scan_inline` deleted) and `contract.py` (`RETRIEVE_HTML_EXTRACTION_ERROR`). Each reverted alone against `HEAD`; the both-reverted control reproduces `0ace27ca…`. The served response is byte-identical on either path (corpus comparison against `0`); only a worker refusal is a new, coded 422. |
 | `release-resource-bounds` US-007 | `ff18b0bf…` | Fifty-fifth, **not a sanitization-behaviour change**: only `contract.py` moves among the hashed sources (`CONTRACT_VERSION` `1.4.0` and the in-progress 1.4.0 entry naming `html_extraction_error` and the two worker counters). A read-only whole-file reversal against `HEAD` reproduces `54aa9649…` under default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` (the metrics fields and the 422 description) is not hashed. |
+| `release-resource-bounds` US-008 | `d582f8da…` | Fifty-sixth, **not a sanitization-behaviour change**: only `orchestrator.py` moves among the hashed sources (one `asyncio.to_thread` per `/search` result for the title/snippet parse and both raw-markup scans, inside `completed_thread`). A read-only whole-file reversal against `HEAD` reproduces `ff18b0bf…` under default, `config.yaml` and `bench/config.yaml`. Output byte-identical. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-six of the fifty-five rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Thirty-seven of the fifty-six rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),

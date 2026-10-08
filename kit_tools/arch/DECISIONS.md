@@ -1153,7 +1153,7 @@ attackers defeat row-shaped fixes (arXiv 2510.09023).
 
 **Consequences:** Nine `sanitizer_revision` rotations (forty-fourth to fifty-second) end at
 `46b8d1bb…`; they ship as one cache-invalidating window (the v1.3.0 `release-resource-bounds` US-001 adds a
-fifty-third, `0ace27ca…`, with byte-identical output, US-006 a fifty-fourth, `54aa9649…`, and US-007 a fifty-fifth, `ff18b0bf…`). Stage 2 remains an evidence signal, not a
+fifty-third, `0ace27ca…`, with byte-identical output, US-006 a fifty-fourth, `54aa9649…`, US-007 a fifty-fifth, `ff18b0bf…`, and US-008 a fifty-sixth, `d582f8da…`). Stage 2 remains an evidence signal, not a
 boundary: the unmitigated technique classes are listed in `kit_tools/arch/SECURITY.md` ("Stage 2
 scan forms"). Feeding normalised text to stage 3 is a later epic with an owner recording gate.
 

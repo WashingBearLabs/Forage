@@ -877,3 +877,10 @@ fields to the 1.3.0 entry.
 - **Q:** Move `/search` parsing off the event loop? **A:** Yes.
 - **Q:** Accept refusal of realistic pages above about 2 MB? **A:** Yes, and document it.
 - **Q:** Scrub the environment for the PDF worker too? **A:** Both workers.
+
+### US-008
+- Rotation 55th -> 56th: `ff18b0bf…` -> `d582f8da…` (`orchestrator.py` alone; measured, see `docs/bootstrap-notes.md`).
+- One `to_thread` per result (`_scan_search_result_fields`: both `extract_html` forms + both `scan_raw_markup` scans), inside `completed_thread`, after the URL verdict; rejected results parse nothing. Loop consumes the precomputed `StructuralScanResult`s.
+- One-off lag (10 hostile results, 2,048-char titles, 8,000-char snippets, `run_promptguard` stubbed, 1 ms ticker, macOS arm64, 3 runs each): maximum ticker lag pre 157.6-159.5 ms (≈ the whole 158-160 ms call) -> post 6.8-11.0 ms; total call 158-160 ms -> 172-174 ms. The GIL still serialises the CPU work; the hop gives the loop control at the switch interval.
+- Counters: classification-wait timeouts stay 0 and `sanitization_latency_max_ms` ≥ stub delay under a 40 ms stub parse (test). `docs/configuration.md` states the latency counters include hop time and the wait deadline is spent by it.
+
