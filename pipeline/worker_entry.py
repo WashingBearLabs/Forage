@@ -51,9 +51,17 @@ def _run_pdf(args: Sequence[str]) -> dict[str, object]:
     return run_pdf_worker(Path(path), settings)
 
 
+def _run_html(args: Sequence[str]) -> dict[str, object]:
+    from pipeline.html_subprocess import parse_budget_argument, run_html_worker
+
+    path, budget = args
+    return run_html_worker(Path(path), parse_budget_argument(budget))
+
+
 # kind -> (runner, ensure_ascii for its frame)
 _KINDS: dict[str, tuple[Callable[[Sequence[str]], dict[str, object]], bool]] = {
     "pdf": (_run_pdf, True),
+    "html": (_run_html, False),
 }
 
 

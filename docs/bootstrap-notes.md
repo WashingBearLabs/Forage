@@ -2462,3 +2462,33 @@ Best-of-1/3 seconds, `extract_html(with_inline=True, prune_hidden=True)`, 64 KiB
 
 `/search` field parse, one 8,000-character unclosed-span snippet: 47.7 ms before, 14.5 ms after.
 **Not replayed to Poppy:** compare contracts, not revisions.
+
+### HTML extraction worker (`release-resource-bounds` US-005)
+
+`pipeline/html_subprocess.py` (new, **unhashed**) holds `extract_html_and_scan`, a copy of
+`orchestrator._extract_html_and_scan_inline`, and `extract_html_bytes_in_subprocess`, which spools
+the page (URL in a header, never in argv; prefix `forage-retrieve-html-`) and runs the US-002
+launcher with kind `html`. `worker_entry.py` (unhashed) gained the `html` kind. `orchestrator.py`
+is **not** edited; US-006 re-points it. No rotation: default, `config.yaml` and
+`bench/config.yaml` revisions all stay `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911`.
+
+Field bounds: `extract_html` caps none of `title`, `author` and `date` (it takes the tag
+text, attribute or JSON-LD value as is), so each is bounded by `MAX_HTML_FRAME_BYTES`, like
+`raw_text` and `main_content`.
+
+Frame cap (`MAX_HTML_FRAME_BYTES` = 96 MiB), parent peak RSS while receiving, decoding and
+validating (fresh interpreter, 54.4 MiB baseline, macOS arm64):
+
+| Case | Frame | Peak RSS | Increase |
+|---|---|---|---|
+| budget off, 10 MiB body of C0 controls, both fields (6x) | 120 MiB | 442.4 MiB | 388.0 MiB (over 384) |
+| at the cap | 96 MiB | 390.8 MiB | 336.4 MiB |
+| 10 MiB of U+FFFD, both fields (3x) | 60 MiB | 269.8 MiB | 215.3 MiB |
+| 64 chunks, 114,688 chars per field, controls | 1.3 MiB | 57.3 MiB | 2.8 MiB |
+
+Linux envelope for realistic pages (Docker `--cpus 1 -m 1536m`, aarch64, no rlimits): child
+`VmPeak` / CPU including import: 0.5 MiB 143.3 MiB / 1.30 s; 1 MiB 215.4 MiB / 2.50 s;
+2 MiB 361.9 MiB / 5.82 s; 2.1 MiB 376.9 MiB / 6.00 s; 2.2 MiB 388.2 MiB / 6.44 s (over the
+384 MiB cap); 4 MiB 642.9 MiB / 16.41 s. Largest page that fits: about 2.1 MiB. Kill-test shape:
+768 KiB sibling-dense is 2.0-2.3 s CPU and a 316 MiB `VmPeak`, so it trips a 1 s CPU limit and
+not the address-space cap (512 KiB measured 1.27 s on macOS, 1.61 s / 235 MiB on Linux).

@@ -965,6 +965,59 @@ and `admission_queue_depth` (0–4).
 | `admission_queue_depth` | `1` | 0 – 4 | Requests allowed to wait for the extraction slot. `0` means reject immediately with `busy` (HTTP 429) whenever the slot is taken. |
 | `max_queued_upload_bytes` | `52428800` (50 MiB) | 0 – 50 MiB | Total bytes of queued uploads held in flight. `0` disables queuing of upload bodies. |
 
+#### The HTML worker's envelope
+
+`pipeline/html_subprocess.py` runs a fetched page's stage-1 work (`extract_html` plus the
+inline-form and raw-markup scans) in the same rlimited worker the PDF path uses, under the
+`extraction:` limits above (`child_cpu_seconds`, `child_address_space_bytes`,
+`wall_clock_seconds`). Routing `/retrieve` bodies to it lands in a later story; this section
+records what the worker itself costs. Any failure — a limit kill, a deadline, a malformed or
+forged frame, an oversize frame, a spawn error — is one `HTMLExtractionError`.
+
+**Import CPU counts against `child_cpu_seconds`.** The child applies `RLIMIT_CPU` before it
+imports its parsers, so the interpreter start and imports (about 0.33 s) are spent from the same
+budget as the parse. `child_cpu_seconds: 1` therefore leaves about 0.67 s of parsing.
+
+**Measured on Linux** (`docker run --cpus 1 -m 1536m`, python 3.12, aarch64, no rlimits applied
+so the peak is observable; realistic pages built from `div`/`h2`/`p`/`a`/`em`/nested `ul`).
+`VmPeak` is the child's peak *virtual* size — what `RLIMIT_AS` bounds — not its RSS. CPU is
+user+system for the whole child including import:
+
+| Body | Extracted chars | Child `VmPeak` | Child CPU | Under 384 MiB / 20 s |
+|---|---|---|---|---|
+| 0.5 MiB (524,361 B) | 249,140 | 143.3 MiB | 1.30 s | yes |
+| 1 MiB (1,048,783 B) | 498,390 | 215.4 MiB | 2.50 s | yes |
+| 2 MiB (2,097,364 B) | 996,765 | 361.9 MiB | 5.82 s | yes |
+| 2.1 MiB (2,202,301 B) | 1,046,640 | 376.9 MiB | 6.00 s | yes |
+| 2.2 MiB (2,306,975 B) | 1,096,390 | 388.2 MiB | 6.44 s | **no** (address space) |
+| 4 MiB (4,194,515 B) | 1,993,802 | 642.9 MiB | 16.41 s | **no** (address space) |
+
+**The largest realistic page that parses under 384 MiB / 20 s is about 2.1 MiB**
+(2,202,301 bytes measured); memory binds first, at roughly 140 MiB of virtual size per MiB of
+page. Raising `child_address_space_bytes` (up to 512 MiB) moves that to about 3 MiB; at 4 MiB
+the CPU is already 16.4 s of the 20 s limit. Hostile shapes (deep, unclosed or
+sibling-dense markup) cost more per byte than these pages and are cut off by the same limits.
+
+**The frame cap.** The worker answers with one JSON frame carrying `raw_text` and `main_content`;
+`MAX_HTML_FRAME_BYTES` (96 MiB) is both the cap on the whole frame and on every string field
+(`title`, `author` and `date` are not capped by `extract_html`, so the frame cap bounds them).
+A frame over the cap is refused, never truncated. Derivation, with
+`retrieve.max_promptguard_chunks: 0` (no budget) so both fields of a `DEFAULT_MAX_CONTENT_BYTES`
+(10 MiB) body cross:
+
+- Stage 1 does **not** strip C0 controls, and JSON escapes each as `\u00XX`: 6 bytes per source
+  byte, the worst case. Anything else grows at most 3x (an invalid byte becomes U+FFFD). Both
+  fields cross, so the unconstrained worst case is 2 x 6 x 10 MiB = 120 MiB; every
+  non-control-character 10 MiB body is at most 60 MiB and fits.
+- Parent peak RSS while receiving, decoding and validating a frame (fresh interpreter, 54.4 MiB
+  baseline; macOS arm64, `ru_maxrss`): 120 MiB frame (budget off, worst case) peaks at 442.4 MiB,
+  a 388.0 MiB increase — over 25% of 1536 MiB (384 MiB). A 96 MiB frame peaks at 390.8 MiB, a
+  336.4 MiB increase, which fits. A 60 MiB frame of U+FFFD (the 3x case) peaks at 269.8 MiB. The
+  64-chunk case (114,688 characters per field, worst-case controls, a 1.3 MiB frame) peaks at
+  57.3 MiB, a 2.8 MiB increase.
+- So the cap is 96 MiB, and the only bodies refused are ones that are mostly C0 control bytes
+  (more than about 8 million of them) — those fail as an `HTMLExtractionError`.
+
 #### Advisory memory rule
 
 The boot check reads cgroup v2 `memory.max`, not an environment-variable string.

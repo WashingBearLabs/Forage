@@ -789,6 +789,16 @@ worker thread, so that the event-loop thread is not held for a whole parse.
 - The env test injects a `sitecustomize.py` via the allowlisted `PYTHONPATH` to dump the child's environment, so there is no production test seam. Spawn `OSError` returns `None` from `run_worker`, which the PDF side maps to `PDFExtractionError`.
 - `spool_dir`/`SpoolDirectoryError` moved to `worker_launch` and are re-exported from `pdf_subprocess`; the only PDF test edit is the chmod-source test, which now reads `worker_launch`.
 
+### US-005
+- No rotation: default, `config.yaml` and `bench/config.yaml` stay `0ace27cae20e17e6c6eae7fa51f3126483bf8d07d6e555afbeee0a39364f4911`; the new module and `worker_entry.py` are unhashed and `orchestrator.py` is untouched.
+- `title`/`author`/`date` are uncapped in `extract_html`, so the frame cap bounds them. Stage 1 does not strip C0 controls (6x JSON escape); `MAX_HTML_FRAME_BYTES` = 96 MiB (budget-off 120 MiB frame peaks the parent at 442 MiB / +388 MiB, over 384; 96 MiB is +336 MiB). 64-chunk case +2.8 MiB. Full table in `docs/bootstrap-notes.md`.
+- Linux envelope: 2 MiB page 361.9 MiB VmPeak / 5.82 s; 2.2 MiB 388.2 MiB (over 384); 4 MiB 642.9 MiB / 16.41 s. Largest realistic page that fits: about 2.1 MiB.
+- Stage 2's category sets are private to a hashed file, so `html_subprocess._VALID_CATEGORIES` is a literal pinned equal to them by a test (a public accessor would rotate the revision).
+- `fold_refused` is taken from `ScanForms.expansion_refused`, not from the flags: a BLOCKING markup scan drops the refusal flag from the combined result but the in-thread path has already logged the token.
+- The in-process round trip must `logging.disable` around the child half, else the stage-2 token logs twice and the parity test is meaningless.
+- Spool `OSError` propagates (as in the PDF path) for US-006 to map; only worker/frame failures become `HTMLExtractionError`.
+- Kill test uses 768 KiB sibling-dense (not 512 KiB) for margin on a faster runner; verified on Linux in Docker.
+
 ## Refinement Notes
 
 ### Research Findings
