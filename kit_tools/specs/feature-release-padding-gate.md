@@ -280,6 +280,10 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
 
 ## Implementation Notes
 
+### US-001
+- **Pre-change measurement** (taken before any code edit; throwaway script, not committed). Every benign record's stage-2 decoded text on its route forms (`/retrieve` raw + inline-joined, `/extract`, `/search` title/snippet scan + inline), 732 fields. Max fold/n ratio and count over `max(2n, n+256)` per genre: code 1.0029/0; docs 1.0/0; ecommerce 1.0/0; forum 1.0/0; long_form 1.0005/0; multilingual 1.0058/0; news 1.001/0; over_defence_probe 1.1818/0; security_prose 1.002/0. Total over the new limit: 0 (and 0 over the old 4x). Max NFKC ratio 1.0005.
+- **Pre-shape 2 MiB timing** (U+FDFA + 5 ASCII, old limit, `scan_structural_forms(structural_scan_forms(...))`, GC off, median of 3): 4.100 s (runs 4.105, 4.081, 4.100; dev Mac).
+
 ## Refinement Notes
 
 ### Research Findings
