@@ -569,31 +569,31 @@ hostile page costs at most the worker's limits, while ordinary pages keep today'
 - **Rotation.** `orchestrator.py` and `contract.py` move; follow the procedure.
 
 **Acceptance Criteria:**
-- [ ] The in-thread path calls `html_subprocess.extract_html_and_scan`, with no second copy of its
+- [x] The in-thread path calls `html_subprocess.extract_html_and_scan`, with no second copy of its
       body (grep).
-- [ ] A body exactly at the threshold parses in-thread, one byte over goes to the worker, and `0`
+- [x] A body exactly at the threshold parses in-thread, one byte over goes to the worker, and `0`
       sends everything to the worker. The decision uses fetched byte length (tests).
-- [ ] `retrieve.html_worker_threshold_bytes` is bounded to `0 … 2 × default`, registered in
+- [x] `retrieve.html_worker_threshold_bytes` is bounded to `0 … 2 × default`, registered in
       `KNOWN_CONFIG_KEYS` as security-relevant, and documented in all four sites with the
       worst-case-at-maximum figure. The partition and shipped-default tests pass.
-- [ ] The default is the two-axis calibrated value (time and parent RSS), recorded per shape. A
+- [x] The default is the two-axis calibrated value (time and parent RSS), recorded per shape. A
       regression test runs every pinned shape at the default, using the ratio assertion plus a
       5× absolute ceiling.
-- [ ] `HTMLExtractionError` maps to 422 `extraction_failed` / `html_extraction_error`, and spool
+- [x] `HTMLExtractionError` maps to 422 `extraction_failed` / `html_extraction_error`, and spool
       errors map to the existing reason. Each logs its closed token, with no exception text
       (tests).
-- [ ] Internal spawn and refusal counters increment on the worker and refusal paths (tests).
+- [x] Internal spawn and refusal counters increment on the worker and refusal paths (tests).
       `RetrieveMetricsResponse` is unchanged.
-- [ ] Admission is released only after reap and unlink under real-task cancellation (test).
-- [ ] Default-versus-`0` responses are equal for all corpus HTML records (in-process) and the
+- [x] Admission is released only after reap and unlink under real-task cancellation (test).
+- [x] Default-versus-`0` responses are equal for all corpus HTML records (in-process) and the
       real-spawn sample. The corpus baseline regenerates with zero outcome changes, and the
       cassettes are byte-unchanged.
-- [ ] `tests/golden/contract_1_3_0.json` and `CONTRACT_VERSION` are unchanged.
-- [ ] The rotation is recorded per the procedure, and the false docs and docstring are corrected.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `tests/golden/contract_1_3_0.json` and `CONTRACT_VERSION` are unchanged.
+- [x] The rotation is recorded per the procedure, and the false docs and docstring are corrected.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-007: Contract surface — announce the reason and counters, cut held 1.4.0
 
