@@ -14,131 +14,201 @@ created: 2026-10-08
 updated: 2026-10-08
 ---
 
-# Feature Spec: Inference Surface — Device on `/health`, `/metrics` and the Revision
+# Feature Spec: Inference Surface — Device on `/health`, `/metrics`, the Revision and the Cache Key
 
 ## Overview
 
-Spec 1 gives the classifier `device`, `requested_device`, `failed_over` and two counters. This spec
-makes them visible, keeping the service's honest-health rule (CLAUDE.md invariant 5: degradation
-is loud, never silent):
+Spec 1 gives the classifier `device_state()`, a consistent snapshot of:
+- active device and requested device;
+- `failed_over` and `oom_refused`;
+- precision mode and effective batch size;
+- the counters `oom_batch_reductions`, `device_failovers` and `oom_refusals`.
 
-- **`/health`** gains `promptguard_device` (`"cpu"` | `"cuda"`, or `null` before the device is
-  resolved) and a new degraded reason, `promptguard_device_failover`, raised whenever the requested
-  device was `cuda` and the active device is `cpu`. This is a **contract 1.5.0** MINOR: one new
-  field and one new enum member.
-- **`/metrics` `model`** gains `device_failovers` and `oom_batch_reductions`.
-- **`sanitizer_revision`** gains an input `device@<requested device>`. GPU and CPU deployments keep
-  separate cache keys, because float math differs between devices.
-- **`scripts/bench_promptguard.py`** records the device from `/health`.
+This spec makes that state visible, keeping invariant 5 (degradation is loud, never silent).
+
+**`/health` gains two fields:**
+- `promptguard_device`: the **active** device, `null` until the classifier is loaded.
+- `promptguard_requested_device`: the requested device, always present.
+
+**`/health` gains two degraded reasons:**
+- `promptguard_device_failover`: requested `cuda`, active `cpu`.
+- `promptguard_device_oom`: `oom_refused` is latched under `refuse`.
+
+These fields and reasons make contract **1.5.0**, a MINOR.
+
+**State table** for `/health`:
+
+| Loaded | Requested | Active | failed_over | oom_refused | `promptguard_device` | Degraded reasons added |
+|---|---|---|---|---|---|---|
+| no | any | — | — | — | `null` | `promptguard_unavailable` (existing) |
+| yes | cpu | cpu | no | no | `cpu` | none |
+| yes | cuda | cuda | no | no | `cuda` | none |
+| yes | cuda | cpu | yes | no | `cpu` | `promptguard_device_failover` |
+| yes | cuda | cuda | no | yes | `cuda` | `promptguard_device_oom` |
+
+`promptguard_device_failover` never accompanies `promptguard_unavailable`.
+
+**Other surfaces:**
+- **`/metrics` `model`:**
+  - adds `device_failovers`, `oom_batch_reductions`, `oom_refusals` and `effective_batch_size`;
+  - the bench records both device fields.
+- **Revision and cache identity:**
+  - **`sanitizer_revision`** hashes `device@cuda` **only when the requested device is `cuda`**, so
+    the default CPU revision does not move because of this input;
+  - **the content-cache fingerprint** (`cache.cache_policy_fingerprint`, unhashed) adds the
+    **active** device next to `classifier_loaded`, so CPU-scored and GPU-scored results never share
+    cache keys, even after a failover.
 
 ## Goals
 
-- **`/health.promptguard_device` and the degraded reason:**
-  - it equals the classifier's active device;
-  - `cuda` requested and running on CPU means `status: "degraded"` with
-    `promptguard_device_failover` in `degraded_reasons`, while `promptguard_loaded` stays `true`;
-  - default CPU installs report `"cpu"`, and their status is unchanged from v1.3.0.
-- **Contract:** `CONTRACT_VERSION == "1.5.0"`, a held `tests/golden/contract_1_5_0.json`, and the
-  OpenAPI file and anchor regenerated. Goldens 1.0.0–1.4.0 are byte-unchanged.
-- **Revision:** `derive_sanitizer_revision` differs between `FORAGE_DEVICE=cpu` and `cuda`. The
-  rotation is recorded per the epic procedure, and the default (`cpu`) value is recorded too.
+- `/health` follows the state table for every row, with stubbed classifier states.
+- **Contract 1.5.0.** `CONTRACT_VERSION == "1.5.0"`, a held golden
+  `tests/golden/contract_1_5_0.json`, and an `_EXPECTED_ONE_FIVE_ZERO_DIFF` set. Goldens
+  1.0.0–1.4.0 are byte-unchanged.
+- **The revision.** It differs between requested `cpu` and `cuda`, and is unchanged for `cpu` by the
+  device input itself. An `invalid` token never reaches a serving process, because the lifespan
+  refuses it.
+- **The cache fingerprint.** It differs between active `cpu` and `cuda`, and changes after a
+  failover (test).
 
 ## User Stories
 
-### US-001: `/health` reports the device and a failover reason (contract 1.5.0)
+### US-001: `/health` device fields and reasons (contract 1.5.0)
 
 **Priority:** P1
 
-**Description:** As an operator, I want `/health` to say which device the classifier is running on,
-and to go degraded when it failed over from the GPU, so that a GPU host that lost its GPU is
-visible on my dashboards.
+**Description:** As an operator, I want `/health` to show the active and requested device and to go
+degraded on failover or latched OOM refusal, so that a GPU host that lost its GPU, or is refusing on
+OOM, is visible on my dashboards.
 
-**Independent Test:** With a classifier stub reporting each state, `/health` shows:
-- device `cpu`, healthy;
-- device `cuda`, healthy;
-- requested `cuda` running on `cpu`: degraded, `promptguard_device_failover`, loaded true.
+**Independent Test:** With a stub classifier per state-table row, `/health` returns the row's device
+value, reasons and status.
 
 **Implementation Hints:**
-- **Model.** `HealthResponse` (`retrieval_app.py` ~:518-600): add `promptguard_device: Literal["cpu","cuda"] | None` next to `promptguard_model` (~:529-538), resolved from
-  `app.state` the same way `_resolved_promptguard_model` (~:382) works. Write the field
-  description; it lands in OpenAPI.
-- **Vocabulary.** `DegradedReason` Literal plus a constant, in `pipeline/contract.py` ~:217-237. A
-  reason missing from the Literal causes a 500, so add it there first. Raise it in the health
-  handler (~:2117-2123).
-  - Semantics: this is the first degraded reason with a loaded classifier other than the cache
-    reasons. State that in the field and handler docstrings.
-- **The contract bump** (GOVERNANCE.md :347-379; precedent `promptguard_model` in 1.3.0,
-  `tests/test_contract_schema.py` ~:462-470 `_EXPECTED_ONE_THREE_ZERO_DIFF`):
-  - `CONTRACT_VERSION = "1.5.0"`;
-  - a `* ``1.5.0`` —` in-progress docstring bullet;
-  - `tests/golden/contract_1_5_0.json`, and an expected-diff set for 1.5.0;
-  - run `uv run python -m scripts.export_contract`;
-  - update GOVERNANCE.md :29, `CLAUDE.md` invariant 4, `tests/test_bench_promptguard.py`
-    version pins, and the doc anchor quotes.
-  - `contract.py` is hashed, so this rotates. Follow the rotation record procedure: read-only
-    reversal and every count site (see the epic Notes, and `feature-release-resource-bounds.md`
-    Technical Considerations for the site list).
-- `contract_smoke.py` follows `HealthResponse.model_fields` automatically.
+- **`HealthResponse`** (`retrieval_app.py` ~:518-600): add `promptguard_device: Literal["cpu","cuda"] | None` and `promptguard_requested_device: Literal["cpu","cuda"]` next to `promptguard_model`
+  (~:529-538). Write descriptions, since they reach OpenAPI.
+  - Resolve both from the classifier's `device_state()` and from `app.state` (the requested device
+    resolved at boot), as `_resolved_promptguard_model` (~:382) does.
+- **Reasons.** Add `promptguard_device_failover` and `promptguard_device_oom` to the `DegradedReason`
+  Literal and constants in `pipeline/contract.py` (~:217-237). Raise them in the handler (~:2117-2123)
+  following the state table.
+  - These are the first degraded reasons with a loaded classifier beyond the cache ones; say so in
+    the docstrings.
+- **The bump** (GOVERNANCE.md :347-379):
+  - `CONTRACT_VERSION = "1.5.0"`, with an in-progress `* ``1.5.0`` —` bullet;
+  - `tests/golden/contract_1_5_0.json`;
+  - in `tests/test_contract_schema.py`, add `_diff_against_1_4_0` and `_EXPECTED_ONE_FIVE_ZERO_DIFF`
+    in the shape of the 1.3.0 sweep (~:462). It must contain the two `HealthResponse` properties
+    and both `degraded_reasons` enum members;
+  - run `uv run python -m scripts.export_contract`, which regenerates `contract/openapi.yaml`, its
+    `.sha256` and `tests/fixtures/contract/unregenerated_openapi.yaml`;
+  - update the doc anchor quotes checked by `tests/test_contract_export.py`;
+  - update `contract/GOVERNANCE.md` :29 (`tests/test_governance_docs.py`), `CLAUDE.md` invariant 4,
+    and `tests/test_bench_promptguard.py`'s version pins.
+- **Rotation.** `contract.py` moves; follow the epic's **Rotation record procedure**.
 
 **Acceptance Criteria:**
-- [ ] `/health` returns `promptguard_device`. A default install returns `"cpu"` with an unchanged
-      status. A successful cuda device returns `"cuda"` (stubbed tests).
-- [ ] Requested `cuda` running on `cpu` gives `status: "degraded"`,
-      `promptguard_device_failover` in `degraded_reasons` and `promptguard_loaded: true` (test).
-      The reason is in the `DegradedReason` Literal and `DEGRADED_REASONS`.
-- [ ] `CONTRACT_VERSION == "1.5.0"`, with an in-progress 1.5.0 bullet naming the field and the
-      reason. `tests/golden/contract_1_5_0.json` exists, and goldens 1.0.0–1.4.0 are
-      byte-unchanged.
-- [ ] `contract/openapi.yaml`, its anchor and the fixture twin are regenerated. Export,
-      anchor-quote, governance and bench-pin tests pass.
-- [ ] The rotation is recorded per the procedure, with every count site updated.
+- [ ] `/health` matches every state-table row: device value, reasons and status (one stubbed test
+      per row). `promptguard_device_failover` never appears together with `promptguard_unavailable`.
+- [ ] Both reasons are in the `DegradedReason` Literal and `DEGRADED_REASONS`.
+- [ ] `CONTRACT_VERSION == "1.5.0"`, with an in-progress bullet naming both fields and both reasons.
+      `tests/golden/contract_1_5_0.json` and `_EXPECTED_ONE_FIVE_ZERO_DIFF` exist, and goldens
+      1.0.0–1.4.0 are byte-unchanged.
+- [ ] The OpenAPI file, its anchor and the fixture twin are regenerated. These pass:
+      `tests/test_contract_export.py`, `tests/test_contract_schema.py`,
+      `tests/test_governance_docs.py` and `tests/test_bench_promptguard.py`.
+- [ ] The rotation is recorded per the epic procedure.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
 - [ ] `uv run pyright` passes with zero errors
 
-### US-002: Device counters on `/metrics`, `device@` revision input, device-aware bench
+### US-002: Device counters on `/metrics`, and a device-aware bench
 
 **Priority:** P2
 
-**Description:** As an operator, I want failovers and out-of-memory batch reductions counted, cache
-keys split by device, and the bench to record the device, so that GPU behaviour is measurable and
-GPU-scored results never mix with CPU-scored ones in the cache.
+**Description:** As an operator, I want failovers, batch reductions, OOM refusals and the effective
+batch size on `/metrics`, and the bench to record the device, so that GPU behaviour is measurable.
 
-**Independent Test:** `/metrics.model` shows `device_failovers` and `oom_batch_reductions` mirroring
-the classifier counters. `derive_sanitizer_revision` gives different values for
-`FORAGE_DEVICE=cpu` and `cuda`, and the cpu value is recorded. The bench output contains
-`promptguard_device`.
+**Independent Test:** `/metrics.model` mirrors the four values from a stub `device_state()`. The
+bench output contains `promptguard_device` and `promptguard_requested_device`.
 
 **Implementation Hints:**
-- **Counters.** `ModelMetricsResponse` (`retrieval_app.py` ~:942) gains both fields, read from the
-  classifier (spec 1 US-003).
-  - Metric additions must be named in the contract entry. Extend the 1.4.0 analogue of
-    `test_every_1_3_0_metric_addition_is_named_in_the_contract_entry` (`tests/test_contract_metrics.py`)
-    to 1.5.0, and add the counters to the 1.5.0 bullet.
-- **Revision input.** In `pipeline/sanitizer_revision.py`, add
-  `digest.update(f"device@{requested_device}".encode())` after the model identity (~:83-84),
-  resolving the requested device from the environment through `promptguard/device.py` (spec 1).
-  - Use the **requested** device, not the active one. A runtime failover then does not change the
-    revision mid-process; document that.
-  - This is a new **input**: `sanitizer_revision.py` itself, plus the input. Measure the rotation
-    with the input removed, read-only, and record it per the procedure.
-  - The default `cpu` value is recorded as the new default revision.
-- **Bench.** `scripts/bench_promptguard.py` ~:460-470 copies `/health` provenance; add
-  `promptguard_device`. Update `tests/test_bench_promptguard.py` ~:71.
-- **Docs.** Add the two counters to `kit_tools/docs/MONITORING.md`. In `docs/configuration.md`,
-  state that `FORAGE_DEVICE` is a revision input and `promptguard_cuda_batch_size` is not.
+- **`ModelMetricsResponse`** (`retrieval_app.py` ~:942) gains `device_failovers`,
+  `oom_batch_reductions`, `oom_refusals` and `effective_batch_size`.
+- **`tests/test_contract_metrics.py`:**
+  - add a model-section "later" set to `test_every_1_3_0_metric_addition_is_named_in_the_contract_entry`
+    (~:221);
+  - add a 1.4.0 model baseline frozenset;
+  - add `test_every_1_5_0_metric_addition_is_named_in_the_contract_entry`, slicing the 1.5.0 entry;
+  - name the four fields in the 1.5.0 bullet.
+- **Regenerate** the held 1.5.0 golden, the OpenAPI file and the anchor. Extend
+  `_EXPECTED_ONE_FIVE_ZERO_DIFF` only if the metrics models are in the schema sweep; check
+  `_SCHEMA_MODELS`.
+- **Bench.** In `scripts/bench_promptguard.py` (~:460-470) copy both device fields. Update
+  `tests/test_bench_promptguard.py` (~:71).
+- **Docs.** `kit_tools/docs/MONITORING.md` lists the four fields with their meaning.
+- `contract.py` moves again, so this is a rotation; follow the epic procedure.
 
 **Acceptance Criteria:**
-- [ ] `/metrics.model.device_failovers` and `.oom_batch_reductions` mirror the classifier counters
-      (test). Both are named in the 1.5.0 entry, and the metric-addition test passes.
-- [ ] `derive_sanitizer_revision` differs between `FORAGE_DEVICE` `cpu` and `cuda` (test). The
-      rotation is measured: reverting `sanitizer_revision.py` and removing the input reproduces
-      the pre-story value under default, `config.yaml` and `bench/config.yaml`. It is recorded per
-      the procedure, and the new default value is in `docs/releases.md` Unreleased.
-- [ ] A runtime failover does not change the process's reported revision (test).
-- [ ] The bench output includes `promptguard_device` (test).
-- [ ] MONITORING.md and the configuration doc are updated.
+- [ ] `/metrics.model` exposes the four fields, mirroring `device_state()` (test). The 1.5.0
+      metric-addition test passes and names them.
+- [ ] The held 1.5.0 golden, the OpenAPI file and the anchor are regenerated, and export and
+      schema tests pass.
+- [ ] Bench output includes both device fields (test).
+- [ ] MONITORING.md lists the four fields with meanings.
+- [ ] The rotation is recorded per the epic procedure.
+- [ ] Tests written/updated for new functionality
+- [ ] Full test suite passes (`uv run pytest`)
+- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [ ] `uv run pyright` passes with zero errors
+
+### US-003: `device@cuda` revision input, and the active device in the cache fingerprint
+
+**Priority:** P1
+
+**Description:** As an operator, I want GPU deployments to carry a distinct revision, and CPU-scored
+and GPU-scored results to never share cache keys even after a failover, so that cached verdicts
+always match the device that produced them.
+
+**Independent Test:**
+- `derive_sanitizer_revision` is unchanged for requested `cpu` and differs for `cuda`.
+- `cache_policy_fingerprint` differs for active `cpu` and `cuda`.
+- A failover changes the fingerprint and not the process revision.
+
+**Implementation Hints:**
+- **The revision** (`pipeline/sanitizer_revision.py` ~:80-93). After the model identity (~:83-84),
+  add `if token == "cuda": digest.update(b"device@cuda")`, with `token` from spec 1's non-raising
+  `requested_device_token(os.environ)`.
+  - `"invalid"` hashes nothing extra; the lifespan refuses such a process anyway. Document it.
+  - Call sites: the lifespan (`retrieval_app.py` ~:1771) and request paths (~:2073, ~:2518). Those
+    re-derive from the environment, with `_resolved_sanitizer_revision` (~:373) as fallback. They
+    all read the same env, so they agree. Add a test that every call site gets the same value for
+    the same environment.
+  - **Rotation:** the default-config revision is **unchanged by the input** (the cpu branch adds
+    nothing), but `sanitizer_revision.py` is a source whose bytes change.
+    - Measure per the epic procedure.
+    - The cpu-default revision moves only because the file bytes change. Record the cuda value
+      too.
+- **The cache fingerprint** (`cache.py` ~:127-175, `cache_policy_fingerprint`; unhashed): add the
+  **active** device from the classifier's `device_state()` beside `classifier_loaded`, and pass it
+  from the handlers that already pass `classifier_loaded`.
+- **Docs.** In `docs/configuration.md`, state that `FORAGE_DEVICE=cuda` is a revision input, the
+  active device is a cache-key input, and `promptguard_cuda_batch_size` is neither.
+- **A residual to document.** Batch size affects GPU scores within parity tolerance, but it is not
+  in the cache key.
+
+**Acceptance Criteria:**
+- [ ] The revision for requested `cpu` equals the value computed by the same file with the device
+      line removed, and for `cuda` it differs (tests). Every call site agrees for one environment
+      (test).
+- [ ] `cache_policy_fingerprint` includes the active device. Active `cpu` and `cuda` give different
+      fingerprints, and a simulated failover changes the fingerprint while `/health`'s
+      `sanitizer_revision` stays the same (tests).
+- [ ] The rotation is measured per the epic procedure, with default, `config.yaml`, `bench/config.yaml`
+      and a cuda-env value recorded.
+- [ ] `docs/configuration.md` states which settings are revision inputs and which are cache-key
+      inputs.
 - [ ] Tests written/updated for new functionality
 - [ ] Full test suite passes (`uv run pytest`)
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
@@ -146,34 +216,35 @@ the classifier counters. `derive_sanitizer_revision` gives different values for
 
 ## Edge Cases
 
-- **`/health` before the classifier has loaded:** `promptguard_device` reports the requested
-  device if it was resolved at boot, otherwise `null`. Document which. (US-001)
-- **`refuse` with a failed load-time move:** the classifier is unloaded, so the reason is
-  `promptguard_unavailable`, not failover. (US-001)
-- **A failover mid-run:** `/health` turns degraded immediately; the revision is unchanged.
-  (US-001, US-002)
+- **Before the classifier loads:** `promptguard_device` is `null`, the requested device is present,
+  and the reason is `promptguard_unavailable`. (US-001)
+- **`refuse` plus a load failure:** row 1 (unloaded), with no failover reason. (US-001)
+- **A mid-run failover:** `/health` turns degraded immediately; the fingerprint changes and the
+  revision does not. (US-001, US-003)
+- **An invalid env value at a request path:** impossible in a serving process, because the lifespan
+  refused it. The revision hashes no device input. (US-003)
 
 ## Out of Scope
 
-- Any change to how the classifier runs (spec 1); images (spec 3); measurement (spec 4).
+- How the classifier runs (spec 1), images (spec 3) and measurement (spec 4).
 
 ## Assumptions
 
-- A new optional field and a new degraded-reason member are a MINOR under GOVERNANCE, as with
-  `promptguard_model` and `cache_unauthenticated`.
-- Keying the revision on the requested device is enough to separate the caches, because
-  failover is rare and visible.
+- New optional fields and new reason members are a MINOR, following the `promptguard_model` and
+  `cache_unauthenticated` precedents.
+- Hashing the device only for `cuda` keeps CPU installs' cache keys stable across this epic, apart
+  from the hashed-source byte rotations.
 
 ## Technical Considerations
 
-- `contract.py` and `sanitizer_revision.py` are hashed or define the hash. Every rotation is
-  measured with read-only reversals.
-- Spec 4's release prep finalises the 1.5.0 entry; this spec writes it as in progress.
+- `contract.py` and `sanitizer_revision.py` are hashed. Each story records its rotation per the
+  epic procedure.
+- Spec 4's release prep finalises the 1.5.0 bullet.
 
 ## Related Documentation
 
-- [contract/GOVERNANCE.md](../../contract/GOVERNANCE.md),
-  [MONITORING.md](../docs/MONITORING.md), `docs/configuration.md`
+- [contract/GOVERNANCE.md](../../contract/GOVERNANCE.md), `cache.py`,
+  [MONITORING.md](../docs/MONITORING.md)
 
 ## Implementation Notes
 
@@ -181,13 +252,17 @@ the classifier counters. `derive_sanitizer_revision` gives different values for
 
 ### Research Findings
 
-**Decision:** Report the device in `/health` and the cache key.
-**Rationale:** The landscape research recommends making the backend visible and part of cache
-identity, because CPU and GPU results are not bit-identical.
-**Source:** https://docs.pytorch.org/docs/2.14/notes/numerical_accuracy.html.
+**Decision:** The active device goes in the cache fingerprint; the requested device (cuda only) goes
+in the revision.
+**Rationale:** Keying on the requested device alone mixes CPU-scored results under GPU keys after a
+failover (validation round 1).
+**Source:** `cache.py` `classifier_loaded` precedent.
+
+**Decision:** `promptguard_device` is the active device or `null`; the requested device is a separate
+field.
+**Rationale:** Honest health shows what is actually running. Both fields ship in one MINOR.
 
 ## Clarifications
 
 ### Session 2026-10-08
-- **Q:** Does a failover count as degraded? **A:** Yes. A GPU that was requested but is not in
-  use is loud (owner, 2026-10-07).
+- **Q:** Is failover degraded? **A:** Yes (owner, 2026-10-07).

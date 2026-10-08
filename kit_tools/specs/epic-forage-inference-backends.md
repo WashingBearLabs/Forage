@@ -55,10 +55,10 @@ installs nothing in speed. The only cost is size: amd64 grows from about 350 MB 
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-inference-device.md](feature-inference-device.md) — device configuration and failover at boot, GPU window batching, out-of-memory failover | Planned | v1.3.0 merged |
-| 2 | [feature-inference-surface.md](feature-inference-surface.md) — `/health` device and degraded reason (contract 1.5.0), `/metrics` counters, `device@` revision input, device-aware bench | Planned | 1 |
-| 3 | [feature-unified-image.md](feature-unified-image.md) — one lock with arch-split torch, one Dockerfile, scoped guards, CI budgets and smokes, `compose/gpu.yml`, install docs | Planned | 1 |
-| 4 | [feature-gpu-validation.md](feature-gpu-validation.md) — corpus parity tool, owner GPU smoke and sizing on thelab, v1.4.0 release prep | Planned | 2, 3 |
+| 1 | [feature-inference-device.md](feature-inference-device.md) — 4 stories: device settings and boot probe; CUDA load with failover; GPU window batching; GPU OOM handling (atomic model swap, cache guard) | Planned | v1.3.0 merged |
+| 2 | [feature-inference-surface.md](feature-inference-surface.md) — 3 stories: `/health` active and requested device and reasons (contract 1.5.0); `/metrics` counters and bench; `device@` revision input and active device in the cache fingerprint | Planned | 1 |
+| 3 | [feature-unified-image.md](feature-unified-image.md) — 6 stories: extras-only torch with three sources; behavioural CUDA-scope checker; install-command and docs sweep; arch-selected Dockerfile; CI budgets and no-GPU smokes; `compose/gpu.yml` and install docs | Planned | 2 |
+| 4 | [feature-gpu-validation.md](feature-gpu-validation.md) — 6 stories: parity tool; owner gates for GPU smoke and latency, parity runs, failover proof; sizing docs; v1.4.0 prep | Planned | 3 |
 
 ## Completion Criteria
 
@@ -81,6 +81,28 @@ installs nothing in speed. The only cost is size: amd64 grows from about 350 MB 
       publish, and an anonymous pull.
 
 ## Notes
+
+- **Rotation record procedure.** Every story that edits a `_REVISION_SOURCES` file, or adds a revision
+  input, follows these steps:
+  1. Compute `derive_sanitizer_revision()` before and after, under default config, `config.yaml` and
+     `bench/config.yaml`.
+  2. For each hashed file changed, reconstruct the pre-story bytes **read-only** in a temp copy
+     (`git show <pre-story>:<path>`; never revert the working tree).
+     - Recompute with that file alone reverted.
+     - Recompute once with all of them reverted, plus any new input removed.
+     - The all-reverted control must reproduce the pre-story value exactly.
+  3. Record the rotation in four places:
+     - a paragraph in `CLAUDE.md` (Coexistence section);
+     - a heading in `docs/bootstrap-notes.md` (next ordinal);
+     - a row and the tally in the `kit_tools/docs/GOTCHAS.md` rotation table;
+     - the `docs/releases.md` Unreleased line.
+  4. Update every count site, then verify with a grep for the previous ordinal word, which must
+     return no stale current-count hit. The sites are: GOTCHAS (intro and tally),
+     `kit_tools/docs/DEPLOYMENT.md`, `kit_tools/docs/TROUBLESHOOTING.md` (two sites),
+     `kit_tools/arch/SERVICE_MAP.md` (also names the current value), `kit_tools/arch/CODE_ARCH.md`,
+     `kit_tools/arch/DECISIONS.md` and `CLAUDE.md`.
+  - The current value at epic start is `2c6d0382…`, the fifty-ninth rotation.
+- **Spec order is strict: 1 → 2 → 3 → 4.** Spec 3's smokes assert spec 2's `/health` fields.
 
 - **Engine:** torch, with a seam (owner ruling 2026-10-07).
   - ONNX Runtime measured 1.4–1.6× on CPU but needs per-site conversion of gated weights, which
