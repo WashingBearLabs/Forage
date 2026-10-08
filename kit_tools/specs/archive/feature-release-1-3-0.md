@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: release-1-3-0
-status: active
+status: completed
 session_ready: true
 depends_on: [release-resource-bounds, release-padding-gate]
 vision_ref: "T2 hardening follow-through — bound the remaining CPU costs and cut v1.3.0"
@@ -11,7 +11,8 @@ epic: forage-v1-3-0-release
 epic_seq: 3
 epic_final: true
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
+completed: 2026-10-08
 ---
 
 # Feature Spec: Release 1.3.0 — Close the Two Windows, Finalise Contract 1.4.0, Prepare the Tag
