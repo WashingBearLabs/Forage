@@ -336,11 +336,11 @@ def _private_spool_path(root: Path) -> Path:
 
 
 def _spooled_leftovers(root: Path) -> list[Path]:
-    """Every ``forage-retrieve-*`` file under the spool directory, if it exists."""
+    """Every ``forage-retrieve-pdf-*`` file under the spool directory, if it exists."""
     directory = _private_spool_path(root)
     if not directory.exists():
         return []
-    return sorted(directory.glob("forage-retrieve-*"))
+    return sorted(directory.glob("forage-retrieve-pdf-*"))
 
 
 class TestSpoolDir:
@@ -536,7 +536,7 @@ class TestExtractPdfBytesInSubprocess:
 
         assert result.raw_text == "Fetched PDF text."
         assert seen["path"].parent == _private_spool_path(spool_root)
-        assert seen["path"].name.startswith("forage-retrieve-")
+        assert seen["path"].name.startswith("forage-retrieve-pdf-")
         assert seen["mode"] == 0o600
         assert seen["contents"] == data
         assert seen["settings"] is settings

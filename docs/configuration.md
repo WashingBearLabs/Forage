@@ -129,9 +129,9 @@ a configured-but-unreachable Valkey (`cache_unavailable`), or Valkey without sig
 ### The spool directory (`TMPDIR`)
 
 The PDF worker is a spawned child that re-opens its input **by path**, so both PDF routes
-write the document to a spool file first: `/extract` its upload (`poppy-extract-*`) and,
+write the document to a spool file first: `/extract` its upload (`forage-extract-*`) and,
 since `hardening-retrieve-parity` US-003, `/retrieve` every fetched PDF
-(`forage-retrieve-*`). Both land in one directory,
+(`forage-retrieve-pdf-*`). Both land in one directory,
 `<TMPDIR>/forage-spool-<uid>`, which Forage creates for you on first use with mode `0700`
 — never wider at any instant, because it is created with that mode rather than chmod-ed
 after. The boot checks it once and each spool checks it again: if the path already
@@ -153,9 +153,29 @@ read. It is `0600` inside a `0700` directory and unlinked on every normal exit p
 success, every worker failure, a failed spool write and a cancelled request. A **tmpfs**
 `TMPDIR` keeps that content off durable storage altogether. On a non-tmpfs `TMPDIR`, a
 process killed with SIGKILL (an OOM kill, `docker kill`) mid-parse leaves its
-`forage-retrieve-*` or `poppy-extract-*` file behind, and those orphans are
-**content-bearing**: they survive until the next manual clear of the spool directory. No
-sweep runs at boot (an open question in the resource-envelope spec).
+`forage-retrieve-pdf-*` or `forage-extract-*` file behind, and those orphans are
+**content-bearing** until the next boot's sweep (below) removes them.
+
+**At-rest lifecycle and the startup sweep** (`release-resource-bounds` US-004). Spool
+files are named `forage-extract-*` (`/extract` uploads), `forage-retrieve-pdf-*` (fetched
+PDFs) and `forage-retrieve-html-*` (the HTML worker). Every boot sweeps the spool
+directory once, right after the directory check, and unlinks each entry that is a
+**regular file**, **owned by Forage's euid**, named with a `forage-extract-` or
+`forage-retrieve-` prefix (or the legacy `poppy-extract-` of releases before 1.3.0), and
+whose `mtime` is older than the **maximum permitted** `extraction.wall_clock_seconds` (90)
+plus 60 s. The gate uses the bound, not the running value, so several processes with
+different configs sharing the per-euid directory (uvicorn `--workers`, a restart
+overlapping a draining process, a shared `/tmp` volume) never sweep each other's live
+spools; a worker spool can never be that old. The directory is held open by fd, each entry
+is `stat`-ed without following symlinks and unlinked `dir_fd`-relative, so a symlink, a
+subdirectory (never recursed into), a foreign-prefix file or a name swapped for a symlink
+after the check is never followed. A vanished or undeletable entry is skipped silently. The
+only log line is INFO `spool_sweep removed=<n>` — a count, never a name or path.
+**Accepted effect:** an `/extract` upload spool's `mtime` advances only on writes, so an
+upload stalled past the gate while another process boots can have its spool swept; that
+request then fails closed with a coded 422. This is an availability effect on a stalled
+client only. Between boots nothing sweeps, so a tmpfs `TMPDIR` remains the way to keep
+spooled content off disk entirely.
 
 **Cancellation ownership.** Cancelling a `/retrieve` task cannot stop its Python
 worker thread. The request therefore keeps its admission slot and waits for the existing
@@ -1012,7 +1032,7 @@ knob that bounds it, and the resource-envelope spec owns it.
 
 **Disk.** The HTML path writes nothing to disk: the fetched body lives in memory, inside the
 slot, and nowhere else. The PDF path (`hardening-retrieve-parity` US-003) spools the fetched
-body to a `0600` `forage-retrieve-*` file in the process-private spool directory and parses
+body to a `0600` `forage-retrieve-pdf-*` file in the process-private spool directory and parses
 it in `/extract`'s spawned, rlimited worker, under `extraction.max_promptguard_chunks`
 rather than this block's budget; the file is unlinked as soon as the worker returns, on
 every outcome. See "The spool directory (`TMPDIR`)" above for the requirement, the footprint and

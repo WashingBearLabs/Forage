@@ -144,7 +144,7 @@ per-result `scan_structural` over bounded fields stays on the loop.
 
 **Both routes parse PDFs in the worker.** Since `hardening-retrieve-parity` US-003 a fetched
 PDF on `/retrieve` goes through `extract_pdf_bytes_in_subprocess`, which spools the body to a
-`0600` `forage-retrieve-*` file in `spool_dir()` (`<TMPDIR>/forage-spool-<uid>`, `0700`,
+`0600` `forage-retrieve-pdf-*` file in `spool_dir()` (`<TMPDIR>/forage-spool-<uid>`, `0700`,
 created on first use and verified with `lstat` on every call, never repaired) and calls the
 same `extract_pdf_in_subprocess` `/extract`'s uploads use — spawned, under `/extract`'s
 rlimits and `extraction.max_promptguard_chunks` — inside `asyncio.to_thread` and the

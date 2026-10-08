@@ -64,6 +64,7 @@ from pipeline.contract import (
 )
 from pipeline.extraction_limits import (
     CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL,
+    MAX_EXTRACTION_WALL_SECONDS,
     MAX_INPUT_BYTES,
     PARENT_RESERVATION_BYTES,
     PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES,
@@ -112,7 +113,7 @@ from pipeline.stage3_promptguard import (
     promptguard_settings_from_config,
 )
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
-from pipeline.worker_launch import make_process_non_dumpable
+from pipeline.worker_launch import make_process_non_dumpable, sweep_stale_spool
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
     PromptGuardClassifier,
@@ -1567,7 +1568,7 @@ async def _spool_upload(
     received_bytes = 0
     try:
         with tempfile.NamedTemporaryFile(
-            prefix="poppy-extract-",
+            prefix="forage-extract-",
             suffix=".upload",
             dir=spool_dir(),
             delete=False,
@@ -1714,9 +1715,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # path. Each spool re-runs the same check, because a directory verified now
     # can be removed and re-created by another local user later.
     try:
-        spool_dir()
+        spool_directory = spool_dir()
     except SpoolDirectoryError as exc:
         raise RetrieveConfigurationError(str(exc)) from exc
+    # Orphans of a killed process are removed here. The age gate is the
+    # *maximum permitted* wall clock, not `settings.wall_clock_seconds`, so a
+    # sibling process with a longer config sharing this per-euid directory
+    # never has a live spool swept. A count only — never a name or path.
+    swept = sweep_stale_spool(
+        spool_directory, max_wall_clock_seconds=MAX_EXTRACTION_WALL_SECONDS
+    )
+    logger.info("spool_sweep removed=%d", swept)
     if retrieve_settings.max_promptguard_chunks == 0:
         # Exactly one WARNING, closed token plus the integer — no URL, no
         # config dump. `0` is the shipped default for one minor release

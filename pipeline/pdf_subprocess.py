@@ -16,7 +16,7 @@ from pipeline.worker_launch import run_worker, spooled_bytes
 from pipeline.worker_launch import spool_dir as spool_dir
 
 # Spool-file name prefix for fetched PDFs; the spool helpers live in worker_launch.
-_SPOOL_PREFIX = "forage-retrieve-"
+_SPOOL_PREFIX = "forage-retrieve-pdf-"
 
 
 class PDFClassifiableTextLimitError(PDFExtractionError):

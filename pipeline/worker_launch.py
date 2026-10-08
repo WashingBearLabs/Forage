@@ -98,6 +98,58 @@ def spool_dir() -> Path:
     return path
 
 
+SWEPT_SPOOL_PREFIXES: tuple[str, ...] = (
+    "forage-extract-",
+    "forage-retrieve-",  # covers forage-retrieve-pdf- and forage-retrieve-html-
+    "poppy-extract-",  # legacy `/extract` prefix, swept for one upgrade window
+)
+SPOOL_SWEEP_MARGIN_SECONDS = 60
+
+
+def sweep_stale_spool(
+    directory: Path, *, max_wall_clock_seconds: int, now: float | None = None
+) -> int:
+    """Unlink aged spool files orphaned by a killed process; return the count.
+
+    Only a regular file, owned by this euid, carrying a known spool prefix and
+    older than ``max_wall_clock_seconds`` + 60 s is removed. The caller passes
+    the *maximum permitted* wall clock, not a running value, so a sibling
+    process with a longer config never has a live spool swept. The directory
+    is held as an fd: each entry is ``stat``-ed without following symlinks and
+    unlinked ``dir_fd``-relative, so a name swapped for a symlink between the
+    two calls unlinks the symlink, never its target. Never recurses; never
+    raises for a vanished or undeletable entry. Nothing here names a file.
+    """
+    cutoff = (time.time() if now is None else now) - (
+        max_wall_clock_seconds + SPOOL_SWEEP_MARGIN_SECONDS
+    )
+    euid = os.geteuid()
+    removed = 0
+    try:
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return 0
+    try:
+        with os.scandir(fd) as entries:
+            names = [e.name for e in entries if e.name.startswith(SWEPT_SPOOL_PREFIXES)]
+        for name in names:
+            try:
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if (
+                    not stat.S_ISREG(st.st_mode)
+                    or st.st_uid != euid
+                    or st.st_mtime >= cutoff
+                ):
+                    continue
+                os.unlink(name, dir_fd=fd)
+                removed += 1
+            except OSError:
+                continue
+    finally:
+        os.close(fd)
+    return removed
+
+
 @contextmanager
 def spooled_bytes(data: bytes, *, prefix: str) -> Generator[Path]:
     """Write ``data`` to a 0600 file in :func:`spool_dir`; unlink on every exit.

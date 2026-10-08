@@ -2634,7 +2634,7 @@ def _spool_leftovers(root: Path) -> list[Path]:
     directory = root / f"forage-spool-{os.geteuid()}"
     if not directory.exists():
         return []
-    return sorted(directory.glob("forage-retrieve-*"))
+    return sorted(directory.glob("forage-retrieve-pdf-*"))
 
 
 def _fetched(body: bytes, content_type: str) -> ExitStack:
@@ -2703,7 +2703,7 @@ async def test_post_retrieve_fetched_pdf_runs_in_the_worker_inside_the_slot(
     assert seen["settings"] is app.state.extraction_settings
     assert seen["path"].parent == seen["spool_dir"]
     assert seen["spool_dir"] == spool_root / f"forage-spool-{os.geteuid()}"
-    assert seen["path"].name.startswith("forage-retrieve-")
+    assert seen["path"].name.startswith("forage-retrieve-pdf-")
     assert seen["mode"] == 0o600
     assert seen["off_loop"] is True
     assert seen["active"] == 1
