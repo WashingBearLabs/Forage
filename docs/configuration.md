@@ -826,7 +826,7 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 | `retrieve` | mapping | `{}` (all defaults) | all four keys at their defaults | Fetch-route admission and classification limits — see the `retrieve:` block below. |
 | `promptguard_fail_closed_floor` | boolean | `false` | `false` | Operator fail-closed floor on both fetch routes; see "Top-level PromptGuard policy keys" below. |
 | `promptguard_threshold_ceiling` | float | `1.0` | `1.0` | Operator threshold ceiling on both fetch routes; see "Top-level PromptGuard policy keys" below. |
-| `promptguard_wait_seconds` | float | `30.0` | `30.0` | Classification-permit wait budget on both fetch routes; see "Top-level PromptGuard policy keys" below. |
+| `promptguard_wait_seconds` | float | `90.0` | `90.0` | Classification-permit wait budget on both fetch routes; see "Top-level PromptGuard policy keys" below. |
 
 Domain matching is directional: denylist `evil.com` blocks `evil.com` and
 `www.evil.com`, never `notevil.com` or `evil.com.attacker.net`. Allowlist
@@ -1172,7 +1172,7 @@ it has not landed yet.
 |-----|---------|---------------|-------|---------|
 | `promptguard_fail_closed_floor` | `false` | `true` / `false` | `/retrieve` and `/search` | Effective flag is `request.promptguard_fail_closed or floor`: `true` blocks STANDARD/UNTRUSTED content when the classifier is absent or the classification wait expires, even if the caller requests fail-open. `false` imposes no floor. Every 200 reports `effective_promptguard_fail_closed`; trust-tier exemptions remain. Set through the deployed-container bind mount described above. |
 | `promptguard_threshold_ceiling` | `1.0` | 0.0 – 1.0 | `/retrieve` and `/search` | Effective threshold is `min(requested value or validated config default, ceiling)` where only null/omitted selects the default (zero remains zero). The default is resolved **before** capping. A lower ceiling blocks at a lower classifier score; `1.0` imposes no ceiling. Every 200 reports `effective_promptguard_threshold`, including retrieve cache hits. Set through the deployed-container bind mount described above. |
-| `promptguard_wait_seconds` | `30.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/search`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. On `/search` it is one budget for the whole request, not per result. `/extract` takes the same permit but waits without a deadline. |
+| `promptguard_wait_seconds` | `90.0` | 0.05 – 300.0 | **both fetch routes** (`/retrieve` and `/search`) | How long a request waits for a classification slot before giving up. A float, so sub-second values are expressible. On `/search` it is one budget for the whole request, not per result. `/extract` takes the same permit but waits without a deadline. |
 
 The threshold ceiling applies to both fetch routes, including their configured default.
 `/extract` stays permanently fail-closed with its own raw-value threshold guard;
@@ -1210,6 +1210,40 @@ classifier loops over chunks and runs `model(**inputs)` once per chunk, so a per
 mDeBERTa-v3-base-shaped `DebertaV2Config` (the 86M's architecture; no network, no gated
 download), 512 random token ids, warm, median of 20, torch 2.14 / transformers 5.16.
 
+**Native x86 server (the reference for sizing).** Measured 2026-10-07 on an AMD Ryzen
+Threadripper 2970WX (24 cores / 48 threads, Zen+, AVX2, 4 NUMA nodes of which two have no
+local memory), Ubuntu, native Docker, the published `forage:1.2.2` image (torch 2.14 CPU,
+MKL), same weights-free harness, batch 1 × 512 tokens, warm, median of 15. `--cpus N` with
+`torch.set_num_threads(N)` unless noted.
+
+| CPUs (threads) | 22M ms/window | 86M ms/window | 86M windows/s at best concurrency |
+|---|---|---|---|
+| 1 | 1,135 | 3,315 | 0.30 |
+| 2 | 719 | 2,036 | 0.49 |
+| 4 | 634 | 1,446 | 0.69 |
+| 8 | 493 | 1,077 | 1.21 (`classification_concurrency` 4 × 2 threads) |
+| 16 | 494 | 1,080 | 1.33 (4 × 4 threads) |
+| 24 | 481 | 1,192 | 1.25 (3 × 8 threads) |
+| 12, `--cpuset-cpus 0-11` (memory-bearing NUMA nodes only) | — | **861** | 1.13 |
+
+What it shows:
+
+- **Per-window latency stops improving at about 8 CPUs.** One 512-token window does not
+  parallelise further. Cores beyond that buy only modest throughput through
+  `classification_concurrency`, never a shorter permit hold.
+- **The 22M is about 2.2× faster** at every size.
+- **NUMA placement matters on multi-die CPUs.** Pinning to memory-bearing nodes with
+  `cpuset` gained about 20% over a plain `--cpus` quota.
+- **GPU, for planning only (not supported by the image).** The same harness under CUDA
+  PyTorch on the server's RTX 4070 Ti measured **15.4 ms per window for both models**,
+  about 70× faster than the best CPU figure, so a 64-chunk page takes about 1 s. The shipped
+  image is CPU-only; GPU support is a separate epic.
+- This 2018 Zen+ part is about 3–4× slower per window than the Apple-silicon bare-host row
+  below, partly because torch's MKL backend is weak on AMD. Newer x86 parts will land
+  between the two.
+
+**Apple-silicon reference (development machine).**
+
 | Environment | 1 CPU/thread | 4 CPUs/threads |
 |---|---|---|
 | Repo image, `docker run --cpus 1` / `--cpus 4` (Docker Desktop, arm64 Linux VM on an M-series Mac) | **2,989 ms** | **694 ms** |
@@ -1222,30 +1256,35 @@ Linux host with native Docker will differ, and the 1-CPU container figure here i
 likely pessimistic. Re-measure on your own hardware before trusting either row —
 `scripts/bench_promptguard.py` is the end-to-end tool.
 
-**Permit hold, in seconds, against `promptguard_wait_seconds` (30.0).** The permit is shared
+**Permit hold, in seconds, against `promptguard_wait_seconds` (90.0).** The permit is shared
 by `/extract`, `/retrieve` and `/search` at `classification_concurrency: 1`, so a request
-that arrives with *k* holders queued ahead waits about *k* × the hold. Fitting 30 s is
-therefore a statement **per single holder** (k = 1); with more holders ahead, the budget
-that fits is 30 s ÷ k.
+that arrives with *k* holders queued ahead waits about *k* × the hold. The fit is a
+statement **per single holder** (k = 1); with more holders ahead, the budget that fits is
+the wait ÷ k.
 
-| Budget | Environment | Hold (k = 1) | k = 2 | k = 3 |
-|---|---|---|---|---|
-| 64 | container, 1 CPU | 191 s | 383 s | 574 s |
-| 64 | container, 4 CPUs | 44 s | 89 s | 133 s |
-| 64 | bare host, 1 thread (lower bound) | 18 s | 36 s | 54 s |
-| 64 | bare host, 4 threads (lower bound) | 12 s | 24 s | 36 s |
-| 256 | container, 1 CPU | 765 s | 1,530 s | 2,296 s |
-| 256 | container, 4 CPUs | 178 s | 355 s | 533 s |
-| 256 | bare host, 1 thread (lower bound) | 72 s | 145 s | 217 s |
-| 256 | bare host, 4 threads (lower bound) | 48 s | 97 s | 145 s |
+| Budget | Model, environment (native x86 unless noted) | Hold (k = 1) | k = 2 |
+|---|---|---|---|
+| 64 | 86M, 1 CPU | 212 s | 424 s |
+| 64 | 86M, 4 CPUs | 93 s | 185 s |
+| 64 | 86M, 8 CPUs (**recommended**) | 69 s | 138 s |
+| 64 | 86M, 12 CPUs pinned to memory-bearing NUMA nodes | 55 s | 110 s |
+| 64 | 22M, 4 CPUs | 41 s | 81 s |
+| 64 | 22M, 8 CPUs | 32 s | 63 s |
+| 64 | 86M, Docker Desktop container, 4 CPUs | 44 s | 89 s |
 
-The budget (k = 1) that fits 30 s is `floor(30 / per-window latency)`: **10** chunks at 1 CPU
-and **43** at 4 CPUs in the container; **105** and **158** on the bare host (lower bounds,
-so an upper bound on the budget). The shipped `64` fits on the bare-host rows at k = 1 but
-**not** on the container rows measured here — on hardware like that, lower
-`retrieve.max_promptguard_chunks` to the fitting budget rather than raising the wait,
-because a longer wait parks more requests behind the same permit without making any of
-them finish sooner. `256` fits at no row.
+**Recommended envelope (v1.3.0).** 8 CPUs (`FORAGE_CPUS=8`, `promptguard_threads: 8`) with
+the shipped pair `retrieve.max_promptguard_chunks: 64` and `promptguard_wait_seconds: 90.0`:
+a worst-case 64-chunk page holds the 86M permit about 69 s, which fits the 90 s wait at
+k = 1. On a multi-die CPU, pin the container to memory-bearing NUMA nodes (`cpuset`) for
+another ~20%. Below 8 CPUs, or for k = 2 headroom, lower the budget to
+`floor(wait / per-window latency)` for your host: at 90 s that is about **27** chunks at 1 CPU,
+**62** at 4 CPUs and **83** at 8 CPUs for the 86M; **79**, **141** and **182** for the 22M.
+Re-measure on your own hardware; per-window cost varies 3–4× across CPU generations.
+
+Raising the wait rather than lowering the budget trades queue latency for coverage: a
+request may wait up to 90 s behind a large page, but pages up to the 114,688-character
+ceiling are still classified rather than refused. The default was raised from 30.0 to 90.0
+in v1.3.0 for exactly that reason (owner ruling, 2026-10-07).
 
 **What a waiter gets when its wait expires.** Its stage 3 is not run. The request receives
 `stage3_promptguard.unavailable_result`: with `promptguard_fail_closed` off it is
@@ -1261,16 +1300,17 @@ the rule does not hold**, because there is no chunk budget to multiply — the w
 is bounded only by the 10 MB fetch cap, which is far more windows than any wait in range
 covers.
 
-**Known risk.** The shipped pair (`64` and `30.0`) bounds the hold, and fits the wait only
-where the per-window cost is at most about 0.47 s at k = 1 (the table above: it does on
-the bare-host rows, not on the Docker Desktop container rows). Two settings reopen the
-risk: the `0` opt-out, and any budget above the fitting one for your CPU count. Either lets
-a single large fetched page time out every other request's wait, and fail-open
-those requests serve unscanned. The signal is `retrieve.classification_wait_timeouts` and
+**Known risk.** The shipped pair (`64` and `90.0`) bounds the hold, and fits the wait at
+k = 1 only where the per-window cost is at most about 1.4 s: 8 or more native x86 CPUs for
+the 86M, or 4 or more for the 22M. Below that, or with several large pages queued, the
+budget exceeds the fitting one. The `0` opt-out removes the bound altogether. Any of these
+lets a large fetched page time out other requests' waits, and fail-open those requests
+serve unscanned. The signal is `retrieve.classification_wait_timeouts` and
 `search.classification_wait_timeouts` rising while `/health` still reports
-`promptguard_loaded: true` — contention, not a missing model. Watch both counters after
-enabling `/retrieve` at volume; set `promptguard_fail_closed` if unscanned service is
-unacceptable.
+`promptguard_loaded: true`, which means contention, not a missing model. Watch both
+counters after enabling `/retrieve` at volume; set `promptguard_fail_closed` if unscanned
+service is unacceptable. GPU acceleration, which removes the hold almost entirely, is
+planned as a separate epic.
 
 ---
 

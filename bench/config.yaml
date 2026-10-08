@@ -118,4 +118,4 @@ promptguard_fail_closed_floor: false
 promptguard_threshold_ceiling: 1.0
 # How long either fetch route waits for a classification slot before giving
 # up. A float so sub-second values are expressible.
-promptguard_wait_seconds: 30.0
+promptguard_wait_seconds: 90.0

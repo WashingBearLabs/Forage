@@ -55,6 +55,22 @@ live in `MILESTONES.md` instead.
 
 ## Future Work (no spec yet)
 
+### Optional GPU acceleration for PromptGuard
+**Priority:** Medium · **Effort:** Large
+Measured 2026-10-07 on thelab's RTX 4070 Ti: 15.4 ms/window for the 86M, against ~0.86–1.1 s on the
+Threadripper's CPUs. A 64-chunk page then holds the permit for about 1 s, not 55–70 s. Needs:
+- a CUDA image variant (~2.7 GB of wheels) behind a separate tag;
+- Compose GPU passthrough;
+- an owner-tested lane (no GPU CI runners);
+- device reported in `/health`, and probably in the sanitizer revision, since float differences can
+  flip near-threshold scores;
+- a corpus re-measure.
+
+### Evaluate ONNX Runtime for CPU classification
+**Priority:** Low · **Effort:** Medium
+torch's MKL backend is weak on AMD. ONNX Runtime (optionally int8) is often 2–3× faster on CPU, which
+helps hosts without a GPU. Scores shift slightly, so it needs a corpus and cassette re-measure.
+
 ### Evaluate a compiled HTML parser
 **Priority:** Low · **Effort:** Medium
 `selectolax` (lexbor) or a Rust extension could cut normal-page stage-1 cost 10–50×, so the

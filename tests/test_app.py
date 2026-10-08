@@ -3322,7 +3322,7 @@ class TestRetrieveSettingsReader:
         assert settings.max_queued_fetch_bytes == 31457280
         assert settings.promptguard_fail_closed_floor is False
         assert settings.promptguard_threshold_ceiling == 1.0
-        assert settings.promptguard_wait_seconds == 30.0
+        assert settings.promptguard_wait_seconds == 90.0
 
     def test_the_byte_bound_binds_before_the_depth_bound_at_the_defaults(self) -> None:
         """Both bounds are exercisable — the default is not depth x 10 MB."""

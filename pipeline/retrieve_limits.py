@@ -65,7 +65,10 @@ PROMPTGUARD_THRESHOLD_CEILING = 1.0
 # A float, not an int: ``sanitize_and_structure`` takes
 # ``classification_wait_seconds: float | None`` and the tests that exercise the
 # timeout need sub-second values inside the range.
-PROMPTGUARD_WAIT_SECONDS = 30.0
+# 90 s, not 30: measured on a native x86 server (docs/configuration.md, "Measured
+# per-window cost"), the 86M holds the permit ~55-70 s for a 64-chunk page even at 8+
+# CPUs, so a 30 s wait would time concurrent requests out into unavailable_allowed.
+PROMPTGUARD_WAIT_SECONDS = 90.0
 _MIN_PROMPTGUARD_WAIT_SECONDS = 0.05
 _MAX_PROMPTGUARD_WAIT_SECONDS = 300.0
 

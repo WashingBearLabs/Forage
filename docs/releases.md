@@ -83,12 +83,16 @@ What ships (draft, pending the owner cut):
     `input` / `ctx` / `url` placeholder keys are dropped (GOVERNANCE ruling (l)).
 12. **Three new `/metrics` counters:** `retrieve.html_worker_spawns`,
     `retrieve.html_worker_refusals` and `retrieve.promptguard_budget_refusals`.
-13. **`sanitizer_revision` rotates seventeen times** (the forty-third to the fifty-ninth
+13. **`promptguard_wait_seconds` defaults to 90.0** (was 30.0), and the recommended envelope is
+    8 CPUs. Measured on a native x86 server, the 86M holds the permit ~55-70 s for a
+    64-chunk page even at 8+ CPUs, so a 30 s wait would have timed concurrent requests out
+    into unclassified service. Sizing tables for both models: [`docs/configuration.md`](configuration.md).
+14. **`sanitizer_revision` rotates seventeen times** (the forty-third to the fifty-ninth
     rotations in [`docs/bootstrap-notes.md`](bootstrap-notes.md)): `021378ef…` →
     `2c6d0382cd0f94158a64710db7b5beb8b26ea411d4f65eabd0d0ca03c1572591` at the default model.
     A deployment sees **one** cache-invalidating window. Setting
     `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` no longer reproduces `021378ef…`.
-14. **Compatibility windows: none open.** The `max_promptguard_chunks` window closed at `64`
+15. **Compatibility windows: none open.** The `max_promptguard_chunks` window closed at `64`
     and the 422 placeholder window closed with the key drop; GOVERNANCE worked example 6's
     announce-then-flip window was waived by the owner for the default-model change (no known
     third-party consumers). The consumer note is in `docs/bootstrap-notes.md`.
