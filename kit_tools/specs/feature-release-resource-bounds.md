@@ -458,31 +458,31 @@ validated plain-data frame, so that the parse cost of a hostile page is bounded 
   - Also record these figures under a `docs/bootstrap-notes.md` heading.
 
 **Acceptance Criteria:**
-- [ ] `pipeline/html_subprocess.py` holds `extract_html_and_scan` and
+- [x] `pipeline/html_subprocess.py` holds `extract_html_and_scan` and
       `extract_html_bytes_in_subprocess`, using the US-002 launcher and the US-004 prefix.
       `orchestrator.py` is not edited.
-- [ ] For every corpus `/retrieve` HTML record, plus a non-UTF-8 body and an over-budget body, the
+- [x] For every corpus `/retrieve` HTML record, plus a non-UTF-8 body and an over-budget body, the
       in-process frame round trip equals `orchestrator._extract_html_and_scan_inline`. That covers
       `ExtractionResult`, verdict, penalty, categories and line numbers. A real-spawn test on the
       fixed 12-body sample matches too.
-- [ ] The raw frame bytes contain neither `scan_text_inline` nor a marker string that occurs only
+- [x] The raw frame bytes contain neither `scan_text_inline` nor a marker string that occurs only
       in a matched span (test). The docstring enumerates every field.
-- [ ] The worker path re-emits `stage2_fold_expansion_refused` exactly when the in-thread path
+- [x] The worker path re-emits `stage2_fold_expansion_refused` exactly when the in-thread path
       does (parity test).
-- [ ] The parent rejects a forged frame for each validation rule with `HTMLExtractionError` (one
+- [x] The parent rejects a forged frame for each validation rule with `HTMLExtractionError` (one
       test each).
-- [ ] `MAX_HTML_FRAME_BYTES` is derived and documented. The largest admissible result fits, and
+- [x] `MAX_HTML_FRAME_BYTES` is derived and documented. The largest admissible result fits, and
       an over-cap frame is refused, not truncated (tests). Parent peak RSS is recorded for the
       budget-off and 64-chunk cases.
-- [ ] The kill test passes, a spawn `OSError` maps to `HTMLExtractionError`, and no child
+- [x] The kill test passes, a spawn `OSError` maps to `HTMLExtractionError`, and no child
       survives (tests).
-- [ ] The Linux envelope (VmPeak and CPU per size, and the largest page that fits) is recorded in
+- [x] The Linux envelope (VmPeak and CPU per size, and the largest page that fits) is recorded in
       Implementation Notes, `docs/configuration.md` and `docs/bootstrap-notes.md`.
-- [ ] `sanitizer_revision` is unchanged, with the values recorded.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `sanitizer_revision` is unchanged, with the values recorded.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-006: Route large `/retrieve` HTML bodies through the worker
 
