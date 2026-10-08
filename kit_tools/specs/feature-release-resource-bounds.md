@@ -637,21 +637,21 @@ so that the published surface matches the new behaviour.
 - **Rotation.** `contract.py` moves; follow the procedure.
 
 **Acceptance Criteria:**
-- [ ] The `/retrieve` 422 description and the `RetrieveErrorCode` docstring name
+- [x] The `/retrieve` 422 description and the `RetrieveErrorCode` docstring name
       `html_extraction_error`.
-- [ ] `/metrics` emits both counters, wired from US-006's counters (test). A 1.4.0
+- [x] `/metrics` emits both counters, wired from US-006's counters (test). A 1.4.0
       metric-addition test requires them in the 1.4.0 entry.
-- [ ] `CONTRACT_VERSION == "1.4.0"`, and the 1.4.0 bullet covers the reason, the counters and the
+- [x] `CONTRACT_VERSION == "1.4.0"`, and the 1.4.0 bullet covers the reason, the counters and the
       large-page refusal. The tense guard passes.
-- [ ] `tests/golden/contract_1_4_0.json` exists and matches. Goldens 1.0.0–1.3.0 are
+- [x] `tests/golden/contract_1_4_0.json` exists and matches. Goldens 1.0.0–1.3.0 are
       byte-unchanged.
-- [ ] The OpenAPI file, anchor and fixture twin are regenerated. Export, anchor-quote,
+- [x] The OpenAPI file, anchor and fixture twin are regenerated. Export, anchor-quote,
       bench-pin and GOVERNANCE tests are green.
-- [ ] The rotation is recorded per the procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The rotation is recorded per the procedure.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-008: `/search` parses titles and snippets off the event-loop thread
 
