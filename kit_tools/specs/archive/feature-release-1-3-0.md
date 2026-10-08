@@ -577,11 +577,45 @@ merging and the owner gates are all that remain.
   rewritten (measured table, k = 1-3 holds, wait-expiry behaviour via `unavailable_result`, Known
   risk). `grep -n "100 ms" docs/configuration.md` is empty. No hashed file touched; no rotation.
 
+### US-003 — 422 key drop, budget-refusal counter, final 1.4.0 entry
+
+*(Added after the epic run, closing validation finding 2026-10-07-004.)*
+
+- **1.4.0 reconciliation** (`git diff 7fe91c0..HEAD -- pipeline/contract.py contract/openapi.yaml`). Every
+  wire-visible change is named in the final 1.4.0 docstring entry:
+  - `info.version` `1.3.0` → `1.4.0`;
+  - `Pipeline422ErrorResponse` / `/retrieve` 422 description names `html_extraction_error` beside the PDF reasons;
+  - `RetrieveMetricsResponse` gains `html_worker_spawns`, `html_worker_refusals`, `promptguard_budget_refusals`
+    (required, integer);
+  - `ValidationErrorDetail` and the three route 422 descriptions: exactly `loc`/`msg`/`type`; the `"[redacted]"`
+    `input`/`ctx`/`url` placeholders are gone (ruling (l));
+  - `retrieve.max_promptguard_chunks` default 64 with `0` the opt-out (configuration, stated in the entry, no schema
+    field);
+  - sanitizer outcomes (fold BLOCK, ruling (m)) stated not to be contract changes.
+- **Rotation:** the fifty-eighth (`23444fe4…` → `91455b21…`, `contract.py` + `orchestrator.py`, text only). Full
+  values in `docs/bootstrap-notes.md` "The fifty-eighth rotation". The entry's wording about 256 was later corrected
+  by the fifty-ninth rotation (`91455b21…` → `2c6d0382…`, finding 2026-10-07-003).
+
+### US-004 — GOVERNANCE closure and consumer note
+
+*(Added after the epic run, closing validation finding 2026-10-07-005.)*
+
+- **Grep:** `git grep -n '1\.3\.0' -- docs kit_tools README.md CLAUDE.md contract`, classifying each hit as a
+  current-version statement (rewritten) or history (kept).
+- **Files checked and rewritten:** `CLAUDE.md` (invariant 4), `README.md` (:70, :293), `docs/releases.md`
+  (Unreleased line), `contract/GOVERNANCE.md` (:71, the window paragraph, rulings (g) and (l) closure lines),
+  `kit_tools/docs/CI_CD.md` (:320), `kit_tools/docs/API_GUIDE.md` (:43), `kit_tools/arch/CODE_ARCH.md` (:118).
+- **Checked and kept as history:** `README.md` :78/:253 (published `v1.2.2 / 1.3.0` pin), remaining
+  `docs/releases.md` and `GOVERNANCE.md` hits (per-release history, ruling (m)), `CODE_ARCH.md` :404/:467 (rotation
+  history), `kit_tools/PRODUCT_VISION.md` :110 and `kit_tools/arch/DECISIONS.md` :1107 (dated structural-hardening
+  outcome records).
+- **Consumer note:** `docs/bootstrap-notes.md` "Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0" (five items).
+
 ### US-005 — prepare the v1.3.0 release tree
 - `docs/releases.md`: Unreleased is now empty; a `### v1.3.0 — <publication date> (NOT YET PUBLISHED)`
   entry sits above v1.2.2 with `contract: 1.4.0`, anchor `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`
   (= `contract/openapi.yaml.sha256`), placeholder `index digest` / `tagged commit` / publish run / smoke record, and the
-  14 listed items. Final revision `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78`
+  14 listed items. Final revision `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78` (superseded by the fifty-ninth rotation, `2c6d0382…`)
   (= `derive_sanitizer_revision({})`); rotations 43rd-58th = sixteen from `021378ef…`.
 - No hashed source changed: no rotation. `contract_version` stays 1.4.0; `export_contract --check` untouched.
 - **`1\.2\.2` classification** (`git grep -n '1\.2\.2'` outside `kit_tools/specs`, after the edit):

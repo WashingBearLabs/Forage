@@ -190,7 +190,8 @@ MINOR when fields are only added.
   pinned the same way. ``retrieve.max_promptguard_chunks`` now defaults to 64
   (a budget of 114 688 characters) where it defaulted to 0: a page above the
   budget is refused with that reason instead of classified in full. ``0`` is
-  the explicit opt-out (no pre-check) and 256 is the announced next default.
+  the explicit opt-out (no pre-check). 256 had been announced; the owner
+  ruling of 2026-10-07 shipped 64 instead, after measuring the 86M hold.
   A budget refusal is a served-outcome change at the shipped default, not a
   new enum member. The request-validation 422 items are now exactly ``loc``,
   ``msg`` and ``type``: the ``input``, ``ctx`` and ``url`` placeholders that

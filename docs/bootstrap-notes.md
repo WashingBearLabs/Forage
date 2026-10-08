@@ -2626,6 +2626,21 @@ Every reversal was read-only: the working tree was copied to a temp directory an
 byte-identical (no model in it changed), and `contract/openapi.yaml`, its anchor and the fixture twin were
 regenerated. Not replayed to Poppy.
 
+### The fifty-ninth rotation: 1.4.0 entry wording (v1.3.0 validation, finding 2026-10-07-003)
+
+The final 1.4.0 entry in `pipeline/contract.py` said "256 is the announced next default". The owner ruling of
+2026-10-07 shipped 64 and withdrew 256, and the entry is extracted into the v1.3.0 Release body, so it now reads
+"256 had been announced; the owner ruling of 2026-10-07 shipped 64 instead". Text only, **not** a
+sanitization-behaviour change; only `contract.py` moves among the hashed sources.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`2ab79d0`) / `contract.py` reverted alone (read-only temp copy) | `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78` |
+| After | `2c6d0382cd0f94158a64710db7b5beb8b26ea411d4f65eabd0d0ca03c1572591` |
+
+Goldens and `contract/openapi.yaml` are unchanged: the docstring is not part of the OpenAPI document. Not replayed
+to Poppy.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

@@ -83,9 +83,9 @@ What ships (draft, pending the owner cut):
     `input` / `ctx` / `url` placeholder keys are dropped (GOVERNANCE ruling (l)).
 12. **Three new `/metrics` counters:** `retrieve.html_worker_spawns`,
     `retrieve.html_worker_refusals` and `retrieve.promptguard_budget_refusals`.
-13. **`sanitizer_revision` rotates sixteen times** (the forty-third to the fifty-eighth
+13. **`sanitizer_revision` rotates seventeen times** (the forty-third to the fifty-ninth
     rotations in [`docs/bootstrap-notes.md`](bootstrap-notes.md)): `021378ef…` →
-    `91455b21a91fe928e2038358198e7cb9222c203beccbe0ec2ce06700ad409f78` at the default model.
+    `2c6d0382cd0f94158a64710db7b5beb8b26ea411d4f65eabd0d0ca03c1572591` at the default model.
     A deployment sees **one** cache-invalidating window. Setting
     `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` no longer reproduces `021378ef…`.
 14. **Compatibility windows: none open.** The `max_promptguard_chunks` window closed at `64`

@@ -726,6 +726,13 @@ and `bench/config.yaml`. The validation-422 placeholder keys and the counter liv
 `retrieval_app.py`, which is not hashed. Not replayed to Poppy. Full values:
 `docs/bootstrap-notes.md`.
 
+The fifty-ninth rotation is `91455b21…` → `2c6d0382…` for the v1.3.0 validation fix
+(finding 2026-10-07-003) — **not a sanitization-behaviour change**: only `contract.py`
+moves, rewording the final 1.4.0 entry so it no longer calls 256 "the announced next
+default" (the owner ruling shipped 64). A read-only whole-file reversal against `2ab79d0`
+reproduces `91455b21…` under default, `config.yaml` and `bench/config.yaml`. Text only;
+old cache keys invalidate. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:
