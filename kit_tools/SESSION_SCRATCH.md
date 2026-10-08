@@ -33,3 +33,6 @@
 [--:--] US-005: v1.3.0 release tree prepared (releases.md entry, pins 1.2.2->1.3.0, tracking docs, counts 5557)
 - Files: docs/releases.md, compose/*.yml, tests/test_compose_fragments.py, contract_smoke.py, README, kit_tools docs
 - Decision: README/docs say 'prepared, not yet published' with v1.2.2 as latest published
+
+[19:43] validate-implementation feature-release-1-3-0: no criticals; 3 warnings + 4 info logged (2026-10-07-003..009) to worktree AUDIT_FINDINGS.md
+- Decision: contract.py "256 is the announced next default" wording not fixed (hashed; would rotate post-release-record)
