@@ -462,21 +462,21 @@ merging and the owner gates are all that remain.
   9. Fill `index digest`, `tagged commit` and the smoke record, and remove NOT YET PUBLISHED.
 
 **Acceptance Criteria:**
-- [ ] `docs/releases.md` has a `### v1.3.0` NOT YET PUBLISHED entry with an empty Unreleased
+- [x] `docs/releases.md` has a `### v1.3.0` NOT YET PUBLISHED entry with an empty Unreleased
       heading above it, using `c933673`'s placeholder wording.
-- [ ] The entry's `contract:` is 1.4.0. Its anchor equals `contract/openapi.yaml.sha256` and its
+- [x] The entry's `contract:` is 1.4.0. Its anchor equals `contract/openapi.yaml.sha256` and its
       final revision equals `derive_sanitizer_revision()` at the final commit (checked by a
       command recorded in Implementation Notes).
-- [ ] The entry covers each of the 14 listed items, each with a link where one exists.
-- [ ] Every `git grep -n '1\.2\.2'` hit is classified in a recorded table as rewritten or history,
+- [x] The entry covers each of the 14 listed items, each with a link where one exists.
+- [x] Every `git grep -n '1\.2\.2'` hit is classified in a recorded table as rewritten or history,
       and every rewrite now names `1.3.0`. Every file in `git show --stat c933673` is accounted
       for. `tests/test_compose_fragments.py` passes.
-- [ ] SYNOPSIS and MILESTONES are updated. TESTING_GUIDE and `CLAUDE.md` counts equal the
+- [x] SYNOPSIS and MILESTONES are updated. TESTING_GUIDE and `CLAUDE.md` counts equal the
       `--collect-only` total.
-- [ ] Implementation Notes list the findings ready to resolve and the exact nine-step owner
+- [x] Implementation Notes list the findings ready to resolve and the exact nine-step owner
       sequence. No tag is created or pushed.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
 
 ## Edge Cases
 
