@@ -205,37 +205,37 @@ the limit through `scan_structural_forms(structural_scan_forms(...))` and get BL
     List 2026-10-04-060 and 2026-10-07-002 as ready to resolve in Implementation Notes.
 
 **Acceptance Criteria:**
-- [ ] The pre-change measurement (benign ratio maximum and over-limit count per genre, and the
+- [x] The pre-change measurement (benign ratio maximum and over-limit count per genre, and the
       pre-shape 2 MiB timing) is recorded in Implementation Notes before the first code commit.
-- [ ] The limit is `max(2 * n, n + 256)`. Boundary tests show that exactly-at-limit is accepted
+- [x] The limit is `max(2 * n, n + 256)`. Boundary tests show that exactly-at-limit is accepted
       and one character over is refused, on both the 2n branch and the n+256 branch, through
       both the pass-one and the pass-two refusal paths.
-- [ ] `scan_structural_forms` returns BLOCKED, with penalty `0.0` and the `encoded_payload`
+- [x] `scan_structural_forms` returns BLOCKED, with penalty `0.0` and the `encoded_payload`
       refusal flag (plus any suspicious flags already found), whenever the fold is refused. The
       six listed fold-form tests are updated or renamed: the 10 MiB test now asserts BLOCKED, and
       the unpadded padding assertion is `== BLOCKED`.
-- [ ] Refused pages are quarantined or omitted on every route: `/retrieve` (TRUSTED and default
+- [x] Refused pages are quarantined or omitted on every route: `/retrieve` (TRUSTED and default
       tier) and `/extract` quarantine (title `None`). `/search` omits the result for each of the
       four refusal sources, with the existing `search_result_omitted` token, the right `field`
       value and the `omitted_by_reason` structural-blocked counter (one test each).
-- [ ] A 6-character Arabic title ending in U+FDFA (code-point escapes) is folded, not refused,
+- [x] A 6-character Arabic title ending in U+FDFA (code-point escapes) is folded, not refused,
       on `/search` (test).
-- [ ] The sweep's `maximal_accepted_expansion` is `"a" * 16 + "\ufdfa"`, with an in-sweep
+- [x] The sweep's `maximal_accepted_expansion` is `"a" * 16 + "\ufdfa"`, with an in-sweep
       assertion that the large input is not refused. The ceiling is about 2× the measured
       post-shape median. The back-to-back post/pre median ratio is ≤ 65%, and every run is
       recorded.
-- [ ] The corpus baseline and floors are regenerated, `floors_diff` reports 0 problems and
+- [x] The corpus baseline and floors are regenerated, `floors_diff` reports 0 problems and
       `--baseline-fpr` reports 0 rises. Both cassettes are byte-unchanged.
-- [ ] The rotation is recorded per the procedure: each file reverted alone plus an all-reverted
+- [x] The rotation is recorded per the procedure: each file reverted alone plus an all-reverted
       control, under default and shipped config. Every count site in step 9 shows the new
       ordinal, and a grep for the previous ordinal word over those files finds no stale
       current-count hit.
-- [ ] `SECURITY.md`, `docs/releases.md` Unreleased and GOTCHAS describe the rule.
+- [x] `SECURITY.md`, `docs/releases.md` Unreleased and GOTCHAS describe the rule.
       `tests/test_corpus_docs_payloads.py` passes, and new fixtures use code-point escapes only.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 
