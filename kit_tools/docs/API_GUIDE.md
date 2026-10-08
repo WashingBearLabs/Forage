@@ -40,7 +40,7 @@ reasoning; `docs/configuration.md` "Deployment posture" is the operator statemen
 `POST /extract` takes `multipart/form-data`. Datetimes are ISO 8601 in UTC.
 
 **Versioning signal.** The response contract has a hand-bumped semver, `contract_version`,
-currently **1.3.0** (`pipeline/contract.py`). It appears on `/health`, on `/metrics`, and
+currently **1.4.0** (`pipeline/contract.py`). It appears on `/health`, on `/metrics`, and
 as `info.version` in `/openapi.json`. Consumers compare the MAJOR component and refuse to
 activate on a mismatch; a MINOR difference is additive and safe. `/health` also carries
 `sanitizer_revision`, a hash of pipeline *behaviour*; never compare it for compatibility

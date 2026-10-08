@@ -2625,3 +2625,34 @@ Every reversal was read-only: the working tree was copied to a temp directory an
 `git show 616beed:pipeline/<file>`. Goldens 1.0.0-1.3.0 are byte-unchanged; the held 1.4.0 golden regenerates
 byte-identical (no model in it changed), and `contract/openapi.yaml`, its anchor and the fixture twin were
 regenerated. Not replayed to Poppy.
+
+### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
+
+Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over
+`1.3.0`. No compatibility window is open any more (GOVERNANCE rulings (g) and (l) carry closure lines).
+
+1. **Validation-422 key drop (ruling (l), step 3).** `detail[]` items on the three POST routes carry exactly
+   `loc`, `msg`, `type`. The `"[redacted]"` `input`/`ctx`/`url` placeholders of 1.3.0 are gone; a consumer
+   still reading `detail[].input` must stop. Declared properties are unchanged, hence MINOR.
+2. **Activation.** `1.4.0` is a MINOR over `1.3.0`: a consumer that refuses only on a major mismatch
+   activates without change. Re-vendor `contract/openapi.yaml` from the `v1.3.0` tag and verify it against
+   that tag's `openapi.yaml.sha256` anchor.
+3. **`html_extraction_error`.** A new `RetrieveErrorCode`: a fetched HTML body above
+   `retrieve.html_worker_threshold_bytes` (512 KiB default) that the rlimited worker refuses returns a coded
+   422 instead of being parsed in-process. Within bounds the response is byte-identical.
+4. **Budget default 64 (ruling (g), dated continuation).** `retrieve.max_promptguard_chunks` now defaults to
+   `64` (was `0`; `256` had been announced). A page whose extracted text exceeds the derived character ceiling
+   returns 422 `content_too_large` with reason `promptguard_budget`. `0` stays the explicit opt-out. Container
+   sizing is in `docs/configuration.md`.
+5. **Three new `/metrics` counters** under `retrieve.*`: `html_worker_spawns`, `html_worker_refusals`,
+   `promptguard_budget_refusals`. Additive.
+
+Files checked for current-version prose (`1\.3\.0` grep across `docs/`, `kit_tools/`, `README.md`, `CLAUDE.md`,
+`contract/`): `CLAUDE.md` (invariant 4 already `1.4.0`; the rest is rotation history), `README.md` (:70 and :293
+rewritten; :78 and :253 state the published `v1.2.2 / 1.3.0` pin and stay), `docs/releases.md` (Unreleased line
+rewritten; the rest is per-release history), `contract/GOVERNANCE.md` (:71 rewritten; remaining hits, e.g. ruling
+(m), are history), `kit_tools/docs/CI_CD.md` (:320 rewritten), `kit_tools/docs/API_GUIDE.md` (:43 rewritten),
+`kit_tools/arch/CODE_ARCH.md` (:118 rewritten; :404 and :467 are rotation history). `kit_tools/PRODUCT_VISION.md`
+:110 and `kit_tools/arch/DECISIONS.md` :1107 were reviewed and left: both are the dated outcome record of
+`structural-hardening` (which did not bump), not a statement of the current version. No sanitizer-revision
+rotation: docs only (`91455b21…` unchanged).

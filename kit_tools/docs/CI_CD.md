@@ -317,7 +317,7 @@ Steps, in order:
    `hf_[A-Za-z0-9]{20,}`, `FORAGE_BRAVE_API_KEY`, `FORAGE_CACHE_HMAC_KEY`), run over the published image config
    JSON for all platforms.
 8. **On `v*` tags only — Release.** `CONTRACT_VERSION` is grepped out of the *tagged tree's*
-   `pipeline/contract.py` (currently `1.3.0`; a non-semver read fails the step), and the
+   `pipeline/contract.py` (currently `1.4.0`; a non-semver read fails the step), and the
    same step copies that version's **per-version entry** — its bullet at column 0 in the
    `CONTRACT_VERSION` docstring plus the two-space-indented lines under it — into
    `${RUNNER_TEMP}/contract-entry.md` with a POSIX `awk` program; an empty file (a contract

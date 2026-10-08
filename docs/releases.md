@@ -12,7 +12,7 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 
 ## Unreleased
 
-Not yet tagged; the version number is decided at the release gate. Contract stays `1.3.0`.
+Not yet tagged; the version number is decided at the release gate. Contract is `1.4.0` (the held cut; v1.3.0 is prepared, not published).
 
 - **The 86M is the default model** (owner ruling 2026-10-06). With `FORAGE_MODEL_ID`
   unset the service now loads `meta-llama/Llama-Prompt-Guard-2-86M`;

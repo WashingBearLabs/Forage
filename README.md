@@ -67,7 +67,7 @@ The stage 2 and stage 3 defences are measured, not asserted: a corpus of indirec
 
 <!-- boundary-text:end -->
 
-The response contract is versioned (`contract_version`, currently **1.3.0**). Consumers
+The response contract is versioned (`contract_version`, currently **1.4.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart
@@ -290,7 +290,7 @@ no client-header trust) — behind its own hermetic cross-container smoke.
 went public at the 2026-09-10 US-008 flip**; anonymous pulls verified at the gate.
 
 The optional in-memory cache shipped with contract `1.1.0` (the current contract is
-`1.3.0`), and the **frozen OpenAPI
+`1.4.0`), and the **frozen OpenAPI
 contract** is in the tree: [`contract/openapi.yaml`](contract/openapi.yaml), generated and
 checked against a committed `openapi.yaml.sha256` anchor, with the versioning rules — what
 counts as MAJOR, MINOR, PATCH or no bump, and how to vendor a verified copy — in

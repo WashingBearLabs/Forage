@@ -68,14 +68,15 @@ contract `1.3.0`, whose window opened in
 US-002. Withdrawing a defective image does not withdraw its contract version.
 The archived release spec's US-005 handoff records replacement verification;
 `docs/releases.md` records completed recovery and withdrawal.
-The next mapping is **published**: image `v1.2.2` (2026-10-04, verified), a
-PATCH that makes the opt-in 86M classifier selectable, serves contract
-`1.3.0`, unchanged from `v1.2.1`. It is not the next MINOR, so both "next MINOR" windows below
-(ruling (g)'s `retrieve.max_promptguard_chunks` flip and the 422 field drop)
-stay open. A process built from this tree reports `1.4.0` on `/health`: the held
-`release-resource-bounds` cut, unpublished, whose `contract_1_4_0.json` is regenerated until
-the tag. Image `v1.0.0` serving contract `1.4.0` is not a mapping that exists; the example
-above stays the one that shows the two semvers diverging.
+The last published mapping is image `v1.2.2` (2026-10-04, verified), a PATCH that makes
+the opt-in 86M classifier selectable and serves contract `1.3.0`, unchanged from `v1.2.1`.
+The next mapping is **prepared, not yet published**: image `v1.3.0` serves contract `1.4.0`,
+the next MINOR. Both "next MINOR" windows are **closed in 1.4.0** (2026-10-07): ruling (g)'s
+`retrieve.max_promptguard_chunks` flip (to `64`) and ruling (l)'s validation-422 key drop.
+**No compatibility window is open.** A process built from this tree reports `1.4.0` on
+`/health`; `contract_1_4_0.json` is regenerated until the tag. Image `v1.0.0` serving
+contract `1.4.0` is not a mapping that exists; the example above stays the one that shows
+the two semvers diverging.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the
 last unmechanized integrity claim in the release path, so it is not a human line. The
@@ -700,6 +701,11 @@ network placement as the control.
 The closure is limited to request-validation 422s on the three POST routes.
 Pipeline 422 `reason` is unchanged; ruling (d)'s private-IP echo survives.
 Both extraction middlewares still refuse before routing.
+
+**Closure (2026-10-07):** step 3 is executed in contract 1.4.0 (`release-1-3-0` US-003).
+Request-validation 422 items carry exactly `loc`, `msg`, `type`; the `"[redacted]"`
+`input`/`ctx`/`url` placeholders, their window constants and the test helper are deleted.
+Announced as a MINOR (the carve-out in step 3), not a MAJOR. No window remains open.
 
 **Source:** `retrieval_app.py`; `tests/test_contract_errors.py` (per-field
 marker liveness, interpolating-validator counterexample, never-raises guards
