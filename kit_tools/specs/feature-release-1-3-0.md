@@ -212,14 +212,14 @@ outcome.
 - Docs only, so no rotation.
 
 **Acceptance Criteria:**
-- [ ] The per-window median at 1 and 4 threads (or CPUs) is recorded in Implementation Notes,
+- [x] The per-window median at 1 and 4 threads (or CPUs) is recorded in Implementation Notes,
       with the config source, every hyperparameter used, batch size, window length, machine and
       command.
-- [ ] The `docs/configuration.md` sizing section gives the measured figures, labelled as lower
+- [x] The `docs/configuration.md` sizing section gives the measured figures, labelled as lower
       bounds where they are host-thread figures. It states the hold at 64 and 256 for 1 and 4
       CPUs against 30 s, the fitting budget per CPU count, and the waiter outcome and its
       counters. The bench table is captioned as end-to-end latency.
-- [ ] No provisional "100 ms" figure remains (grep). The default is unchanged by this story.
+- [x] No provisional "100 ms" figure remains (grep). The default is unchanged by this story.
 
 ### US-003: Drop the validation-422 placeholder keys, add the budget-refusal counter, finalise contract 1.4.0
 
