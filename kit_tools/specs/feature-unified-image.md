@@ -616,3 +616,26 @@ that the old grep goes red.
 ### Session 2026-10-08
 - **Q:** A separate repo or tag suffix? **A:** Neither. One image.
 - **Q:** Which CUDA build? **A:** cu130.
+
+### US-005 (attempt 1, 2026-10-09)
+
+- **Baseline** (`main` run 37863820132, old ~350 MB image): build-amd64 2m43s (build 137s,
+  save+zstd 8s, upload 4s); secret-grep 41s (download 9s, load 28s); smoke 53s (download 3s,
+  load 33s); publish 4m48s (download 4s, load 17s, multi-arch build 246s). Artifact 298,264,769 B.
+  Repo cache 6.12 GB / 302 entries.
+- **Changes:** "Free runner disk space" step (rm toolchains, `df` assert >= 20 GiB) first in
+  build-amd64, secret-grep, smoke and publish. Timeouts 90 / 45 / 45 / 90 (were 45 / 20 / 20 / 60).
+  Pinned in `tests/test_ci_workflow.py::TestImageJobBudgets`.
+- **Cache decision:** keep both scopes. Projected 3.2 + 3.6 = ~6.8 GB < 8 GB (80%). Single-stage
+  Dockerfile, so publish `mode=max` == `mode=min` in layers. Thin margin; re-decide from the
+  measured figure after the first main push.
+- **Pending at PR time:** measured timeouts and `ceil(1.5x)` re-pin (procedure in CI_CD.md),
+  and confirming the diff_ids gate on the first `publish` run. Neither can be done before the
+  larger image runs in CI on `main`.
+- **Size wording swept:** the `~4 GB estimated` text in INFRA_ARCH.md, DEPLOYMENT.md and
+  DECISIONS.md now carries the CI-measured figures from run 37962323278 (~3.14 GB compressed,
+  ~5.96 GB on disk). No hashed source moved, so there is no revision rotation.
+- **Publish re-pin rule:** `publish` is `max(90, ceil(1.5 x measured))`. The 90-minute floor is
+  fixed and pinned by the test, so it does not follow the plain `ceil(1.5x)` rule.
+- **Attempt 2:** reused attempt 1's commit and typed the new test's `with:` mappings as
+  `dict[str, Any]`, which clears its six strict-pyright errors.

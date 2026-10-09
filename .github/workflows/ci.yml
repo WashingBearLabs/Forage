@@ -345,10 +345,26 @@ jobs:
     if: >-
       !startsWith(github.ref, 'refs/tags/searxng-v')
     runs-on: ubuntu-latest
-    # The cold build downloads ~200 MB of CPU torch plus the rest of the lock;
-    # the cap is a runaway backstop, not a budget.
-    timeout-minutes: 45
+    # The cold build downloads ~3 GB of CUDA torch plus the rest of the lock.
+    # Initial 90 min is a runaway backstop set before the larger image existed;
+    # CI_CD.md "Timeout and cache budgets" has the ceil(1.5 x measured) re-pin
+    # procedure and the measured values.
+    timeout-minutes: 90
     steps:
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          # Preinstalled toolchains this workflow never uses. The amd64 image's
+          # dependency layer is ~3.1 GB compressed / ~5.8 GB on disk, and a
+          # build or `docker load` needs the layer twice over.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          avail_kb="$(df --output=avail -k / | tail -n 1 | tr -d '[:space:]')"
+          echo "free on /: $((avail_kb / 1024 / 1024)) GiB"
+          if [ "${avail_kb}" -lt 20971520 ]; then
+            echo "::error::only $((avail_kb / 1024 / 1024)) GiB free on / after cleanup; this job needs at least 20 GiB"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -511,8 +527,22 @@ jobs:
     if: >-
       !startsWith(github.ref, 'refs/tags/searxng-v')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          # Preinstalled toolchains this workflow never uses. The amd64 image's
+          # dependency layer is ~3.1 GB compressed / ~5.8 GB on disk, and a
+          # build or `docker load` needs the layer twice over.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          avail_kb="$(df --output=avail -k / | tail -n 1 | tr -d '[:space:]')"
+          echo "free on /: $((avail_kb / 1024 / 1024)) GiB"
+          if [ "${avail_kb}" -lt 20971520 ]; then
+            echo "::error::only $((avail_kb / 1024 / 1024)) GiB free on / after cleanup; this job needs at least 20 GiB"
+            exit 1
+          fi
+
       # No checkout. This job needs the built image and nothing from the
       # repository: the pattern set below is defined here, in the workflow, so
       # the gate cannot be weakened by editing a script the job fetches.
@@ -604,10 +634,24 @@ jobs:
     if: >-
       !startsWith(github.ref, 'refs/tags/searxng-v')
     runs-on: ubuntu-latest
-    # The 120 s health budget, plus `docker load` (~28 s) and a cold `uv sync`.
-    # A backstop, not a budget.
-    timeout-minutes: 20
+    # The 120 s health budget, plus `docker load` of the ~3 GB-layer image and
+    # a cold `uv sync`. Initial 45 min; re-pin per CI_CD.md.
+    timeout-minutes: 45
     steps:
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          # Preinstalled toolchains this workflow never uses. The amd64 image's
+          # dependency layer is ~3.1 GB compressed / ~5.8 GB on disk, and a
+          # build or `docker load` needs the layer twice over.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          avail_kb="$(df --output=avail -k / | tail -n 1 | tr -d '[:space:]')"
+          echo "free on /: $((avail_kb / 1024 / 1024)) GiB"
+          if [ "${avail_kb}" -lt 20971520 ]; then
+            echo "::error::only $((avail_kb / 1024 / 1024)) GiB free on / after cleanup; this job needs at least 20 GiB"
+            exit 1
+          fi
+
       # This job DOES check the repository out, unlike `secret-grep` — and for
       # the opposite reason. `secret-grep` keeps its working directory empty so
       # its pattern set cannot be weakened by editing a script it fetches. This
@@ -826,10 +870,24 @@ jobs:
       packages: write
     # The qemu-emulated arm64 leg is the long pole. Cold it is minutes of
     # emulated wheel installation and an emulated `import torch`; warm it is a
-    # cache restore. A backstop, not a budget — docs/releases.md carries the
-    # measured numbers and the trim rule.
-    timeout-minutes: 60
+    # cache restore. It rebuilds both architectures, so the initial 90 min is
+    # the floor; re-pin per CI_CD.md "Timeout and cache budgets".
+    timeout-minutes: 90
     steps:
+      - name: Free runner disk space
+        run: |
+          set -euo pipefail
+          # Preinstalled toolchains this workflow never uses. The amd64 image's
+          # dependency layer is ~3.1 GB compressed / ~5.8 GB on disk, and a
+          # build or `docker load` needs the layer twice over.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          avail_kb="$(df --output=avail -k / | tail -n 1 | tr -d '[:space:]')"
+          echo "free on /: $((avail_kb / 1024 / 1024)) GiB"
+          if [ "${avail_kb}" -lt 20971520 ]; then
+            echo "::error::only $((avail_kb / 1024 / 1024)) GiB free on / after cleanup; this job needs at least 20 GiB"
+            exit 1
+          fi
+
       # The build needs the source, and the Release step needs the tag. Same
       # `persist-credentials: false` as everywhere else: the two writes below
       # go through explicitly-passed tokens, never through a credential this

@@ -3943,6 +3943,65 @@ class TestActionsStorageFootprint:
 
 _SETUP_UV = "astral-sh/setup-uv"
 
+# `forage-inference-backends` US-005: budgets for the ~3 GB amd64 dependency layer.
+_IMAGE_JOBS = ["build-amd64", "secret-grep", "smoke", "publish"]
+# Initial values, set before the larger image existed. After the PR's first
+# green run each is re-pinned to ceil(1.5 x measured) (CI_CD.md, "Timeout and
+# cache budgets"); change the number here and in ci.yml together.
+_TIMEOUT_MINUTES = {"build-amd64": 90, "secret-grep": 45, "smoke": 45, "publish": 90}
+_MIN_FREE_KB = 20 * 1024 * 1024
+
+
+class TestImageJobBudgets:
+    """Disk, timeout and cache budgets for the larger image (US-005)."""
+
+    @pytest.mark.parametrize("job", _IMAGE_JOBS)
+    def test_every_image_job_frees_and_asserts_20_gib(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        steps = [
+            step
+            for step in _steps(jobs, job)
+            if step.get("name") == "Free runner disk space"
+        ]
+        assert len(steps) == 1, f"{job} needs exactly one disk-free step"
+        run = str(steps[0]["run"])
+        assert "rm -rf /usr/share/dotnet" in run
+        assert "df --output=avail" in run
+        assert str(_MIN_FREE_KB) in run, f"{job} must assert >= 20 GiB free"
+        assert "exit 1" in run
+        names = [step.get("name") for step in _steps(jobs, job)]
+        consumers = [n for n in names if n and ("Load the image" in n or "Build" in n)]
+        assert names.index("Free runner disk space") < names.index(consumers[0]), (
+            f"{job} must free disk before it loads or builds"
+        )
+
+    @pytest.mark.parametrize("job", _IMAGE_JOBS)
+    def test_timeouts_are_pinned(self, jobs: dict[str, Any], job: str) -> None:
+        assert jobs[job]["timeout-minutes"] == _TIMEOUT_MINUTES[job]
+
+    def test_publish_timeout_covers_a_two_architecture_rebuild(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        assert jobs["publish"]["timeout-minutes"] >= 90
+
+    def test_the_cache_decision_covers_both_scopes(self, jobs: dict[str, Any]) -> None:
+        """Decision (CI_CD.md): both scopes are kept unchanged.
+
+        Projected: build-amd64 mode=min ~3.2 GB + publish mode=max (amd64 ~3.2 GB
+        + arm64 ~0.4 GB) ~3.6 GB = ~6.8 GB, under 80% (8 GB) of the 10 GB GHA
+        limit. The Dockerfile is single-stage, so mode=max adds no layers over
+        mode=min. Re-decide from the measured figure after the first main run.
+        """
+        build: dict[str, Any] = (
+            _step_using(jobs, "build-amd64", _BUILD_ACTION).get("with") or {}
+        )
+        assert "mode=min" in str(build.get("cache-to"))
+        publish: dict[str, Any] = (
+            _step_using(jobs, "publish", _BUILD_ACTION).get("with") or {}
+        )
+        assert str(publish.get("cache-to")).strip() == "type=gha,mode=max,scope=publish"
+
 
 class TestUvCacheIsSavedFromMainOnly:
     """setup-uv restores its cache on every run but saves it only from main.

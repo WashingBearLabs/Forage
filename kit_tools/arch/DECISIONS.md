@@ -578,7 +578,7 @@ and to equal an exact-set allowlist. The device is chosen at install time (`FORA
 default `cpu`).
 
 **Consequences:**
-The amd64 image grows from about 350 MB to an estimated 4 GB (to be measured by the CI size
+The amd64 image grows from about 350 MB to about 3.14 GB compressed, 5.96 GB on disk (measured in CI, run 37962323278; see the CI size
 budgets); arm64 is unchanged. Development and CI keep syncing `--extra dev --extra cpu`, which
 stays CUDA-free. A torch bump that adds or drops a payload package needs a reviewed allowlist
 edit. The CPU-only claims in the Dockerfile header and the docs were corrected in

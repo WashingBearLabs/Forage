@@ -501,6 +501,58 @@ one human-only credential flow around the image, vendoring weights with
 
 ---
 
+## Timeout and Cache Budgets
+
+Set by `forage-inference-backends` US-005 for the ~3 GB amd64 dependency layer. The image jobs
+(`build-amd64`, `secret-grep`, `smoke`, `publish`) each start with a **Free runner disk space**
+step that removes the preinstalled dotnet, Android, GHC and CodeQL toolchains and fails the job
+if `df` shows under 20 GiB free on `/`. `publish` has its own step because it builds rather
+than only loading. All four are pinned in `tests/test_ci_workflow.py::TestImageJobBudgets`.
+
+**Baseline** (the old ~350 MB image; `main` run 37863820132, merge of PR #45, 2026-10-09):
+
+| Job | Duration | Notable steps |
+|---|---|---|
+| `build-amd64` | 2m43s | build 137s, `docker save \| zstd` 8s, artifact upload 4s |
+| `secret-grep` | 41s | artifact download 9s, `docker load` 28s |
+| `smoke` | 53s | artifact download 3s, `docker load` 33s |
+| `publish` | 4m48s | artifact download 4s, `docker load` 17s, multi-arch build and push 246s |
+
+Artifact `forage-amd64-image`: 298,264,769 B (zstd). Repo-wide Actions cache at that time:
+6.12 GB across 302 entries (all refs, all scopes).
+
+**Initial timeouts** (set before the larger image existed, so generous):
+
+| Job | Was | Initial | Measured | Final `ceil(1.5 x measured)` |
+|---|---|---|---|---|
+| `build-amd64` | 45 | 90 | _fill at PR time_ | _fill_ |
+| `secret-grep` | 20 | 45 | _fill at PR time_ | _fill_ |
+| `smoke` | 20 | 45 | _fill at PR time_ | _fill_ |
+| `publish` | 60 | 90 (floor: it rebuilds both architectures) | _fill at PR time_ | _fill_ (`max(90, ceil(1.5 x measured))`) |
+
+**Adjustment procedure** (after the PR's first green run):
+
+1. Read each job's wall-clock from the run (`gh run view <id> --json jobs`), cold-cache run for
+   `build-amd64` and `publish`.
+2. Set `timeout-minutes` to `ceil(1.5 x measured minutes)`, in `ci.yml` and in
+   `_TIMEOUT_MINUTES` in the test, in the same commit. `publish` is the one exception: its value
+   is `max(90, ceil(1.5 x measured))`. The 90-minute floor is fixed and pinned by
+   `test_publish_timeout_covers_a_two_architecture_rebuild`, because it rebuilds both architectures and the
+   emulated arm64 leg is slow when the cache is cold.
+3. Fill the "Measured" and "Final" columns above and the matching line in the spec's
+   Implementation Notes. Record the artifact size and the upload and download times too.
+4. After the first push to `main`, read `gh api repos/{owner}/{repo}/actions/cache/usage` and
+   re-run the cache decision below with the real figure.
+
+**Cache decision.** Two scopes write to the 10 GB GHA cache: `build-amd64`'s default scope
+(`mode=min`, main pushes only) and `scope=publish` (`mode=max`, both architectures). Projected
+~3.2 GB + ~3.6 GB = ~6.8 GB, below the 80% line (8 GB), so **both are kept unchanged**. The
+Dockerfile is single-stage, so `mode=max` adds no layers over `mode=min` and moving publish
+would save nothing. The margin is thin and the figure is an estimate. If the measured total
+crosses 8 GB, drop `build-amd64`'s `cache-to` or move publish to `mode=min`, and record it
+here. The diff_ids layer-identity gate compares layers by digest, not size; it is exercised
+by the first `publish` run on `main` with the large layer.
+
 ## Caching and Reproducibility
 
 | Cache | Where | Key / scope | Notes |

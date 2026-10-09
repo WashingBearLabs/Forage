@@ -102,7 +102,7 @@ final stage, so a multi-stage build would narrow what CI's `secret-grep` gate ca
 | Build-time check | `RUN PYTHONDONTWRITEBYTECODE=1 python -c "import retrieval_app"` — fails the build on an import error without writing `.pyc` into the layer |
 | Port / process | `EXPOSE 8020`; `ENTRYPOINT ["/app/docker-entrypoint.sh"]` (`exec "$@"`, prints nothing); `CMD uvicorn retrieval_app:app --host 0.0.0.0 --port 8020`, one worker |
 | Healthcheck | **No image-level `HEALTHCHECK` instruction; both compose fragments declare a status-only liveness probe.** |
-| Size | arm64 (CPU torch): ~348 MB, 16-19 layers (recorded at `forage-ci-and-image` US-003 before CUDA torch; not re-measured here). amd64 (CUDA torch): estimated ~4 GB, to be measured by `feature-unified-image`'s CI size budgets |
+| Size | arm64 (CPU torch): ~348 MB, 16-19 layers (recorded at `forage-ci-and-image` US-003 before CUDA torch; not re-measured here). amd64 (CUDA torch): ~3.14 GB compressed layers, ~5.96 GB uncompressed (CI run 37962323278) |
 
 The flat module layout is load-bearing for the `COPY` lines above (`CLAUDE.md` invariant
 3). The in-image contract can be read back with
@@ -280,7 +280,7 @@ ceiling. The amd64 image carries CUDA torch, but the device defaults to `cpu`
 | Extraction admission | extraction concurrency 1, queue depth 1 (0–4), 50 MiB input, 500 pages, 20 s CPU, 90 s wall; `classification_concurrency` 1–8 under the memory rule | `config.yaml` (see `kit_tools/docs/ENV_REFERENCE.md`) |
 | Weights boot to classifier loaded | 19 s cold / 9 s warm on the reference host (measured with the 22M); `/health` serves during acquisition, not a classify-latency figure | `docs/configuration.md` § Sizing the container |
 | CI smoke budget | 120 s to first `/health` 200 | `SMOKE_TIMEOUT_SECONDS` in `ci.yml` |
-| Disk | ~1.1 GiB volume (86M; ~270 MiB for the 22M); image ~348 MB on arm64 (CPU torch, recorded) and an estimated ~4 GB on amd64 (CUDA torch, to be measured); ~1 GB free recommended for vendoring | `docs/weights.md` |
+| Disk | ~1.1 GiB volume (86M; ~270 MiB for the 22M); image ~348 MB on arm64 (CPU torch, recorded) and ~3.14 GB compressed (~5.96 GB on disk) on amd64 (CUDA torch, CI-measured); ~1 GB free recommended for vendoring | `docs/weights.md` |
 
 Live memory pressure is readable from `/metrics` `extraction.cgroup_memory_current_bytes`,
 `cgroup_memory_max_bytes`, and `oom_proximity_ratio` (cgroup v2 only; `null` on macOS).
