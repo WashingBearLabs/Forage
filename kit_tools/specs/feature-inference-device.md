@@ -346,37 +346,37 @@ GPU degrades the service honestly instead of failing requests at random.
   record procedure**: each file reverted alone, plus a both-reverted control.
 
 **Acceptance Criteria:**
-- [ ] An OOM at batch 16 retries at 8, and the request returns all scores in order. The effective
+- [x] An OOM at batch 16 retries at 8, and the request returns all scores in order. The effective
       batch stays 8 for the next request, and `oom_batch_reductions` increments (test).
-- [ ] Two threads OOMing from one event halve the batch once, not twice (threaded test).
-- [ ] An OOM at batch 1 under fallback `cpu` builds the CPU copy from host-side state (no
+- [x] Two threads OOMing from one event halve the batch once, not twice (threaded test).
+- [x] An OOM at batch 1 under fallback `cpu` builds the CPU copy from host-side state (no
       `deepcopy` of a cuda module; asserted by patching `copy.deepcopy` to raise) and swaps it
       exactly once, even with two concurrent callers. It sets `failed_over` and increments
       `device_failovers`, and the request returns scores (threaded test).
-- [ ] `device_state()` is not blocked while the copy is built: the read completes during a
+- [x] `device_state()` is not blocked while the copy is built: the read completes during a
       deliberately slow build (test).
-- [ ] A failing copy build gives that request the refuse outcome with reason `copy_failed`, and
+- [x] A failing copy build gives that request the refuse outcome with reason `copy_failed`, and
       `failed_over` stays false (test).
-- [ ] A third thread already mid-forward on the cuda snapshot during the swap finishes without a
+- [x] A third thread already mid-forward on the cuda snapshot during the swap finishes without a
       device-mismatch error (threaded test with an event-gated fake forward).
-- [ ] An OOM at batch 1 under `refuse` gives `unavailable_result` for that request's tier: one
+- [x] An OOM at batch 1 under `refuse` gives `unavailable_result` for that request's tier: one
       fail-closed and one fail-open tier tested. It sets `oom_refused` and increments
       `oom_refusals`. A later cuda success clears `oom_refused` (tests).
-- [ ] An OOM-refused body is never written to the content cache on any caching route (test,
+- [x] An OOM-refused body is never written to the content cache on any caching route (test,
       mirroring the wait-timeout guard test).
-- [ ] The existing wait-timeout guard still blocks the cache write when the classifier was unloaded
+- [x] The existing wait-timeout guard still blocks the cache write when the classifier was unloaded
       at request entry and loaded before the timeout (test).
-- [ ] Only `torch.cuda.OutOfMemoryError`, and the recognised device-mismatch `RuntimeError` on a
+- [x] Only `torch.cuda.OutOfMemoryError`, and the recognised device-mismatch `RuntimeError` on a
       stale snapshot (retried once), enter this path. A second failure, and every other exception,
       propagate as today (tests). Logs are closed tokens only (caplog sentinel test).
-- [ ] `docs/configuration.md` documents the `refuse` and fail-open interaction, and the
+- [x] `docs/configuration.md` documents the `refuse` and fail-open interaction, and the
       restart-to-recover batch size.
-- [ ] The rotation (`stage3_promptguard.py`, `orchestrator.py`) is measured and recorded per the
+- [x] The rotation (`stage3_promptguard.py`, `orchestrator.py`) is measured and recorded per the
       epic procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 
