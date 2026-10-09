@@ -89,6 +89,12 @@ Poppy.
       `1.4.0`, release notes and pins. Tag/publish are owner gates. Wrapper
       `../specs/epic-forage-v1-3-0-release.md`.
 
+- [ ] **Inference backends / v1.4.0** (`epic-forage-inference-backends`, planned 2026-10-08, five specs /
+      twenty-one stories; P1, follows v1.3.0): one `forage` image serves CPU and GPU hosts (cu130 torch on
+      amd64, CPU torch on arm64), `FORAGE_DEVICE` + `FORAGE_DEVICE_FALLBACK`, GPU batching, OOM failover,
+      `/health` device → contract `1.5.0`, corpus parity on thelab's RTX 4070 Ti. Wrapper
+      `../specs/epic-forage-inference-backends.md`.
+
 ## Exit Criteria for `v1.0.0`
 
 - [x] Published image contains **no HF token and no baked weights** — `docker history`

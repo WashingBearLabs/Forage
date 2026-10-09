@@ -36,3 +36,11 @@
 
 [19:43] validate-implementation feature-release-1-3-0: no criticals; 3 warnings + 4 info logged (2026-10-07-003..009) to worktree AUDIT_FINDINGS.md
 - Decision: contract.py "256 is the announced next default" wording not fixed (hashed; would rotate post-release-record)
+
+[14:06] --- Context compacted, session continuing ---
+
+[14:06] --- Context compacted, session continuing ---
+
+[now] validate-epic round 3 (focused, 14 agents) applied to forage-inference-backends specs
+- Files: kit_tools/specs/feature-{inference-device,inference-surface,unified-image,gpu-parity-tool,gpu-validation}.md
+- Decision: parity replay drive filters records by live shas (drive_all aborts on unrecorded); never-produced shas informational; batch size per-instance; Step 8 keeps not wait_timed_out AND adds unavailable_allowed+loaded; 64-window p95 projected (bench yields ~55); arm64 checks publish-lane only + static lock rule
