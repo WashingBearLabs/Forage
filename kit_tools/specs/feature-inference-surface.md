@@ -250,25 +250,25 @@ always match the device that produced them.
   in the cache key.
 
 **Acceptance Criteria:**
-- [ ] With `FORAGE_DEVICE` unset and with `cpu`, the revision is identical and equal to the
+- [x] With `FORAGE_DEVICE` unset and with `cpu`, the revision is identical and equal to the
       pre-story value. With `cuda` it differs (tests). The lifespan app, `/health` and both
       `/extract` bodies agree for each environment (tests).
-- [ ] `cache_policy_fingerprint` takes `active_device`. Active `cpu`, active `cuda` and `None` give
+- [x] `cache_policy_fingerprint` takes `active_device`. Active `cpu`, active `cuda` and `None` give
       different fingerprints, and existing mock-classifier tests pass through the tolerant accessor
       (tests).
-- [ ] A failover during a request (a simulated snapshot change between fingerprint and Step 8) skips
+- [x] A failover during a request (a simulated snapshot change between fingerprint and Step 8) skips
       the cache write. `/health`'s `sanitizer_revision` does not change (tests).
-- [ ] Using spec 1's threaded failover fixture, a request whose windows straddle the swap returns a
+- [x] Using spec 1's threaded failover fixture, a request whose windows straddle the swap returns a
       scanned body, and no cache write happens (test).
-- [ ] The `orchestrator.py` rotation is measured per the epic procedure. The device input is recorded
+- [x] The `orchestrator.py` rotation is measured per the epic procedure. The device input is recorded
       as no-rotation for cpu, with default, `config.yaml`, `bench/config.yaml` and cuda values
       recorded.
-- [ ] `docs/configuration.md` states which settings are revision inputs and which are cache-key
+- [x] `docs/configuration.md` states which settings are revision inputs and which are cache-key
       inputs.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 
