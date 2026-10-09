@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: unified-image
-status: active
+status: completed
 session_ready: true
 depends_on: [inference-surface]
 vision_ref: "T3 — run the classifier where the hardware is: CPU and GPU from one image"
@@ -11,7 +11,8 @@ epic: forage-inference-backends
 epic_seq: 3
 epic_final: false
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-10-09
+completed: 2026-10-09
 ---
 
 # Feature Spec: Unified Image — CUDA Torch on amd64, CPU Torch on arm64, One Tag
