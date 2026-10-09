@@ -198,28 +198,28 @@ fallback `cpu`, so that a GPU host classifies on the GPU and a broken one keeps 
   files, because CPU kernels differ by platform. Never construct the 86M.
 
 **Acceptance Criteria:**
-- [ ] `scripts/promptguard_tiny_model.py` exists and imports nothing beyond torch, transformers and
+- [x] `scripts/promptguard_tiny_model.py` exists and imports nothing beyond torch, transformers and
       the standard library (an import test with pytest blocked).
-- [ ] With default settings, `load()` makes no `Module.to` call, and `classify_windows` equals
+- [x] With default settings, `load()` makes no `Module.to` call, and `classify_windows` equals
       `reference_scores` exactly (`==`) on the builder's model (test).
-- [ ] `cuda` with a working mocked GPU applies the fp32 settings before `.to("cuda")`, records the
+- [x] `cuda` with a working mocked GPU applies the fp32 settings before `.to("cuda")`, records the
       precision mode, and moves the inputs to cuda (test with a recording fake model).
-- [ ] A move that relocates half the parameters and then raises ends with every parameter on CPU,
+- [x] A move that relocates half the parameters and then raises ends with every parameter on CPU,
       `failed_over` true and one closed `promptguard_device_failover` WARNING under fallback
       `cpu` (test).
-- [ ] A recovery `.to("cpu")` that itself raises makes `load()` return False with
+- [x] A recovery `.to("cpu")` that itself raises makes `load()` return False with
       `reason=recovery_error`. Under fallback `cpu`, the next `load()` loads on CPU, marked failed
       over with reason `load_error` (test).
-- [ ] Under `refuse` it returns False, with a `promptguard_device_load_failed` token, and the
+- [x] Under `refuse` it returns False, with a `promptguard_device_load_failed` token, and the
       classifier stays unloaded (test).
-- [ ] A boot-probe failure under fallback `cpu` loads on CPU, marked failed over with reason
+- [x] A boot-probe failure under fallback `cpu` loads on CPU, marked failed over with reason
       `unavailable` (test).
-- [ ] `device_state()` returns a consistent snapshot taken under the lock (test).
-- [ ] No log record from the load path contains exception text (sentinel caplog test).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `device_state()` returns a consistent snapshot taken under the lock (test).
+- [x] No log record from the load path contains exception text (sentinel caplog test).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-003: Batch a page's windows on the GPU
 
