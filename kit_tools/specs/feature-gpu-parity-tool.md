@@ -80,17 +80,17 @@ parity tool load classifiers identically and safely.
   (belt and braces).
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/live.py` implements the ordered loader. `record.py` uses it, and
+- [x] `scripts/corpus/live.py` implements the ordered loader. `record.py` uses it, and
       `tests/test_corpus_record.py` passes unmodified.
-- [ ] Tests cover:
+- [x] Tests cover:
   - each refusal, including `device_env_set`;
   - the call order with fakes;
   - the device and batch arguments applied before load.
-- [ ] `_SCRUBBED_ENV` includes both device variables.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `_SCRUBBED_ENV` includes both device variables.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: The parity tool
 
