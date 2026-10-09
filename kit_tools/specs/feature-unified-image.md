@@ -372,12 +372,12 @@ All are pinned in `tests/test_ci_workflow.py`.
   message, with no traceback that includes values.
 
 **Acceptance Criteria:**
-- [ ] `contract_smoke.py` supports the two device expectations (tests).
-- [ ] The smoke job runs runs 2 and 3 with the stated assertions, pinned in `tests/test_ci_workflow.py`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `contract_smoke.py` supports the two device expectations (tests).
+- [x] The smoke job runs runs 2 and 3 with the stated assertions, pinned in `tests/test_ci_workflow.py`.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-007: The `compose/gpu.yml` overlay and the GPU install guide
 
