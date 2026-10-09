@@ -185,19 +185,19 @@ bench output contains `promptguard_device` and `promptguard_requested_device`.
 - `contract.py` moves again, so this is a rotation; follow the epic procedure.
 
 **Acceptance Criteria:**
-- [ ] `/metrics.model` exposes the four fields, mirroring `device_state()` (test). The 1.5.0
+- [x] `/metrics.model` exposes the four fields, mirroring `device_state()` (test). The 1.5.0
       metric-addition test passes and names them.
-- [ ] The OpenAPI file and anchor are regenerated. The 1.5.0 golden and `_EXPECTED_ONE_FIVE_ZERO_DIFF`
+- [x] The OpenAPI file and anchor are regenerated. The 1.5.0 golden and `_EXPECTED_ONE_FIVE_ZERO_DIFF`
       are unchanged by the metrics fields, and export and schema tests pass.
-- [ ] Without a classifier snapshot, `/metrics.model` reports zero counters and a null
+- [x] Without a classifier snapshot, `/metrics.model` reports zero counters and a null
       `effective_batch_size` (test).
-- [ ] Bench output includes both device fields (test).
-- [ ] MONITORING.md lists the four fields with meanings.
-- [ ] The rotation is recorded per the epic procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Bench output includes both device fields (test).
+- [x] MONITORING.md lists the four fields with meanings.
+- [x] The rotation is recorded per the epic procedure.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-003: `device@cuda` revision input, and the active device in the cache fingerprint
 
