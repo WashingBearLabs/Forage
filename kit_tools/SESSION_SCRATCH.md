@@ -81,3 +81,6 @@
 - Decision: extra-6-forage marker finding re-described (6 = name-length prefix, not extras count)
 [11:29] gpu-parity-tool US-002: scripts/corpus/parity.py (ParityClassifier, live+replay drives, validity + long-text checks), tests/test_corpus_parity.py, docs/corpus.md Backend parity
 - Decision: docs section is ### under "Recording and re-recording" (test pins nine ## sections); long-text word count calibrated against the classifier at batch 1
+
+[11:38] validate-implementation gpu-parity-tool: 0 critical, 0 warning, 6 info; full suite 5757 passed/6 skipped; ruff/format/pyright clean
+- Files: kit_tools/AUDIT_FINDINGS.md (created)
