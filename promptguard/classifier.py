@@ -47,7 +47,6 @@ MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
 MAX_PROMPTGUARD_CHUNKS = 64
 DEFAULT_CUDA_BATCH_SIZE = 16
-_DEVICE_MISMATCH = "Expected all tensors to be on the same device"
 
 
 @dataclass(frozen=True)
@@ -551,59 +550,79 @@ class PromptGuardClassifier:
     ) -> list[float]:
         """Score *chunks* from a cuda snapshot, surviving OOM and a swap.
 
-        Every pass works on one snapshot and never blocks another reader. Only
-        ``torch.cuda.OutOfMemoryError`` and the device-mismatch error of a
-        snapshot swapped out from under this call enter the recovery path; the
-        latter is retried once on the current snapshot, anything else
-        propagates. Logs carry closed tokens only, never exception text.
+        Every pass works on one snapshot and never blocks another reader. The
+        windows a pass finished are kept; the next pass scores only the rest.
+
+        After a failed pass, in this order:
+
+        - swapped (``_active`` is no longer *snapshot*) and no swap retry yet:
+          retry once on the current snapshot, whatever the failure was
+        - a ``RuntimeError`` that is not an OOM: propagate
+        - an OOM after the one swap retry: propagate as an OOM (no halving and
+          no failover on a model this call no longer owns)
+        - an OOM at batch > 1: halve the shared batch and retry
+        - an OOM at batch 1: fail over to a CPU copy, or refuse
+
+        A swap is detected by snapshot identity, never by exception text, so a
+        reworded torch message cannot turn the retry into a raw error. Logs
+        carry closed tokens only, never exception text.
         """
         import torch
 
         scores: list[float] = []
         used = self._effective_batch
-        stale_retried = False
+        swap_retried = False
         while True:
-            remaining = chunks[len(scores) :]
-            model, device = snapshot
+            failure: RuntimeError | None = None
             try:
-                if device == "cuda":
-                    scores.extend(
-                        self._score_batched(model, tokenizer, device, remaining, used)
-                    )
-                    self._clear_oom_refused()
-                else:
-                    scores.extend(
-                        self._score_serial(model, tokenizer, device, remaining)
-                    )
+                scores.extend(
+                    self._score_pass(snapshot, tokenizer, chunks[len(scores) :], used)
+                )
                 return scores
             except _CudaOutOfMemoryError as oom:
                 scores.extend(oom.done)
+                with contextlib.suppress(Exception):
+                    torch.cuda.empty_cache()
             except RuntimeError as exc:
-                current = self._active
-                if (
-                    _DEVICE_MISMATCH not in str(exc)
-                    or stale_retried
-                    or current is None
-                    or current is snapshot
-                ):
-                    raise
-                stale_retried = True
+                failure = exc
+
+            current = self._swapped_from(snapshot)
+            if current is not None and not swap_retried:
+                swap_retried = True
                 snapshot = current
                 continue
-            with contextlib.suppress(Exception):
-                torch.cuda.empty_cache()
-            current = self._active
-            if current is not None and current is not snapshot:
-                # The model moved while this call ran: no halving, no failover.
-                if stale_retried:
-                    raise torch.cuda.OutOfMemoryError("CUDA out of memory") from None
-                stale_retried = True
-                snapshot = current
-                continue
+            if failure is not None:
+                raise failure
+            if current is not None:
+                raise torch.cuda.OutOfMemoryError("CUDA out of memory") from None
             if used > 1:
                 used = self._adopt_smaller_batch(used)
                 continue
             snapshot = self._failover_or_refuse(snapshot)
+
+    def _score_pass(
+        self,
+        snapshot: tuple[PreTrainedModel, str],
+        tokenizer: PreTrainedTokenizerBase,
+        chunks: list[str],
+        batch_size: int,
+    ) -> list[float]:
+        """One scoring pass on *snapshot*: batched on cuda, serial otherwise."""
+        model, device = snapshot
+        if device != "cuda":
+            return self._score_serial(model, tokenizer, device, chunks)
+        scores = self._score_batched(model, tokenizer, device, chunks, batch_size)
+        self._clear_oom_refused()
+        return scores
+
+    def _swapped_from(
+        self, snapshot: tuple[PreTrainedModel, str]
+    ) -> tuple[PreTrainedModel, str] | None:
+        """The current snapshot if it replaced *snapshot*, else ``None``."""
+        current = self._active
+        if current is None or current is snapshot:
+            return None
+        return current
 
     def _adopt_smaller_batch(self, used: int) -> int:
         """Halve the shared batch once per OOM event; others adopt the result."""

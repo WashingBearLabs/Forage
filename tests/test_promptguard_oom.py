@@ -316,6 +316,51 @@ def test_device_mismatch_without_a_swap_and_a_second_failure_propagate() -> None
         _enter_on(classifier2, bad, ["w0", "w1"])
 
 
+def test_any_runtime_error_on_a_swapped_snapshot_retries_once() -> None:
+    # The swap is detected by snapshot identity, so the retry does not depend
+    # on torch's wording: a differently worded error still recovers.
+    stale = _net(64)
+    classifier = _classifier(stale, 2, batch=2)
+    cpu = FakeNet(SimpleNamespace(max_batch=0))
+    cast(Any, classifier)._active = (cpu, "cpu")
+    original = FakeNet.__call__
+
+    def reworded(self: FakeNet, **kwargs: torch.Tensor) -> SimpleNamespace:
+        if self is stale:
+            raise RuntimeError("reworded by a torch bump")
+        return original(self, **kwargs)
+
+    with patch.object(FakeNet, "__call__", reworded):
+        scores = _enter_on(classifier, stale, ["w0", "w1"])
+    _assert_scores(scores, 2)
+    assert cpu.forwards == [1, 1]
+    assert classifier.oom_batch_reductions == 0
+    assert classifier.device_failovers == 0
+
+
+def test_an_oom_after_the_swap_retry_propagates_without_halving() -> None:
+    first = _net(0)
+    classifier = _classifier(first, 2, batch=2)
+    second = _net(0)
+    third = _net(0)
+    target = cast(Any, classifier)
+    target._active = (second, "cuda")
+    original = FakeNet.__call__
+
+    def swap_again(self: FakeNet, **kwargs: torch.Tensor) -> SimpleNamespace:
+        if self is second:
+            target._active = (third, "cuda")
+        return original(self, **kwargs)
+
+    with (
+        patch.object(FakeNet, "__call__", swap_again),
+        pytest.raises(torch.cuda.OutOfMemoryError),
+    ):
+        _enter_on(classifier, first, ["w0", "w1"])
+    assert classifier.oom_batch_reductions == 0
+    assert classifier.device_failovers == 0
+
+
 def test_other_exceptions_propagate_unchanged() -> None:
     net = _net(64)
     classifier = _classifier(net, 2, batch=2)
