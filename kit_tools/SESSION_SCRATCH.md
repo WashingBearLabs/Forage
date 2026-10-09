@@ -65,3 +65,6 @@
 [now] inference-surface US-003: device@cuda revision input, active_device in cache fingerprint, step-8 failover guard, rotation 63 (2384820b -> 02f7abcf; cuda 280511c1)
 - Files: pipeline/sanitizer_revision.py, cache.py, pipeline/orchestrator.py, promptguard/classifier.py (device_snapshot moved here), retrieval_app.py, docs/configuration.md
 - Decision: tolerant accessor lives in promptguard/classifier.py (unhashed) so orchestrator and app share it
+
+[19:02] validate-implementation feature-inference-surface: 0 critical, 1 warning, 7 info; suite 5660 passed/6 skipped; ruff/pyright clean
+- Files: kit_tools/AUDIT_FINDINGS.md (gitignored)
