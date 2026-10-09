@@ -699,6 +699,14 @@ class TestLintJob:
             "synced cpu environment is asserted CUDA-free"
         )
 
+    def test_lint_runs_the_cuda_scope_checker(self, jobs: dict[str, Any]) -> None:
+        assert "uv run python -m scripts.check_lock_cuda_scope" in _run_text(
+            jobs, "lint"
+        ), (
+            "lint must run the behavioural lock checker — the installed-package "
+            "grep cannot see the cuda extra or the arm64 torch variant"
+        )
+
     def test_uv_setup_enables_caching(self, jobs: dict[str, Any]) -> None:
         setup = next(
             (

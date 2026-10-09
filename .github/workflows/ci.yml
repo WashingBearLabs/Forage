@@ -167,6 +167,12 @@ jobs:
           grep -iE '^torch ' installed-packages.txt || true
           rm -f installed-packages.txt
 
+      - name: Check the lock keeps CUDA inside the cuda extra
+        # Behavioural proof (marker evaluation per profile and platform, torch
+        # variant, registry provenance, hashes, allowlist) that complements the
+        # installed-package grep above, which only sees the cpu environment.
+        run: uv run python -m scripts.check_lock_cuda_scope
+
       - name: ruff check
         run: uv run ruff check .
 
