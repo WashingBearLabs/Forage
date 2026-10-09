@@ -110,6 +110,8 @@ instance is private-network-only and Forage is its only client.
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
 | `HF_TOKEN` | unset | Hugging Face access token for the **gated** repository of the selected model — `meta-llama/Llama-Prompt-Guard-2-86M` by default, `meta-llama/Llama-Prompt-Guard-2-22M` if `FORAGE_MODEL_ID` selects it. Meta grants access per repository: the token needs the grant for the model you actually run. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
+| `FORAGE_DEVICE` | `cpu` | Where the classifier runs: `cpu` or `cuda`, case-insensitive; blank is unset. Invalid values refuse boot with `DeviceConfigurationError`, never echoing the value. See [Device selection](#device-selection). |
+| `FORAGE_DEVICE_FALLBACK` | `cpu` | Failover policy when `FORAGE_DEVICE=cuda`: `cpu` or `refuse`. Ignored, with an INFO log, when the device is `cpu`. See [Device selection](#device-selection). |
 | `FORAGE_MODEL_ID` | `meta-llama/Llama-Prompt-Guard-2-86M` | Model selected at startup; surrounding whitespace is stripped and unset or blank uses the default. Unknown values refuse boot with `ModelConfigurationError` and WARNING `model_id_not_allowed`, never echoing the value. The allowlist is exactly two ids: `meta-llama/Llama-Prompt-Guard-2-86M` (the default since the 2026-10-06 owner ruling) and `meta-llama/Llama-Prompt-Guard-2-22M`, the smaller opt-out. Each needs its own Hugging Face gated-access grant (one does not cover the other). The 86M's measured resident delta in `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` is 405 MiB, which is why the Compose default `FORAGE_MEM_LIMIT` is `1536m`; the 22M fits `1024m` — see [Sizing the container](#sizing-the-container). Both Compose fragments pass this and `FORAGE_MODEL_REVISION` through as bare names. Restart to apply; `/health.promptguard_model` reports the configured id even while unloaded. |
 | `FORAGE_MODEL_REVISION` | the selected model's committed pin (a 40-character commit sha) | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). Each pin lives at `weights_manifest.json` → `models[model_id].revision`; acquisition refuses before any cache lookup or fetch. |
 | `FORAGE_WEIGHTS_MIRROR` | `ghcr.io/washingbearlabs/forage-weights` | The OCI **repository** holding the vendored weights, used when Hugging Face cannot supply them. A repository, never a tag: the tag is always `FORAGE_MODEL_REVISION`, so redirecting the mirror cannot also redirect which revision it serves. Validated to a lower-case `<registry>/<owner>/<name>`, optionally prefixed `https://` — anything else (an `http://` scheme, embedded credentials, a tag or digest) is refused with an error and the mirror is treated as unconfigured. |
@@ -260,6 +262,22 @@ Consequences of memory mode, in one place:
 > epic's live checklist asserts `cache_backend == "valkey"` on the running container
 > rather than trusting the config. If you run more than one Forage replica, or want the
 > cache to survive a restart, set `VALKEY_URL`.
+
+### Device selection
+
+`FORAGE_DEVICE` and `FORAGE_DEVICE_FALLBACK` are read from the environment once, at
+startup. Values are case-insensitive and stripped, then normalised to lowercase. There is
+no `auto` value. With `cuda`, the GPU is probed (an allocation on `cuda:0`) before the app
+serves; the probe logs only the closed token `promptguard_device_probe result=ok|unavailable|oom`.
+
+| `FORAGE_DEVICE` | `FORAGE_DEVICE_FALLBACK` | No usable GPU at boot (probe) | CUDA failure while loading weights | GPU OOM at batch 1 mid-run |
+|---|---|---|---|---|
+| `cpu` (default) | ignored | n/a | n/a | n/a |
+| `cuda` | `cpu` (default) | model loads on CPU, **failed over** | model loads on CPU, **failed over** | switch to a CPU copy, **failed over** |
+| `cuda` | `refuse` | **startup refuses** (`DeviceConfigurationError`) | `load()` returns False, so degraded `promptguard_unavailable`; weight acquisition retries on its normal schedule | the request gets `unavailable_result` per its tier; latched `oom_refused` state until a later GPU classification succeeds |
+
+The boot probe and settings parsing are in place; the CUDA load, failover and OOM columns
+land with the rest of the inference-device work.
 
 ### Credential handling for `FORAGE_CACHE_HMAC_KEY`
 

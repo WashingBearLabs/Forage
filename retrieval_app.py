@@ -113,6 +113,7 @@ from pipeline.stage3_promptguard import (
 )
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from pipeline.worker_launch import make_process_non_dumpable, sweep_stale_spool
+from promptguard import device as promptguard_device
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
     PromptGuardClassifier,
@@ -1676,6 +1677,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if not model_allowed:
         raise model_fetcher.ModelConfigurationError("model_id_not_allowed")
     app.state.promptguard_model = model_id
+    # Device selection is resolved, and the GPU probed, before the classifier
+    # exists or any weight acquisition starts: a bad setting, or no GPU under
+    # `refuse`, stops the service here rather than serving degraded. With `cpu`
+    # the probe is never called and torch is not imported early.
+    device_settings = promptguard_device.resolve_device_settings(os.environ)
+    app.state.device_settings = device_settings
+    app.state.boot_probe_failed = False
+    if device_settings.device == "cuda":
+        probe = await asyncio.to_thread(promptguard_device.probe_cuda)
+        if probe != "ok":
+            if device_settings.fallback == "refuse":
+                raise promptguard_device.DeviceConfigurationError(
+                    "FORAGE_DEVICE=cuda with FORAGE_DEVICE_FALLBACK=refuse "
+                    "requires a usable GPU"
+                )
+            app.state.boot_probe_failed = True
+    elif os.environ.get(promptguard_device.DEVICE_FALLBACK_ENV_VAR, "").strip():
+        logger.info("device_fallback_ignored_on_cpu")
     # Load config
     config = _load_config()
     _warn_unknown_config_keys(config)

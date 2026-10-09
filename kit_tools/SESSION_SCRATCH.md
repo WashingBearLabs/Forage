@@ -44,3 +44,6 @@
 [now] validate-epic round 3 (focused, 14 agents) applied to forage-inference-backends specs
 - Files: kit_tools/specs/feature-{inference-device,inference-surface,unified-image,gpu-parity-tool,gpu-validation}.md
 - Decision: parity replay drive filters records by live shas (drive_all aborts on unrecorded); never-produced shas informational; batch size per-instance; Step 8 keeps not wait_timed_out AND adds unavailable_allowed+loaded; 64-window p95 projected (bench yields ~55); arm64 checks publish-lane only + static lock rule
+[17:31] inference-device US-001: device settings + boot probe in lifespan
+- Files: promptguard/device.py, retrieval_app.py, tests/test_promptguard_device.py, docs
+- Decision: probe runs right after model-id check (fail-fast, before classifier/acquisition)
