@@ -111,26 +111,26 @@ under `refuse` stop the service immediately and loudly.
   - `kit_tools/docs/ENV_REFERENCE.md`.
 
 **Acceptance Criteria:**
-- [ ] `resolve_device_settings` accepts `cpu`/`cuda` and `cpu`/`refuse`, case-insensitively and
+- [x] `resolve_device_settings` accepts `cpu`/`cuda` and `cpu`/`refuse`, case-insensitively and
       stripped, with defaults `cpu`/`cpu`, and treats blank as unset. An invalid value raises
       `DeviceConfigurationError`, whose message names the variable and not the value. One test per
       variable checks that a sentinel value is absent from the message.
-- [ ] `requested_device_token` returns `"cpu"`, `"cuda"` or `"invalid"`, never raises, and agrees
+- [x] `requested_device_token` returns `"cpu"`, `"cuda"` or `"invalid"`, never raises, and agrees
       with `resolve_device_settings` on every valid input (parametrised test).
-- [ ] `probe_cuda` maps a mocked unavailable GPU, an OOM and a generic error to the three results,
+- [x] `probe_cuda` maps a mocked unavailable GPU, an OOM and a generic error to the three results,
       and logs only the closed token. A caplog test injects an exception carrying a sentinel and
       asserts the sentinel is absent from every log record.
-- [ ] `cuda` + `refuse` with a failing probe raises during lifespan startup, before serving. `cuda`
+- [x] `cuda` + `refuse` with a failing probe raises during lifespan startup, before serving. `cuda`
       + `cpu` with a failing probe starts the app (app-factory tests).
-- [ ] With default settings, `probe_cuda` is never called and the lifespan imports no torch (mock
+- [x] With default settings, `probe_cuda` is never called and the lifespan imports no torch (mock
       assertion).
-- [ ] The configuration doc and ENV_REFERENCE document both variables and the table.
-- [ ] Both variables are in `_CLEARED_ENV_VARS`, and `tests/test_hermeticity.py`'s exact set is
+- [x] The configuration doc and ENV_REFERENCE document both variables and the table.
+- [x] Both variables are in `_CLEARED_ENV_VARS`, and `tests/test_hermeticity.py`'s exact set is
       updated.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: Load the classifier on CUDA, with failover and fp32
 
