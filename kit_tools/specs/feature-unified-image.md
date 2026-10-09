@@ -336,15 +336,15 @@ the cache decision. The baseline figures are recorded.
 - **Publish.** Confirm the diff_ids layer-identity gate still matches with the large layer.
 
 **Acceptance Criteria:**
-- [ ] The baseline figures are recorded in Implementation Notes and CI_CD.md.
-- [ ] Disk-free steps asserting ≥ 20 GB exist on build-amd64, the consumers and publish. Initial
+- [x] The baseline figures are recorded in Implementation Notes and CI_CD.md.
+- [x] Disk-free steps asserting ≥ 20 GB exist on build-amd64, the consumers and publish. Initial
       `timeout-minutes` values are set (publish ≥ 90), and the cache decision covering both scopes
       is recorded, all pinned in `tests/test_ci_workflow.py`.
-- [ ] The post-PR-run timeout adjustment procedure is documented in CI_CD.md. The measured values
+- [x] The post-PR-run timeout adjustment procedure is documented in CI_CD.md. The measured values
       are filled in at PR time.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
 
 ### US-006: No-GPU failover smokes in CI
 
