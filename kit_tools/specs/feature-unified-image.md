@@ -422,14 +422,14 @@ binding are unchanged, and the base fragments are byte-unchanged.
   - **`kit_tools/docs/DEPLOYMENT.md`:** the GPU steps.
 
 **Acceptance Criteria:**
-- [ ] `compose/gpu.yml` requests one GPU and sets `FORAGE_DEVICE: cuda`, a
+- [x] `compose/gpu.yml` requests one GPU and sets `FORAGE_DEVICE: cuda`, a
       `FORAGE_DEVICE_FALLBACK` defaulting to `cpu`, and the provisional `mem_limit` default. Merged with each base fragment, ports and binding are unchanged, and the
       base fragments are byte-unchanged (tests).
-- [ ] The `docs/configuration.md` GPU section covers each listed topic. README shows the overlay
+- [x] The `docs/configuration.md` GPU section covers each listed topic. README shows the overlay
       command, and DEPLOYMENT lists the steps.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
 
 ## Edge Cases
 
