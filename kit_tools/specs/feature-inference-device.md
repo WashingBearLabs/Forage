@@ -258,18 +258,18 @@ exactly one forward pass per window.
   measured in spec 4.
 
 **Acceptance Criteria:**
-- [ ] `promptguard_cuda_batch_size` is bounded 1–64 (default 16), registered, classified, present
+- [x] `promptguard_cuda_batch_size` is bounded 1–64 (default 16), registered, classified, present
       in both configs and documented. `configure_batch_size(n)` sets the effective batch size on
       that instance only, and a second instance is unaffected. `device_state().effective_batch_size`
       reports it (tests).
-- [ ] On `cpu`, `classify_windows` makes exactly one forward pass per window (call-count test).
-- [ ] The forced batched path returns the right count, in window order, each score within 1e-5 of
+- [x] On `cpu`, `classify_windows` makes exactly one forward pass per window (call-count test).
+- [x] The forced batched path returns the right count, in window order, each score within 1e-5 of
       batch 1, for page sizes 1, b−1, b, b+1 and 3b. The max difference is recorded.
-- [ ] The `max_chunks` refusal fires before any forward pass on the batched path (test).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The `max_chunks` refusal fires before any forward pass on the batched path (test).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-004: Handle GPU out-of-memory safely
 
