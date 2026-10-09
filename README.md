@@ -108,6 +108,17 @@ For `full.yml`, set `FORAGE_CACHE_HMAC_KEY` in `compose/.env`: without it the
 external Valkey serves cached content unsigned and `/health` reports
 `cache_unauthenticated`.
 
+**On a GPU host**, add the overlay to either fragment — same image tag, one GPU, needs
+NVIDIA driver ≥ 580, the NVIDIA Container Toolkit and Docker Compose ≥ 2.30:
+
+```bash
+docker compose -f minimal.yml -f gpu.yml up -d     # or: -f full.yml -f gpu.yml
+```
+
+Set `FORAGE_DEVICE_FALLBACK=refuse` in `compose/.env` to refuse to start without a usable GPU
+(default `cpu`). See [`docs/configuration.md` § Installing on a GPU
+host](docs/configuration.md#installing-on-a-gpu-host).
+
 Or run the image directly (private network only):
 
 ```bash

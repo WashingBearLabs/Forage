@@ -40,6 +40,7 @@ The properties that matter most are the ones a well-meaning edit would undo:
 test_mapping:
   compose/minimal.yml: tests/test_compose_fragments.py
   compose/full.yml: tests/test_compose_fragments.py
+  compose/gpu.yml: tests/test_compose_fragments.py
 """
 
 from __future__ import annotations
@@ -906,3 +907,95 @@ class TestTheFragmentsAreDocumented:
                 "its `cache_backend` wire value, so a reader can check which "
                 "mode they are in rather than infer it"
             )
+
+
+# ---------------------------------------------------------------------------
+# compose/gpu.yml — the overlay (unified-image US-007). Deliberately outside
+# `_FRAGMENT_PATHS`: it is not a standalone fragment (no image, no ports), so
+# the base tests above must not run against it.
+# ---------------------------------------------------------------------------
+
+_GPU_PATH = _COMPOSE_DIR / "gpu.yml"
+_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _render(value: str, env: dict[str, str]) -> str:
+    """Substitute `${NAME:-default}` the way Compose does for an unset/empty name."""
+    return _VAR_RE.sub(lambda m: env.get(m.group(1)) or (m.group(2) or ""), value)
+
+
+def _merge_env(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, str | None]:
+    merged = _environment(base)
+    merged.update(_environment(overlay))
+    return merged
+
+
+class TestGpuOverlay:
+    @pytest.fixture
+    def overlay(self) -> dict[str, Any]:
+        return _load(_GPU_PATH)
+
+    @pytest.fixture
+    def service(self, overlay: dict[str, Any]) -> dict[str, Any]:
+        return _services(overlay)[_FORAGE_SERVICE]
+
+    def test_it_parses_and_touches_only_the_forage_service(
+        self, overlay: dict[str, Any]
+    ) -> None:
+        assert set(overlay) == {"services"}
+        assert set(_services(overlay)) == {_FORAGE_SERVICE}
+
+    def test_it_sets_only_the_device_request_the_env_and_the_memory_limit(
+        self, service: dict[str, Any]
+    ) -> None:
+        assert set(service) == {"environment", "mem_limit", "deploy"}
+        assert set(service["environment"]) == {
+            "FORAGE_DEVICE",
+            "FORAGE_DEVICE_FALLBACK",
+        }
+        assert service["deploy"] == {
+            "resources": {
+                "reservations": {
+                    "devices": [
+                        {"driver": "nvidia", "count": 1, "capabilities": ["gpu"]}
+                    ]
+                }
+            }
+        }
+
+    def test_it_selects_cuda(self, service: dict[str, Any]) -> None:
+        assert service["environment"]["FORAGE_DEVICE"] == "cuda"
+
+    def test_the_fallback_policy_defaults_to_cpu_and_follows_the_variable(
+        self, service: dict[str, Any]
+    ) -> None:
+        raw = service["environment"]["FORAGE_DEVICE_FALLBACK"]
+        assert raw == "${FORAGE_DEVICE_FALLBACK:-cpu}"
+        assert _render(raw, {}) == "cpu"
+        assert _render(raw, {"FORAGE_DEVICE_FALLBACK": "refuse"}) == "refuse"
+
+    def test_the_memory_default_is_the_provisional_3072m(
+        self, service: dict[str, Any]
+    ) -> None:
+        assert service["mem_limit"] == "${FORAGE_MEM_LIMIT:-3072m}"
+        assert _render(service["mem_limit"], {"FORAGE_MEM_LIMIT": "4g"}) == "4g"
+
+    def test_it_pins_no_image_and_publishes_no_port(
+        self, service: dict[str, Any]
+    ) -> None:
+        assert "image" not in service
+        assert "ports" not in service
+
+    @pytest.mark.parametrize("name", _FRAGMENTS)
+    def test_it_merges_onto_each_base_without_touching_ports_or_binding(
+        self, fragments: dict[str, dict[str, Any]], service: dict[str, Any], name: str
+    ) -> None:
+        base = _services(fragments[name])[_FORAGE_SERVICE]
+        # Every key the overlay sets is either new or an override of a key the
+        # base also sets; none of them is `ports` or `image`.
+        assert not {"ports", "image"} & set(service)
+        assert _published_ports(base) == ["127.0.0.1:8020:8020"]
+        env = _merge_env(base, service)
+        assert env["FORAGE_DEVICE"] == "cuda"
+        # The base's own settings survive the merge.
+        assert set(_environment(base)) <= set(env)

@@ -195,6 +195,25 @@ curl -s http://127.0.0.1:8020/health | jq
 `docker compose down -v` deletes the weights volume; use `down` without `-v` for a routine
 stop.
 
+#### GPU host (overlay)
+
+`compose/gpu.yml` is an overlay, not a third fragment: it has no image and no ports and is merged
+onto either base. Prerequisites: amd64, NVIDIA driver ≥ 580 (cu130), the NVIDIA Container Toolkit,
+Docker Compose ≥ 2.30. A missing Toolkit fails at `compose up`, not as a degraded boot.
+
+```bash
+cd /path/to/Forage/compose
+docker compose -f minimal.yml -f gpu.yml up -d     # or: -f full.yml -f gpu.yml
+curl -s http://127.0.0.1:8020/health | jq '{degraded_reasons, promptguard_device, promptguard_requested_device}'
+```
+
+It requests one `nvidia` GPU, sets `FORAGE_DEVICE=cuda` and `FORAGE_DEVICE_FALLBACK`
+(`${FORAGE_DEVICE_FALLBACK:-cpu}`; `refuse` makes the service refuse to start without a usable GPU),
+and sets `mem_limit: ${FORAGE_MEM_LIMIT:-3072m}`, which is **provisional** until measured on a GPU
+host. GPU memory is not reserved and the GPU is shared and non-isolated: no multi-tenant hosts, keep
+the loopback binding. Full guide: [`docs/configuration.md` § Installing on a GPU
+host](../../docs/configuration.md#installing-on-a-gpu-host).
+
 ### Plain `docker run` path
 
 ```bash

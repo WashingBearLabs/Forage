@@ -328,6 +328,57 @@ at the cache write, and a difference from the one used for the key skips it (con
 Residual: batch size moves GPU scores only within parity tolerance, yet it is in neither key, so a
 changed `promptguard_cuda_batch_size` keeps serving cached entries scored under the old value.
 
+### Installing on a GPU host
+
+The same image tag serves both device classes; the GPU is a Compose overlay, not a second image.
+
+1. **Host requirements.** An NVIDIA driver **≥ 580** (the image's torch is built for CUDA 13.0,
+   `cu130`), the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+   configured for Docker, and Docker Compose **≥ 2.30**. amd64 only; arm64 images are CPU-only.
+2. **Start with the overlay**, from `compose/`:
+
+   ```bash
+   docker compose -f minimal.yml -f gpu.yml up -d     # or: -f full.yml -f gpu.yml
+   curl -s localhost:8020/health | jq '{status, degraded_reasons, promptguard_device, promptguard_requested_device}'
+   ```
+
+   `compose/gpu.yml` requests one `nvidia` GPU, sets `FORAGE_DEVICE=cuda` and
+   `FORAGE_DEVICE_FALLBACK` (from `compose/.env` or your shell; default `cpu`), and raises the
+   memory default. It pins no image and changes no port, so the loopback binding is unchanged.
+   Set `FORAGE_DEVICE_FALLBACK=refuse` to make the service refuse to start without a usable GPU
+   rather than run on CPU. See [Device selection](#device-selection) for the failover rules.
+3. **A missing Toolkit fails at `compose up`**, with Docker's "could not select device driver
+   `nvidia`" error, not as a degraded boot: the container is never created, so `/health` is not
+   there to say so. Fix the host, not Forage's configuration.
+
+What `/health` says (contract `1.5.0`):
+
+| Situation | `promptguard_requested_device` | `promptguard_device` | `degraded_reasons` |
+|---|---|---|---|
+| CPU install (default) | `cpu` | `cpu` | none from the device |
+| GPU in use | `cuda` | `cuda` | none from the device |
+| No usable GPU at boot or load, fallback `cpu` | `cuda` | `cpu` | `promptguard_device_failover` |
+| GPU out of memory at batch 1, fallback `cpu` | `cuda` | `cpu` | `promptguard_device_failover` |
+| GPU out of memory at batch 1, fallback `refuse` | `cuda` | `cuda` | `promptguard_device_oom` until a later GPU classification succeeds |
+| No usable GPU, fallback `refuse` | — | — | the service does not start (probe), or `promptguard_unavailable` (load failure) |
+
+**GPU memory is not reserved.** The device request gives the container access to the card; it
+does not set aside VRAM. The 86M model needs well under 1 GiB, but other processes can take the
+rest, and the failover above is what happens when they do. To coexist with Ollama or another GPU
+workload, leave headroom on the card (Ollama's `OLLAMA_KEEP_ALIVE` or a smaller loaded model
+frees VRAM when idle), expect `promptguard_cuda_batch_size` to halve under pressure, and watch
+`effective_batch_size` on `/metrics`.
+
+**The GPU is a shared, non-isolated resource.** Forage ships no authentication, and a card
+shared with other tenants offers no isolation between their workloads and this one. Do not run
+the overlay on a multi-tenant host, and keep the `127.0.0.1` binding.
+
+**Memory default is provisional.** The overlay sets `mem_limit: ${FORAGE_MEM_LIMIT:-3072m}`
+because the CUDA context and libraries add host RSS beyond the CPU deployment's `1536m`. The
+figure has not been measured on a GPU host yet; the GPU validation spec measures it and adjusts
+the default. Set `FORAGE_MEM_LIMIT` to override it. Under fallback `cpu`, an OOM failover needs
+about 1.1 GB more host RAM for a second copy of the weights (see below).
+
 ### Credential handling for `FORAGE_CACHE_HMAC_KEY`
 
 `FORAGE_CACHE_HMAC_KEY` is read once during startup. Leading/trailing spaces, tabs
