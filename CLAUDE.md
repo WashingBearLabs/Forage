@@ -733,6 +733,17 @@ default" (the owner ruling shipped 64). A read-only whole-file reversal against 
 reproduces `91455b21…` under default, `config.yaml` and `bench/config.yaml`. Text only;
 old cache keys invalidate. Full values: `docs/bootstrap-notes.md`.
 
+The sixtieth rotation is `2c6d0382…` → `6a0fcaad…` for `inference-device` US-004 —
+**not a sanitization-behaviour change at shipped defaults** (`FORAGE_DEVICE=cpu`): GPU
+out-of-memory handling. `stage3_promptguard.py` maps `PromptGuardUnavailableError` to
+`unavailable_result` for the request's tier (token `promptguard_oom_refused`), and `orchestrator.py`
+step 8 refuses to cache any `unavailable_allowed` body while the classifier was loaded at entry,
+beside the existing `wait_timed_out` guard. Each file was reverted alone, read-only, against
+`HEAD` (`f081a4e1…` with only stage 3 reverted, `ed928917…` with only the orchestrator reverted),
+with a both-reverted control reproducing `2c6d0382…` under default, `config.yaml` and
+`bench/config.yaml`. The classifier (`promptguard/classifier.py`) is not hashed. Not replayed to
+Poppy. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

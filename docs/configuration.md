@@ -276,8 +276,31 @@ serves; the probe logs only the closed token `promptguard_device_probe result=ok
 | `cuda` | `cpu` (default) | model loads on CPU, **failed over** | model loads on CPU, **failed over** | switch to a CPU copy, **failed over** |
 | `cuda` | `refuse` | **startup refuses** (`DeviceConfigurationError`) | `load()` returns False, so degraded `promptguard_unavailable`; weight acquisition retries on its normal schedule | the request gets `unavailable_result` per its tier; latched `oom_refused` state until a later GPU classification succeeds |
 
-The boot probe, settings parsing and the CUDA load are in place; the OOM column lands with the
-rest of the inference-device work.
+#### GPU out of memory mid-run
+
+An OOM during classification (`torch.cuda.OutOfMemoryError` only) first **halves the batch**
+(`promptguard_cuda_batch_size`, down to 1) and retries the remaining windows; concurrent requests
+hitting the same event halve it once. The reduction is **sticky**: it never grows back, so a crowded
+card does not repeat the OOM-and-halve cycle. It is visible as `effective_batch_size` in the device
+state (and through `/metrics` once that surface lands); **restart to recover** the configured size.
+
+If batch 1 still runs out of memory:
+
+- Under fallback `cpu`, the model is rebuilt on CPU from host-side tensors (never cloned on the GPU)
+  and swapped in once; in-flight requests finish on the GPU model they started with. The failover
+  needs host RAM for a second copy of the weights, about **1.1 GB for the 86M** (on top of the
+  `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` advisory in `pipeline/extraction_limits.py`, which
+  sizes the CPU-resident model only). If that copy cannot be built, the request takes the `refuse`
+  outcome (`promptguard_oom_refused reason=copy_failed`), the service is **not** marked failed
+  over, and a later OOM tries again.
+- Under `refuse`, the request gets `unavailable_result` for its tier and the model stays on the
+  GPU. `oom_refused` latches until a later GPU classification succeeds.
+
+**Security note for `refuse`.** A refused request on a fail-open tier (VERIFIED, or any tier when
+`promptguard_fail_closed` is false) is served `unavailable_allowed`, which is **unscanned**. Pair
+`refuse` deployments with `promptguard_fail_closed` and keep `max_promptguard_chunks` non-zero
+(default 64) so an attacker cannot cheaply craft pages that induce the OOM. An OOM-refused body is
+never written to the content cache.
 
 On `cuda` the model is loaded at full fp32 (`fp32_precision = "ieee"`, or `allow_tf32 = False`
 on older torch) and moved with `.to("cuda")`. A failed move is recovered to CPU before anything

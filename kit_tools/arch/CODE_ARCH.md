@@ -507,7 +507,7 @@ output byte-identical) moves it to `d582f8da…`; the fifty-seventh (`release-pa
 look-alike fold BLOCKS at `max(2n, n + 256)`, `stage2_structural.py` and `orchestrator.py`, the eighteenth
 sanitization-behaviour-changing rotation) moves it to `23444fe4…`; the fifty-eighth (`release-1-3-0` US-003, the final
 1.4.0 entry and a stale comment, text only, not behaviour-changing) moves it to `91455b21…`; the fifty-ninth (the
-v1.3.0 validation fix rewording that entry, text only) moves it to `2c6d0382…`.
+v1.3.0 validation fix rewording that entry, text only) moves it to `2c6d0382…`; the sixtieth (`inference-device` US-004, GPU OOM handling in `stage3_promptguard.py` and `orchestrator.py`) moves it to `6a0fcaad…`.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public

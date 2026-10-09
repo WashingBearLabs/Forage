@@ -14,7 +14,7 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from pipeline.config_bounds import bounded_int
 from promptguard.device import DeviceSettings
@@ -47,6 +47,7 @@ MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
 MAX_PROMPTGUARD_CHUNKS = 64
 DEFAULT_CUDA_BATCH_SIZE = 16
+_DEVICE_MISMATCH = "Expected all tensors to be on the same device"
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,12 @@ class PromptGuardClassifier:
         # retried load() must not touch CUDA again.
         self._cuda_unusable = False
         self._state_lock = threading.Lock()
+        # Serialises OOM failovers only: readers never take it, and the CPU
+        # copy is built under it but outside ``_state_lock``.
+        self._failover_lock = threading.Lock()
+        self._oom_batch_reductions = 0
+        self._device_failovers = 0
+        self._oom_refusals = 0
         # Prompt Guard 2 is binary; the three-class model was Prompt Guard 1.
         # load() verifies the labels and replaces this default from the config.
         self._injection_label_index = 1
@@ -178,6 +185,18 @@ class PromptGuardClassifier:
     @property
     def oom_refused(self) -> bool:
         return self._oom_refused
+
+    @property
+    def oom_batch_reductions(self) -> int:
+        return self._oom_batch_reductions
+
+    @property
+    def device_failovers(self) -> int:
+        return self._device_failovers
+
+    @property
+    def oom_refusals(self) -> int:
+        return self._oom_refusals
 
     def device_state(self) -> DeviceState:
         """A frozen snapshot, read under the lock so it cannot be torn."""
@@ -474,19 +493,26 @@ class PromptGuardClassifier:
             return [], []
 
         model, device = active
-        import torch
-
         chunks = self._chunk_text(text)
         if max_chunks is not None and len(chunks) > max_chunks:
             raise PromptGuardBudgetExceededError(
                 "PromptGuard classification input exceeds the chunk budget"
             )
         if device == "cuda":
-            return self._score_batched(
-                model, tokenizer, device, chunks, self._effective_batch
-            ), chunks
-        scores: list[float] = []
+            return self._classify_cuda(active, tokenizer, chunks), chunks
+        return self._score_serial(model, tokenizer, device, chunks), chunks
 
+    def _score_serial(
+        self,
+        model: PreTrainedModel,
+        tokenizer: PreTrainedTokenizerBase,
+        device: str,
+        chunks: list[str],
+    ) -> list[float]:
+        """Score *chunks* one window per forward pass (the CPU path)."""
+        import torch
+
+        scores: list[float] = []
         for chunk in chunks:
             with self._tokenizer_lock:
                 inputs = tokenizer(
@@ -505,8 +531,141 @@ class PromptGuardClassifier:
             probs = torch.softmax(outputs.logits, dim=-1)
             injection_prob = float(probs[0, self._injection_label_index].item())
             scores.append(injection_prob)
+        return scores
 
-        return scores, chunks
+    # -----------------------------------------------------------------
+    # GPU out-of-memory handling
+    # -----------------------------------------------------------------
+
+    def _classify_cuda(
+        self,
+        snapshot: tuple[PreTrainedModel, str],
+        tokenizer: PreTrainedTokenizerBase,
+        chunks: list[str],
+    ) -> list[float]:
+        """Score *chunks* from a cuda snapshot, surviving OOM and a swap.
+
+        Every pass works on one snapshot and never blocks another reader. Only
+        ``torch.cuda.OutOfMemoryError`` and the device-mismatch error of a
+        snapshot swapped out from under this call enter the recovery path; the
+        latter is retried once on the current snapshot, anything else
+        propagates. Logs carry closed tokens only, never exception text.
+        """
+        import torch
+
+        scores: list[float] = []
+        used = self._effective_batch
+        stale_retried = False
+        while True:
+            remaining = chunks[len(scores) :]
+            model, device = snapshot
+            try:
+                if device == "cuda":
+                    scores.extend(
+                        self._score_batched(model, tokenizer, device, remaining, used)
+                    )
+                    self._clear_oom_refused()
+                else:
+                    scores.extend(
+                        self._score_serial(model, tokenizer, device, remaining)
+                    )
+                return scores
+            except _CudaOutOfMemoryError as oom:
+                scores.extend(oom.done)
+            except RuntimeError as exc:
+                current = self._active
+                if (
+                    _DEVICE_MISMATCH not in str(exc)
+                    or stale_retried
+                    or current is None
+                    or current is snapshot
+                ):
+                    raise
+                stale_retried = True
+                snapshot = current
+                continue
+            with contextlib.suppress(Exception):
+                torch.cuda.empty_cache()
+            current = self._active
+            if current is not None and current is not snapshot:
+                # The model moved while this call ran: no halving, no failover.
+                if stale_retried:
+                    raise torch.cuda.OutOfMemoryError("CUDA out of memory") from None
+                stale_retried = True
+                snapshot = current
+                continue
+            if used > 1:
+                used = self._adopt_smaller_batch(used)
+                continue
+            snapshot = self._failover_or_refuse(snapshot)
+
+    def _adopt_smaller_batch(self, used: int) -> int:
+        """Halve the shared batch once per OOM event; others adopt the result."""
+        with self._state_lock:
+            if self._effective_batch == used and used > 1:
+                self._effective_batch = max(1, used // 2)
+                self._oom_batch_reductions += 1
+                logger.warning(
+                    "promptguard_oom_batch_reduced batch=%d", self._effective_batch
+                )
+            return self._effective_batch
+
+    def _clear_oom_refused(self) -> None:
+        if self._oom_refused:
+            with self._state_lock:
+                self._oom_refused = False
+
+    def _failover_or_refuse(
+        self, snapshot: tuple[PreTrainedModel, str]
+    ) -> tuple[PreTrainedModel, str]:
+        """At batch 1: swap in a CPU copy (fallback ``cpu``) or refuse."""
+        if self._fallback != "cpu":
+            self._refuse("oom")
+        with self._failover_lock:
+            current = self._active
+            if current is not snapshot:
+                # A concurrent failover already swapped; use whatever is current.
+                if current is None:
+                    self._refuse("oom")
+                return current
+            model = snapshot[0]
+            try:
+                cpu_model = self._build_cpu_copy(model)
+            except Exception:
+                logger.warning("promptguard_oom_refused reason=copy_failed")
+                self._count_refusal()
+                raise PromptGuardUnavailableError(
+                    "PromptGuard unavailable: GPU out of memory"
+                ) from None
+            swapped = (cpu_model, "cpu")
+            with self._state_lock:
+                self._active = swapped
+                self._failed_over = True
+                self._failover_reason = "oom"
+                self._device_failovers += 1
+        logger.warning("promptguard_device_failover reason=oom")
+        return swapped
+
+    @staticmethod
+    def _build_cpu_copy(model: PreTrainedModel) -> PreTrainedModel:
+        """Build a CPU model from host-side tensors; never clone on the GPU."""
+        source = cast(Any, model)
+        cpu_model = type(source)(source.config)
+        cpu_model.load_state_dict(
+            {k: v.detach().to("cpu") for k, v in source.state_dict().items()}
+        )
+        cpu_model.eval()
+        return cast("PreTrainedModel", cpu_model)
+
+    def _count_refusal(self) -> None:
+        with self._state_lock:
+            self._oom_refused = True
+            self._oom_refusals += 1
+
+    def _refuse(self, reason: str) -> NoReturn:
+        logger.warning("promptguard_oom_refused reason=%s", reason)
+        self._count_refusal()
+        raise PromptGuardUnavailableError("PromptGuard unavailable: GPU out of memory")
 
     def _score_batched(
         self,
@@ -525,29 +684,50 @@ class PromptGuardClassifier:
 
         if not chunks:
             return []
-        with self._tokenizer_lock:
-            inputs = tokenizer(
-                chunks,
-                return_tensors="pt",
-                truncation=True,
-                max_length=MAX_SEQ_LEN,
-                padding=True,
-            )
-        if device != "cpu":
-            # Token ids are small; move the page once and slice on the device.
-            inputs = inputs.to(device)
         scores: list[float] = []
-        for start in range(0, len(chunks), batch_size):
-            batch = {
-                key: value[start : start + batch_size] for key, value in inputs.items()
-            }
-            with torch.no_grad():
-                outputs = model(**batch)
-            probs = torch.softmax(outputs.logits, dim=-1)
-            # torch types tolist() as list[Unknown]; a 1-D column is floats.
-            column = cast(Any, probs[:, self._injection_label_index])
-            scores.extend(cast(list[float], column.tolist()))
+        try:
+            with self._tokenizer_lock:
+                inputs = tokenizer(
+                    chunks,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=MAX_SEQ_LEN,
+                    padding=True,
+                )
+            if device != "cpu":
+                # Token ids are small; move the page once and slice on the device.
+                inputs = inputs.to(device)
+            for start in range(0, len(chunks), batch_size):
+                batch = {
+                    key: value[start : start + batch_size]
+                    for key, value in inputs.items()
+                }
+                with torch.no_grad():
+                    outputs = model(**batch)
+                probs = torch.softmax(outputs.logits, dim=-1)
+                # torch types tolist() as list[Unknown]; a 1-D column is floats.
+                column = cast(Any, probs[:, self._injection_label_index])
+                scores.extend(cast(list[float], column.tolist()))
+        except torch.cuda.OutOfMemoryError:
+            # Hand back the finished windows so the retry scores only the rest.
+            raise _CudaOutOfMemoryError(scores) from None
         return scores
+
+
+class PromptGuardUnavailableError(RuntimeError):
+    """Raised when the GPU ran out of memory and policy forbids scoring on CPU.
+
+    The caller maps it to the tier's ``unavailable_result``; the body is
+    unscanned and must never be cached.
+    """
+
+
+class _CudaOutOfMemoryError(Exception):
+    """Internal: an OOM carrying the scores completed before it."""
+
+    def __init__(self, done: list[float]) -> None:
+        super().__init__()
+        self.done = done
 
 
 class PromptGuardBudgetExceededError(ValueError):

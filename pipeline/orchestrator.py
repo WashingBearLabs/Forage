@@ -774,11 +774,20 @@ async def run_retrieve_pipeline(
     # every later request — including ones a free permit would have
     # classified. The absent-classifier fail-open body still caches under its
     # `classifier_loaded=False` key exactly as before.
+    #
+    # A GPU out-of-memory refusal (`refuse` policy) yields the same shape from
+    # another cause: `unavailable_allowed` while the classifier is loaded. The
+    # second condition below keys on the served state, so it covers that body
+    # too. It does not subsume `wait_timed_out`: `classifier_loaded` is the
+    # request-entry snapshot, and a model can finish loading mid-request.
     if (
         cache is not None
         and request.cache_ttl_hours > 0
         and not content.injection_detected
         and not wait_timed_out
+        and not (
+            content.promptguard_state == "unavailable_allowed" and classifier_loaded
+        )
         and content.trust_tier
         not in {
             TrustTier.UNTRUSTED,

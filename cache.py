@@ -152,9 +152,9 @@ def cache_policy_fingerprint(
     classified. The fix is upstream of this key, at
     ``pipeline/orchestrator.py``'s step 8, which refuses to store a body that
     is ``unavailable_allowed`` while the classifier is loaded — the
-    combination only a wait timeout produces. The absent-classifier fail-open
-    body is unaffected and still caches under its ``classifier_loaded=False``
-    key exactly as described above.
+    combination a wait timeout or a GPU out-of-memory refusal produces. The
+    absent-classifier fail-open body is unaffected and still caches under its
+    ``classifier_loaded=False`` key exactly as described above.
 
     ``sanitizer_revision`` is included for the same reason one step out
     (``feature-forage-cache-fallback`` US-003). It is

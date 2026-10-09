@@ -99,7 +99,11 @@ from pipeline.stage3_promptguard import (
     unavailable_result,
 )
 from pipeline.stage5_url_audit import FetchResult
-from promptguard.classifier import PromptGuardBudgetExceededError, PromptGuardClassifier
+from promptguard.classifier import (
+    PromptGuardBudgetExceededError,
+    PromptGuardClassifier,
+    PromptGuardUnavailableError,
+)
 from tests.fakes import (
     FakeContentCache,
     FakeSearchProvider,
@@ -7733,3 +7737,33 @@ async def test_post_retrieve_with_an_entirely_hidden_body_is_a_well_formed_200(
     assert data["word_count"] == 0
     assert data["injection_detected"] is False
     assert data["title"] is None
+
+
+@pytest.mark.parametrize("fail_closed", [False, True])
+@pytest.mark.usefixtures("_mock_retrieve_io")
+async def test_a_gpu_oom_refused_body_is_never_cached(
+    fail_closed: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`refuse` policy: the loaded-classifier fail-open body is unscanned."""
+    classifier = _loaded_classifier()
+    classifier.classify_windows.side_effect = PromptGuardUnavailableError("oom")
+    cache_mock = MagicMock()
+    cache_mock.get = AsyncMock(return_value=None)
+    cache_mock.put = AsyncMock(return_value=True)
+
+    with caplog.at_level(logging.WARNING):
+        content = await _retrieve_under(
+            classifier=classifier,
+            semaphore=asyncio.Semaphore(1),
+            metrics=_NullRetrieveMetrics(),
+            settings=RetrieveSettings(),
+            request=_make_retrieve_request(promptguard_fail_closed=fail_closed),
+            cache=cache_mock,
+        )
+
+    assert content.promptguard_state == (
+        "unavailable_blocked" if fail_closed else "unavailable_allowed"
+    )
+    assert any("promptguard_oom_refused" in r.getMessage() for r in caplog.records)
+    if not fail_closed:
+        cache_mock.put.assert_not_called()

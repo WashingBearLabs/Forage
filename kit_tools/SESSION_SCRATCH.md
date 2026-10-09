@@ -54,3 +54,6 @@
 [now] inference-device US-003: CUDA batching (promptguard_cuda_batch_size, configure_batch_size, _score_batched)
 - Files: promptguard/classifier.py, retrieval_app.py, configs, docs/configuration.md, typings/transformers, tests/test_promptguard_batching.py
 - Decision: page tokens moved to device once then sliced; measured batched-vs-batch-1 max diff 0.0 on tiny model
+[17:58] inference-device US-004: GPU OOM handling (halve/failover/refuse), stage3 mapping, step 8 cache guard, rotation 60 recorded
+- Files: promptguard/classifier.py, pipeline/stage3_promptguard.py, pipeline/orchestrator.py, tests/test_promptguard_oom.py
+- Decision: counters as properties, stage3 log has tier not route

@@ -2641,6 +2641,27 @@ sanitization-behaviour change; only `contract.py` moves among the hashed sources
 Goldens and `contract/openapi.yaml` are unchanged: the docstring is not part of the OpenAPI document. Not replayed
 to Poppy.
 
+### The sixtieth rotation: GPU out-of-memory handling (`inference-device` US-004)
+
+`classify_windows` on a cuda snapshot now halves the shared batch on `torch.cuda.OutOfMemoryError`, and at
+batch 1 either swaps in a CPU copy built from host-side tensors (fallback `cpu`) or raises the new
+`PromptGuardUnavailableError` (`refuse`, or a failed copy build). `stage3_promptguard.py` maps that error to
+`unavailable_result` for the request's tier, and `orchestrator.py` step 8 adds
+`not (promptguard_state == "unavailable_allowed" and classifier_loaded)` beside `not wait_timed_out`, so an
+OOM-refused body is never cached. This is **not** a sanitization-behaviour change at shipped defaults: a CPU
+deployment never reaches the new path. Under `refuse` a fail-open tier is served unscanned, as for any
+unavailable classifier.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`bc1c971`) / both files reverted (= all-reverted control) | `2c6d0382cd0f94158a64710db7b5beb8b26ea411d4f65eabd0d0ca03c1572591` |
+| `orchestrator.py` reverted alone | `ed9289171b483dcc61486ebf85f8e837851cdab6a04a794e8c2289ccaddbe64a` |
+| `stage3_promptguard.py` reverted alone | `f081a4e10e1d185ca206302febf841336376f0bfeaeb5df29a3ea768a291bf72` |
+| After | `6a0fcaad00a0cc918275630b3bf496efa45a98c5888a6fa60d2f0c223310a8da` |
+
+Every reversal was read-only: the working tree was copied to a temp directory and the file replaced by
+`git show bc1c971:pipeline/<file>`. Contract and goldens are unchanged. Not replayed to Poppy.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

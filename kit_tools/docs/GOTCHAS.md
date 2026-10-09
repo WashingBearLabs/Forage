@@ -729,7 +729,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved fifty-nine times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved sixty times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -795,11 +795,12 @@ were recorded at their implementation boundaries:
 | `release-padding-gate` US-001 | `23444fe4…` | Fifty-seventh, **the eighteenth sanitization-behaviour-changing rotation**: the confusable-fold limit is `max(2n, n + 256)` (was 4n) and a refused fold is a **BLOCK** (penalty 0.0, `encoded_payload` flag kept) where it was a SUSPICIOUS flag; `/search` omits the result as `structural_blocked` with the field's name. `stage2_structural.py` and `orchestrator.py` move (each reverted alone; all-reverted control reproduces `d582f8da…` under default, `config.yaml` and `bench/config.yaml`). GOVERNANCE ruling (m), no bump; corpus baseline, floors and cassettes byte-unchanged. |
 | `release-1-3-0` US-003 | `91455b21…` | Fifty-eighth, **not a sanitization-behaviour change**: `contract.py` (final 1.4.0 entry) and `orchestrator.py` (a stale comment) move among the hashed sources, both text only. Each read-only reversal against `616beed` gives `53280032…` (contract alone) and `78c55633…` (orchestrator alone); the both-reverted control reproduces `23444fe4…` under default, `config.yaml` and `bench/config.yaml`. |
 | v1.3.0 validation fix (2026-10-07-003) | `2c6d0382…` | Fifty-ninth, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.4.0 entry no longer calls 256 the announced next default). A read-only whole-file reversal against `2ab79d0` reproduces `91455b21…` under default, `config.yaml` and `bench/config.yaml`. |
+| `inference-device` US-004 | `6a0fcaad…` | Sixtieth, **not a sanitization-behaviour change at shipped defaults**: `stage3_promptguard.py` (maps `PromptGuardUnavailableError` to `unavailable_result`) and `orchestrator.py` (step 8 never caches `unavailable_allowed` while the classifier was loaded) move. Each read-only reversal against `bc1c971` gives `f081a4e1…` (stage 3 alone) and `ed928917…` (orchestrator alone); the both-reverted control reproduces `2c6d0382…` under default, `config.yaml` and `bench/config.yaml`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-nine of the fifty-nine rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Forty of the sixty rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),

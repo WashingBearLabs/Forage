@@ -476,3 +476,11 @@ memory fraction is advisory: https://github.com/pytorch/pytorch/issues/69688.
 - **Q:** Batch on GPU? **A:** Yes, GPU only.
 - **Q:** Config shape? **A:** `FORAGE_DEVICE=cpu|cuda` plus `FORAGE_DEVICE_FALLBACK=cpu|refuse`, with
   no `auto`.
+
+### US-004 notes
+
+- Classifier counters are properties (`oom_batch_reductions`, `device_failovers`, `oom_refusals`); spec 2 surfaces them. `DeviceState` is unchanged.
+- `_score_batched` raises an internal `_CudaOutOfMemoryError` carrying finished scores, so a retry scores only the remaining windows. The CPU loop moved to `_score_serial` (unchanged behaviour).
+- stage3 logs `promptguard_oom_refused tier=...` (no route is known at that layer); the classifier logs `promptguard_oom_refused reason=oom|copy_failed`.
+- The existing `test_model_warmup_during_fetch_counts_timeout_and_never_caches[initially_loaded=False]` covers the wait-timeout guard for a classifier unloaded at entry.
+- Rotation 60: `2c6d0382…` → `6a0fcaad…`; stage3 alone `f081a4e1…`, orchestrator alone `ed928917…`, both-reverted control `2c6d0382…`.
