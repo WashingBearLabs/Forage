@@ -54,7 +54,10 @@ from pipeline.orchestrator import run_search_pipeline
 from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
 from pipeline.search_providers.brave import BraveApiProvider, BraveSettings
 from pipeline.search_providers.searxng import SearxngProvider, SearxngSettings
-from promptguard.classifier import promptguard_threads_from_config
+from promptguard.classifier import (
+    promptguard_cuda_batch_size_from_config,
+    promptguard_threads_from_config,
+)
 from retrieval_app import (
     CacheMetricsResponse,
     ExtractionMetricsResponse,
@@ -857,6 +860,7 @@ _NOT_SECURITY_RELEVANT_CONFIG_KEYS = frozenset(
     {
         "user_agents",
         "news_domains",
+        "promptguard_cuda_batch_size",
         "search_brave_timeout_seconds",
         "search_searxng_timeout_seconds",
         "search_searxng_query_max_chars",
@@ -922,6 +926,10 @@ async def test_shipped_security_relevant_config_equals_code_defaults(
             },
             **{f"search_{key}": value for key, value in targets.items()},
         }
+        batch_size = state.classifier.device_state().effective_batch_size
+    # Throughput only, so outside the security loop, but still pinned shipped.
+    assert batch_size == promptguard_cuda_batch_size_from_config({}) == 16
+    assert shipped["promptguard_cuda_batch_size"] == batch_size
     assert defaults.keys() >= SECURITY_RELEVANT_CONFIG_KEYS, (
         "Missing default readers: "
         f"{sorted(SECURITY_RELEVANT_CONFIG_KEYS - defaults.keys())}"
@@ -1092,6 +1100,7 @@ def test_config_registry_covers_every_reader() -> None:
         ("pipeline/search_providers/brave.py", "brave_settings_from_config"),
         ("pipeline/search_providers/searxng.py", "searxng_settings_from_config"),
         ("promptguard/classifier.py", "promptguard_threads_from_config"),
+        ("promptguard/classifier.py", "promptguard_cuda_batch_size_from_config"),
         ("retrieval_app.py", "lifespan"),
         ("retrieval_app.py", "promptguard_threshold_from_config"),
     ):

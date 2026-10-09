@@ -46,6 +46,7 @@ _PINNED_GENERIC_LABEL_INDICES = {
 MAX_SEQ_LEN = 512
 CHUNK_OVERLAP = 64
 MAX_PROMPTGUARD_CHUNKS = 64
+DEFAULT_CUDA_BATCH_SIZE = 16
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class DeviceState:
     failover_reason: str | None
     oom_refused: bool
     fp32_precision: str | None
+    effective_batch_size: int
 
 
 class PromptGuardThreadsConfigurationError(ValueError):
@@ -73,6 +75,22 @@ def promptguard_threads_from_config(config: dict[str, Any]) -> int:
         minimum=0,
         maximum=16,
         error=PromptGuardThreadsConfigurationError,
+    )
+
+
+class PromptGuardCudaBatchSizeConfigurationError(ValueError):
+    """Raised when the configured CUDA batch size is invalid."""
+
+
+def promptguard_cuda_batch_size_from_config(config: dict[str, Any]) -> int:
+    """Read the windows-per-forward-pass cap; only the CUDA path uses it."""
+    return bounded_int(
+        config,
+        "promptguard_cuda_batch_size",
+        DEFAULT_CUDA_BATCH_SIZE,
+        minimum=1,
+        maximum=64,
+        error=PromptGuardCudaBatchSizeConfigurationError,
     )
 
 
@@ -93,6 +111,8 @@ class PromptGuardClassifier:
         self._tokenizer_lock = threading.Lock()
         self._loaded: bool = False
         self._threads = 0
+        # Per instance, never module-global: the parity tool configures its own.
+        self._effective_batch = DEFAULT_CUDA_BATCH_SIZE
         # The (model, device) pair is ONE reference, replaced whole, so a
         # reader that snapshots it can never see a model on one device paired
         # with the name of another. load() is its single swap point.
@@ -115,6 +135,11 @@ class PromptGuardClassifier:
     def configure_threads(self, threads: int) -> None:
         """Retain the validated boot setting for every load attempt."""
         self._threads = threads
+
+    def configure_batch_size(self, batch_size: int) -> None:
+        """Set this instance's CUDA batch size; callable any number of times."""
+        with self._state_lock:
+            self._effective_batch = batch_size
 
     def configure_device(
         self, settings: DeviceSettings, boot_probe_failed: bool
@@ -164,6 +189,7 @@ class PromptGuardClassifier:
                 failover_reason=self._failover_reason,
                 oom_refused=self._oom_refused,
                 fp32_precision=self._fp32_precision,
+                effective_batch_size=self._effective_batch,
             )
 
     def _mark_failed_over(self, reason: str) -> None:
@@ -455,6 +481,10 @@ class PromptGuardClassifier:
             raise PromptGuardBudgetExceededError(
                 "PromptGuard classification input exceeds the chunk budget"
             )
+        if device == "cuda":
+            return self._score_batched(
+                model, tokenizer, device, chunks, self._effective_batch
+            ), chunks
         scores: list[float] = []
 
         for chunk in chunks:
@@ -477,6 +507,47 @@ class PromptGuardClassifier:
             scores.append(injection_prob)
 
         return scores, chunks
+
+    def _score_batched(
+        self,
+        model: PreTrainedModel,
+        tokenizer: PreTrainedTokenizerBase,
+        device: str,
+        chunks: list[str],
+        batch_size: int,
+    ) -> list[float]:
+        """Score *chunks* in order, at most *batch_size* windows per forward pass.
+
+        Production takes this path on ``cuda`` only; the batch size is a
+        parameter so a CPU test can force it against the batch-1 loop.
+        """
+        import torch
+
+        if not chunks:
+            return []
+        with self._tokenizer_lock:
+            inputs = tokenizer(
+                chunks,
+                return_tensors="pt",
+                truncation=True,
+                max_length=MAX_SEQ_LEN,
+                padding=True,
+            )
+        if device != "cpu":
+            # Token ids are small; move the page once and slice on the device.
+            inputs = inputs.to(device)
+        scores: list[float] = []
+        for start in range(0, len(chunks), batch_size):
+            batch = {
+                key: value[start : start + batch_size] for key, value in inputs.items()
+            }
+            with torch.no_grad():
+                outputs = model(**batch)
+            probs = torch.softmax(outputs.logits, dim=-1)
+            # torch types tolist() as list[Unknown]; a 1-D column is floats.
+            column = cast(Any, probs[:, self._injection_label_index])
+            scores.extend(cast(list[float], column.tolist()))
+        return scores
 
 
 class PromptGuardBudgetExceededError(ValueError):

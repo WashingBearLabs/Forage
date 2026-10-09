@@ -117,6 +117,7 @@ from promptguard import device as promptguard_device
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
     PromptGuardClassifier,
+    promptguard_cuda_batch_size_from_config,
     promptguard_threads_from_config,
 )
 from url_validator import domain_list_bytes, normalize_domain_entries
@@ -431,6 +432,7 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "promptguard_contiguity_windows",
         "promptguard_contiguity_threshold",
         "promptguard_threads",
+        "promptguard_cuda_batch_size",
         "promptguard_fail_closed_floor",
         "promptguard_threshold_ceiling",
         "promptguard_wait_seconds",
@@ -1912,6 +1914,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # rather than starting a second ~270 MiB download alongside this one.
     classifier = PromptGuardClassifier()
     classifier.configure_threads(promptguard_threads_from_config(config))
+    classifier.configure_batch_size(promptguard_cuda_batch_size_from_config(config))
     classifier.configure_device(device_settings, app.state.boot_probe_failed)
     app.state.classifier = classifier
     acquisition = model_fetcher.WeightAcquisition(

@@ -33,7 +33,7 @@ class SequenceClassifierOutput:
 class PreTrainedTokenizerBase:
     def __call__(
         self,
-        text: str,
+        text: str | list[str],
         *,
         return_tensors: str | None = ...,
         truncation: bool = ...,

@@ -51,3 +51,6 @@
 [now] inference-device US-002: classifier CUDA load, failover, fp32, tiny-model builder
 - Files: promptguard/classifier.py, scripts/promptguard_tiny_model.py, typings/transformers, retrieval_app.py, tests/test_promptguard_cuda_load.py
 - Decision: `_model` kept as a property over `_active` so tests that install a model directly keep working
+[now] inference-device US-003: CUDA batching (promptguard_cuda_batch_size, configure_batch_size, _score_batched)
+- Files: promptguard/classifier.py, retrieval_app.py, configs, docs/configuration.md, typings/transformers, tests/test_promptguard_batching.py
+- Decision: page tokens moved to device once then sliced; measured batched-vs-batch-1 max diff 0.0 on tiny model

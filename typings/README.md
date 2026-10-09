@@ -49,4 +49,6 @@ the drift hazard described above, at the largest possible scale.
 The transformers stub also declares `DebertaV2Config` and
 `DebertaV2ForSequenceClassification` (the random-init tiny model in
 `scripts/promptguard_tiny_model.py`), plus `.to()` / `.parameters()` on the
-model and `.to()` on the tokenizer output for the device move.
+model and `.to()` on the tokenizer output for the device move. The tokenizer's
+`__call__` accepts `str | list[str]`: the CUDA path tokenizes a page's windows
+in one call.

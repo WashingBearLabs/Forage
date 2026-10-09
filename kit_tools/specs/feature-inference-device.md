@@ -418,6 +418,14 @@ GPU degrades the service honestly instead of failing requests at random.
 
 ## Implementation Notes
 
+- **US-003 tolerance record.** Forced batched path (`_score_batched`) vs the batch-1 reference on
+  the seeded tiny model, b = 4, page sizes 1, 3, 4, 5, 12 (built by cycling
+  `tiny.sample_inputs()`): **max |difference| = 0.0** (measured 2026-10-08, macOS arm64,
+  torch 2.14; padding is masked). The test asserts < 1e-5 per window, plus count, order and slice
+  sizes `[min(b, n - start) …]`. Real-model drift is spec 4's measurement.
+- **US-003 shape.** The CUDA path moves the whole tokenized page to the device once, then slices;
+  the transformers stub's tokenizer `__call__` widened to `str | list[str]`.
+
 ## Refinement Notes
 
 ### Research Findings
