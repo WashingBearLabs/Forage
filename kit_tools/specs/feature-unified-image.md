@@ -200,15 +200,15 @@ into the public image.
   `tests/test_ci_workflow.py`.
 
 **Acceptance Criteria:**
-- [ ] The checker enforces all four rules with marker evaluation under explicit environments, and
+- [x] The checker enforces all four rules with marker evaluation under explicit environments, and
       passes on the committed lock.
-- [ ] Each of the eight planted violations fails it (one test each). The temporary US-001 assertion
+- [x] Each of the eight planted violations fails it (one test each). The temporary US-001 assertion
       is removed.
-- [ ] CI lint runs the checker (pinned).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] CI lint runs the checker (pinned).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-003: Correct the CPU-only claims in the docs
 
