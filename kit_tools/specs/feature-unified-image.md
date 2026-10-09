@@ -235,9 +235,9 @@ equals the recorded list of expected surviving matches.
 - Docs only. No rotation.
 
 **Acceptance Criteria:**
-- [ ] Every listed site is corrected, and the grep output equals the recorded expected list.
-- [ ] The DECISIONS.md entry supersedes :522.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Every listed site is corrected, and the grep output equals the recorded expected list.
+- [x] The DECISIONS.md entry supersedes :522.
+- [x] Full test suite passes (`uv run pytest`)
 
 ### US-004: One Dockerfile with arch-selected torch and build-time content checks
 
