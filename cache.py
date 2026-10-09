@@ -132,6 +132,7 @@ def cache_policy_fingerprint(
     promptguard_threshold: float,
     promptguard_fail_closed: bool,
     classifier_loaded: bool,
+    active_device: str | None,
     sanitizer_revision: str,
 ) -> str:
     """Return a stable cache-key input for content-shaping retrieval policy.
@@ -156,6 +157,14 @@ def cache_policy_fingerprint(
     absent-classifier fail-open body is unaffected and still caches under its
     ``classifier_loaded=False`` key exactly as described above.
 
+    ``active_device`` is the device the classifier is running on right now
+    (``"cpu"``, ``"cuda"``, or ``None`` when there is no classifier state to
+    read), so a verdict scored on the GPU never replays for a request scored
+    on CPU, or the reverse, including after a failover. It is independent of
+    ``classifier_loaded``. The requested device lives in ``sanitizer_revision``
+    instead; ``promptguard_cuda_batch_size`` is in neither (batch size moves
+    GPU scores only within parity tolerance).
+
     ``sanitizer_revision`` is included for the same reason one step out
     (``feature-forage-cache-fallback`` US-003). It is
     ``derive_sanitizer_revision()``'s hash of the sanitization sources, the
@@ -171,6 +180,7 @@ def cache_policy_fingerprint(
         "blocked_domains": sorted(
             {domain.strip().lower() for domain in blocked_domains}
         ),
+        "active_device": active_device,
         "classifier_loaded": classifier_loaded,
         "promptguard_fail_closed": promptguard_fail_closed,
         "promptguard_threshold": promptguard_threshold,

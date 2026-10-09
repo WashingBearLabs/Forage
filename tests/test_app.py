@@ -75,6 +75,7 @@ from pipeline.retrieve_limits import (
     RetrieveSettings,
     retrieve_settings_from_config,
 )
+from pipeline.sanitizer_revision import derive_sanitizer_revision
 from pipeline.search_providers import SearchProviderConfigurationError
 from pipeline.search_providers.base import (
     ProviderFailure,
@@ -108,6 +109,7 @@ from promptguard.classifier import (
     PromptGuardClassifier,
     PromptGuardThreadsConfigurationError,
 )
+from promptguard.device import DeviceSettings
 from retrieval_app import (
     _MAX_DOCUMENT_BYTES,
     CACHE_HMAC_KEY_ENV_VAR,
@@ -427,6 +429,85 @@ async def test_lifespan_free_health_reads_the_requested_device_from_the_env(
     data = (await client.get("/health")).json()
 
     assert data["promptguard_requested_device"] == expected
+
+
+# -- `device@cuda` in the revision, at every call site (inference-surface US-003) --
+
+
+def _set_device_env(monkeypatch: pytest.MonkeyPatch, env: str | None) -> None:
+    if env is None:
+        monkeypatch.delenv("FORAGE_DEVICE", raising=False)
+    else:
+        monkeypatch.setenv("FORAGE_DEVICE", env)
+
+
+async def _revisions_from_every_site(running: httpx.AsyncClient) -> dict[str, str]:
+    limit = app.state.extraction_settings.max_extracted_characters
+    ok = await running.post(
+        "/extract",
+        files={"file": ("a.txt", b"Hello world", "text/plain")},
+        data={"filename": "a.txt"},
+    )
+    refused = await running.post(
+        "/extract",
+        files={"file": ("big.txt", b"a" * (limit + 1), "text/plain")},
+        data={"filename": "big.txt"},
+    )
+    assert ok.status_code == 200
+    assert refused.status_code == 422
+    return {
+        "health": (await running.get("/health")).json()["sanitizer_revision"],
+        "extract_200": ok.json()["sanitizer_revision"],
+        "extract_422": refused.json()["sanitizer_revision"],
+    }
+
+
+@pytest.mark.parametrize("env", [None, "cpu", "cuda"])
+async def test_lifespan_app_health_and_both_extract_bodies_share_one_revision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: str | None
+) -> None:
+    config = {"extract_route_enabled": True}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    monkeypatch.setattr(retrieval_app, "spool_dir", lambda: tmp_path)
+    monkeypatch.setattr(model_fetcher.WeightAcquisition, "run", AsyncMock())
+    _set_device_env(monkeypatch, env)
+    async with _running_app() as running:
+        expected = derive_sanitizer_revision(config)
+        seen = await _revisions_from_every_site(running)
+        seen["lifespan"] = app.state.sanitizer_revision
+    assert set(seen.values()) == {expected}
+
+
+@pytest.mark.parametrize("env", [None, "cpu", "cuda"])
+async def test_lifespan_free_health_and_both_extract_bodies_share_one_revision(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, env: str | None
+) -> None:
+    _set_device_env(monkeypatch, env)
+    monkeypatch.delattr(app.state, "sanitizer_revision", raising=False)
+    seen = await _revisions_from_every_site(client)
+    assert set(seen.values()) == {derive_sanitizer_revision(app.state.config)}
+
+
+async def test_a_failover_changes_health_but_not_the_revision(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FORAGE_DEVICE", "cuda")
+    monkeypatch.delattr(app.state, "sanitizer_revision", raising=False)
+    classifier = PromptGuardClassifier()
+    target = cast(Any, classifier)
+    target._loaded = True
+    target._active = (object(), "cuda")
+    classifier.configure_device(DeviceSettings("cuda", "cpu"), False)
+    app.state.classifier = classifier
+    before = (await client.get("/health")).json()
+    target._active = (object(), "cpu")
+    target._mark_failed_over("oom")
+    after = (await client.get("/health")).json()
+    assert (before["promptguard_device"], after["promptguard_device"]) == (
+        "cuda",
+        "cpu",
+    )
+    assert after["sanitizer_revision"] == before["sanitizer_revision"]
 
 
 # Both break-glass names: the current one and the pre-extraction alias. Every

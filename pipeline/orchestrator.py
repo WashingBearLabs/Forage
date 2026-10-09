@@ -111,7 +111,7 @@ from pipeline.stage4_structuring import (
     structure_sanitization_result,
 )
 from pipeline.stage5_url_audit import DEFAULT_TIMEOUT, ContentTooLargeError, fetch_url
-from promptguard.classifier import PromptGuardBudgetExceededError
+from promptguard.classifier import PromptGuardBudgetExceededError, device_snapshot
 from url_validator import (
     BlockedDomainError,
     CanonicalHost,
@@ -440,6 +440,7 @@ async def run_retrieve_pipeline(
     """
     request_id = uuid.uuid4().hex
     classifier_loaded = classifier is not None and classifier.loaded
+    entry_device = snap.device if (snap := device_snapshot(classifier)) else None
 
     # Operator entries precede the independently budgeted caller list.
     seed_blocklist: list[str] = config.get("seed_blocklist", [])
@@ -451,6 +452,7 @@ async def run_retrieve_pipeline(
         promptguard_threshold=promptguard_threshold,
         promptguard_fail_closed=request.promptguard_fail_closed,
         classifier_loaded=classifier_loaded,
+        active_device=entry_device,
         sanitizer_revision=sanitizer_revision,
     )
     news_domains: list[str] = config.get("news_domains", [])
@@ -780,6 +782,11 @@ async def run_retrieve_pipeline(
     # second condition below keys on the served state, so it covers that body
     # too. It does not subsume `wait_timed_out`: `classifier_loaded` is the
     # request-entry snapshot, and a model can finish loading mid-request.
+    #
+    # A failover mid-request (cuda -> cpu) leaves a body whose windows may
+    # straddle both devices, keyed under the device read at entry. The active
+    # device is re-read here and the write is skipped on any difference,
+    # including `None` against a value: conservative, and rare.
     if (
         cache is not None
         and request.cache_ttl_hours > 0
@@ -788,6 +795,8 @@ async def run_retrieve_pipeline(
         and not (
             content.promptguard_state == "unavailable_allowed" and classifier_loaded
         )
+        and (exit_snap.device if (exit_snap := device_snapshot(classifier)) else None)
+        == entry_device
         and content.trust_tier
         not in {
             TrustTier.UNTRUSTED,

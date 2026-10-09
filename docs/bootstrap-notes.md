@@ -2700,6 +2700,29 @@ test excludes `_DEVICE_FIELDS`. The metrics models are not in `_SCHEMA_MODELS`, 
 `contract.py` is the only hashed file that changed; the reversal was read-only. OpenAPI anchor is now
 `9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`. Not replayed to Poppy.
 
+### The sixty-third rotation: active device in the cache key (`inference-surface` US-003)
+
+`cache_policy_fingerprint` takes a required `active_device: str | None`, read at `/retrieve` entry from
+the classifier's device state through `promptguard.classifier.device_snapshot` (the tolerant accessor,
+moved out of `retrieval_app.py` so the orchestrator can import it; `retrieval_app._device_snapshot` is
+the same function). Step 8 re-reads it and skips the cache write when it differs from the entry value,
+including `None` against a value. **Not** a sanitization-behaviour change at shipped defaults.
+
+`derive_sanitizer_revision` also gains the `device@cuda` input (after the model identity, only when
+`requested_device_token(os.environ) == "cuda"`). `sanitizer_revision.py` is not a `_REVISION_SOURCES`
+member, so this is a **no-rotation** input for cpu (the `hardening-promptguard-86m` US-001 precedent);
+every call site reads the same environment, so the lifespan value, `/health` and both `/extract` bodies
+agree.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`3acbb81`) / `orchestrator.py` reverted (= all-reverted control; includes the cpu device input) | `2384820b1b8b83b2dcc63099aba6ab529b550faa6b47c42af930bc16a2fb6584` |
+| After, `FORAGE_DEVICE` unset or `cpu` | `02f7abcf34ae7bc5781f0e90f317aab59c7f21a3b5cc8e4fba5cfdf9606aaa67` |
+| After, `FORAGE_DEVICE=cuda` | `280511c1bfd3c801091bae9fa1901038b54ef43db663b7e99c5457c3d66da6a6` |
+| `orchestrator.py` reverted, `FORAGE_DEVICE=cuda` | `034570d2a95fab708b9e7dba0502e5ae8571ae61d3f7c86f7f17a7e2bd3d504d` |
+
+`orchestrator.py` is the only hashed file that changed; the reversal was read-only. Not replayed to Poppy.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

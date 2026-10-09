@@ -760,6 +760,16 @@ reversal against `fd10964` reproduces `396ea4bf…` under default, `config.yaml`
 `bench/config.yaml`. Old cache keys invalidate. Not replayed to Poppy. Full values:
 `docs/bootstrap-notes.md`.
 
+The sixty-third rotation is `2384820b…` → `02f7abcf…` for `inference-surface` US-003 —
+**not a sanitization-behaviour change at shipped defaults**: only `pipeline/orchestrator.py`
+moves among the hashed sources (the active device read at entry feeds
+`cache_policy_fingerprint(active_device=...)`, and step 8 skips the cache write when the device
+re-read there differs). A read-only whole-file reversal against `HEAD` reproduces `2384820b…` under
+default, `config.yaml` and `bench/config.yaml`. The new `device@cuda` revision input adds **no
+rotation for cpu** (`sanitizer_revision.py` is not a hashed source and `cpu`/unset hash nothing); the
+cuda value is `280511c1bfd3c801091bae9fa1901038b54ef43db663b7e99c5457c3d66da6a6`. Old cache keys
+invalidate. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

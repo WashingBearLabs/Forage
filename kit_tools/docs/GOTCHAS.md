@@ -729,7 +729,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved sixty-one times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved sixty-three times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -798,11 +798,12 @@ were recorded at their implementation boundaries:
 | `inference-device` US-004 | `6a0fcaad…` | Sixtieth, **not a sanitization-behaviour change at shipped defaults**: `stage3_promptguard.py` (maps `PromptGuardUnavailableError` to `unavailable_result`) and `orchestrator.py` (step 8 never caches `unavailable_allowed` while the classifier was loaded) move. Each read-only reversal against `bc1c971` gives `f081a4e1…` (stage 3 alone) and `ed928917…` (orchestrator alone); the both-reverted control reproduces `2c6d0382…` under default, `config.yaml` and `bench/config.yaml`. |
 | `inference-surface` US-001 | `396ea4bf…` | Sixty-first, **not a sanitization-behaviour change**: only `contract.py` moves (contract `1.5.0`: `/health.promptguard_device`, `promptguard_requested_device`, reasons `promptguard_device_failover` and `promptguard_device_oom`). A read-only whole-file reversal against `bef918e` reproduces `6a0fcaad…` under default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` is not hashed. |
 | `inference-surface` US-002 | `2384820b…` | Sixty-second, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.5.0 entry names `/metrics.model` `device_failovers`, `oom_batch_reductions`, `oom_refusals`, `effective_batch_size`). A read-only whole-file reversal against `fd10964` reproduces `396ea4bf…` under default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` and `promptguard/classifier.py` are not hashed. |
+| `inference-surface` US-003 | `02f7abcf…` | Sixty-third, **not a sanitization-behaviour change at shipped defaults**: only `orchestrator.py` moves (active device in `cache_policy_fingerprint`, step 8 skips the write if it changed). A read-only reversal against `3acbb81` reproduces `2384820b…` under default, `config.yaml` and `bench/config.yaml`. The `device@cuda` revision input is a no-rotation for cpu (`sanitizer_revision.py` is unhashed); cuda is `280511c1…`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Forty-one of the sixty-one rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Forty-one of the sixty-three rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),

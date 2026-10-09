@@ -738,3 +738,18 @@ class _CudaOutOfMemoryError(Exception):
 
 class PromptGuardBudgetExceededError(ValueError):
     """Raised instead of silently classifying only a prefix of a document."""
+
+
+def device_snapshot(classifier: object) -> DeviceState | None:
+    """The classifier's device state, or ``None`` when it has none to report.
+
+    Tolerant on purpose: stub and mock classifiers (every attribute exists on a
+    ``MagicMock``) and the corpus replay classifier carry no real device, and
+    the ``isinstance`` check keeps a mock's fabricated value out of ``/health``
+    and out of the content-cache key.
+    """
+    snapshot = getattr(classifier, "device_state", None)
+    if not callable(snapshot) or getattr(classifier, "loaded", False) is not True:
+        return None
+    result = snapshot()
+    return result if isinstance(result, DeviceState) else None

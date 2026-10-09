@@ -311,6 +311,21 @@ returns False (`promptguard_device_load_failed reason=...`), which is degraded
 GPU fault self-heals under `refuse`. If the recovery itself fails, CUDA is latched unusable for
 the process: `refuse` keeps failing, `cpu` loads on CPU as `load_error` on the next attempt.
 
+#### Which device settings key what
+
+| Setting | Sanitizer-revision input | Content-cache key input |
+|---|---|---|
+| `FORAGE_DEVICE=cuda` | **Yes** — hashes `device@cuda` after the model identity (`cpu`, unset and invalid hash nothing, so a CPU install's revision is unchanged) | Through the revision |
+| The **active** device (`cpu` or `cuda`, or none without a loaded classifier) | No — a failover never changes `/health`'s `sanitizer_revision` | **Yes** — `cache_policy_fingerprint(active_device=...)`, independent of `classifier_loaded` |
+| `FORAGE_DEVICE_FALLBACK` | No | No (its effect arrives as the active device) |
+| `promptguard_cuda_batch_size` | No | No |
+
+A GPU-scored verdict and a CPU-scored verdict therefore never share a key, even after a failover. A
+request in flight when a failover lands is served scanned but not cached: the active device is re-read
+at the cache write, and a difference from the one used for the key skips it (conservative, and rare).
+Residual: batch size moves GPU scores only within parity tolerance, yet it is in neither key, so a
+changed `promptguard_cuda_batch_size` keeps serving cached entries scored under the old value.
+
 ### Credential handling for `FORAGE_CACHE_HMAC_KEY`
 
 `FORAGE_CACHE_HMAC_KEY` is read once during startup. Leading/trailing spaces, tabs

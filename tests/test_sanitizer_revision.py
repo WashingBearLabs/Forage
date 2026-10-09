@@ -136,6 +136,7 @@ def test_contiguity_is_configuration_only_and_keys_the_cache(
     assert baseline != changed
     inputs: dict[str, object] = {
         "blocked_domains": [],
+        "active_device": "cpu",
         "classifier_loaded": True,
         "promptguard_fail_closed": True,
         "promptguard_threshold": 0.85,
@@ -156,6 +157,7 @@ def test_contiguity_is_configuration_only_and_keys_the_cache(
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            active_device="cpu",
             sanitizer_revision=revision,
         )
 

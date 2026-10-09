@@ -118,10 +118,12 @@ from pipeline.worker_launch import make_process_non_dumpable, sweep_stale_spool
 from promptguard import device as promptguard_device
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
-    DeviceState,
     PromptGuardClassifier,
     promptguard_cuda_batch_size_from_config,
     promptguard_threads_from_config,
+)
+from promptguard.classifier import (
+    device_snapshot as _device_snapshot,
 )
 from url_validator import domain_list_bytes, normalize_domain_entries
 
@@ -400,20 +402,6 @@ def _resolved_requested_device(state: State) -> Literal["cpu", "cuda"]:
     if requested is None:
         requested = promptguard_device.requested_device_token(os.environ)
     return "cuda" if requested == "cuda" else "cpu"
-
-
-def _device_snapshot(classifier: object) -> DeviceState | None:
-    """The classifier's device state, or ``None`` when it has none to report.
-
-    Tolerant on purpose: stub and mock classifiers (every attribute exists on a
-    ``MagicMock``) and the corpus replay classifier carry no real device, and
-    the ``isinstance`` check keeps a mock's fabricated value out of ``/health``.
-    """
-    snapshot = getattr(classifier, "device_state", None)
-    if not callable(snapshot) or getattr(classifier, "loaded", False) is not True:
-        return None
-    result = snapshot()
-    return result if isinstance(result, DeviceState) else None
 
 
 def _resolved_search_providers(state: State) -> list[SearchProvider]:

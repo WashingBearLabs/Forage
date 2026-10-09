@@ -61,3 +61,7 @@
 [now] inference-surface US-002: /metrics.model device fields, bench device fields, rotation 62 (396ea4bf -> 2384820b)
 - Files: retrieval_app.py, promptguard/classifier.py (DeviceState counters), pipeline/contract.py, scripts/bench_promptguard.py, MONITORING.md
 - Decision: counters ride on DeviceState (defaulted 0) so /metrics reads one snapshot
+
+[now] inference-surface US-003: device@cuda revision input, active_device in cache fingerprint, step-8 failover guard, rotation 63 (2384820b -> 02f7abcf; cuda 280511c1)
+- Files: pipeline/sanitizer_revision.py, cache.py, pipeline/orchestrator.py, promptguard/classifier.py (device_snapshot moved here), retrieval_app.py, docs/configuration.md
+- Decision: tolerant accessor lives in promptguard/classifier.py (unhashed) so orchestrator and app share it
