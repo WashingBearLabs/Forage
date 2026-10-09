@@ -136,12 +136,19 @@ RUN set -eu; \
 # image running one interpreter while CI type-checked another. They are set on
 # the command rather than as ENV so nothing leaks into the runtime environment.
 COPY pyproject.toml uv.lock ./
-RUN UV_LINK_MODE=copy \
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    case "${arch}" in \
+      amd64) extra=cuda ;; \
+      arm64) extra=cpu ;; \
+      *) echo "unsupported architecture ${arch}" >&2; exit 1 ;; \
+    esac; \
+    UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_PYTHON_DOWNLOADS=never \
     UV_PYTHON_PREFERENCE=only-system \
-    uv sync --locked --no-dev --no-install-project \
-    && rm -rf /root/.cache/uv
+    uv sync --locked --no-dev --no-install-project --extra "${extra}"; \
+    rm -rf /root/.cache/uv
 ENV PATH="/app/.venv/bin:${PATH}"
 
 # Non-root user, plus the model-cache directory it has to be able to write:
@@ -213,6 +220,18 @@ COPY contract/ /app/contract/
 # compiling the whole venv would add minutes to the build and hundreds of MB of
 # torch bytecode to the image.
 RUN PYTHONDONTWRITEBYTECODE=1 python -c "import retrieval_app"
+
+# Build-time content check: the venv must hold the torch and payload this
+# architecture is supposed to (amd64: +cu130 and exactly the allowlisted CUDA
+# payload; arm64: +cpu and none). The checker and the allowlist are copied to a
+# build-only path and removed in the same RUN. The arm64 leg runs in the publish
+# lane's multi-arch build; PR CI builds amd64 only (docs CI_CD.md).
+COPY scripts/image_content_check.py scripts/cuda_payload_allowlist.txt /tmp/image-check/
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    PYTHONDONTWRITEBYTECODE=1 python /tmp/image-check/image_content_check.py \
+      "${arch}" /tmp/image-check/cuda_payload_allowlist.txt; \
+    rm -rf /tmp/image-check
 
 # The entrypoint is a bare `exec "$@"` shim. Forage takes all of its
 # configuration from the environment (docs/configuration.md) and never talks to

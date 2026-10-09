@@ -165,8 +165,10 @@ measurement run; "cold" means an empty GHA build cache.
    `nvidia-*`, `cuda-*` or `triton` package, and `scripts/check_lock_cuda_scope.py` proves
    from the lock's markers that the CUDA payload appears only in the `cuda` extra on x86_64
    Linux, against an exact-set allowlist. `uv.lock` itself now legitimately carries
-   `nvidia-*` entries: the amd64 image ships CUDA torch (estimated ~4 GB, to be measured by
-   the size budgets), while arm64 keeps CPU torch (~348 MB recorded).
+   `nvidia-*` entries: the amd64 image ships CUDA torch (measured in CI on 2026-10-09, run
+   37962323278: gzip layer sum 3,143,866,537 B ≈ 3.14 GB; uncompressed 5,961,397,760 B ≈
+   5.96 GB; largest layer 5,751,717,376 B, the dependency sync), while arm64 keeps CPU torch
+   (~348 MB recorded).
 4. `uv run ruff check .` and `uv run ruff format --check .`.
 5. `actionlint` 1.7.12, downloaded from GitHub releases and verified against
    `ACTIONLINT_SHA256` before it runs, then `./actionlint -color` on the workflow itself.
@@ -253,6 +255,23 @@ hashes it against the committed `contract/openapi.yaml.sha256`. The 120 s budget
 and a guard test ties the number to the script's own default. On failure the job dumps the
 container log; the container is removed either way. `kit_tools/docs/MONITORING.md` covers
 running the same probe against a deployment.
+
+After the contract smoke, two more steps run in the same job. **CPU parity** runs
+`scripts/promptguard_tiny_model.py` (seeded, weights-free; one `float.hex()` score per line)
+in the candidate (`--entrypoint /app/.venv/bin/python`, `CUDA_VISIBLE_DEVICES=` empty,
+`scripts/` mounted read-only) and in the job's `+cpu` environment, and `diff`s the two — exact
+equality is expected; a difference is an owner decision, not a retry. **Size budget** sums each
+layer's gzip size from `docker save` and fails above 5 GB, reporting the uncompressed total and
+the largest layer. First CI run (2026-10-09, run 37962323278): parity `==` (7 scores
+identical); gzip sum 3,143,866,537 B, uncompressed 5,961,397,760 B, largest layer
+5,751,717,376 B.
+
+**Where the image's content checks run.** The Dockerfile's `scripts/image_content_check.py`
+step (torch suffix `+cu130`/`+cpu`; payload equals `scripts/cuda_payload_allowlist.txt` on
+amd64, empty on arm64) runs at build time on whatever architecture is being built. PR CI builds
+amd64 only, so the arm64 assertions run in the `publish` lane's multi-arch build, where a
+failure aborts before any push. The PR-time arm64 guarantee is static: the lock checker's rule 2
+(linux/aarch64 resolves `+cpu`, no payload). No qemu build is added to PR CI.
 
 CI passes neither `--expect-status` nor `--anchor` and relies on their defaults:
 `--expect-status degraded` (the weights-free contract above; `/health` is polled until it

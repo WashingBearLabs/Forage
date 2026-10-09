@@ -71,3 +71,7 @@
 [now] unified-image US-001: torch moved to conflicting cpu/cuda extras, cu130 index, install commands -> `--extra dev --extra cpu`
 - Pre-change `uv export --frozen --extra dev` vs post `--extra dev --extra cpu`: identical package set/versions/markers; only non-linux torch gained extra wheel hashes (pre copy in /tmp/us001/pre.txt)
 - Dockerfile still `uv sync --locked --no-dev` (installs no torch now) -> US-004
+[now] unified-image US-004: arch-selected `--extra` in Dockerfile sync RUN, scripts/image_content_check.py build step, CI parity+size steps in smoke
+- Files: Dockerfile, .dockerignore, scripts/image_content_check.py, tests, ci.yml, CI_CD.md
+- Local docker builds verified both archs; amd64 gzip layer sum ~3.15 GB; CI parity result still pending first run
+[now] unified-image US-004 attempt 2: CI run 37962323278 green; parity ==; gzip 3.14 GB, uncompressed 5.96 GB, largest 5.75 GB; recorded in CI_CD.md + spec
