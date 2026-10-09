@@ -1300,10 +1300,10 @@ What it shows:
 - **The 22M is about 2.2× faster** at every size.
 - **NUMA placement matters on multi-die CPUs.** Pinning to memory-bearing nodes with
   `cpuset` gained about 20% over a plain `--cpus` quota.
-- **GPU, for planning only (not supported by the image).** The same harness under CUDA
+- **GPU.** The same harness under CUDA
   PyTorch on the server's RTX 4070 Ti measured **15.4 ms per window for both models**,
   about 70× faster than the best CPU figure, so a 64-chunk page takes about 1 s. The shipped
-  image is CPU-only; GPU support is a separate epic.
+  image carries CUDA torch on amd64 but defaults to `FORAGE_DEVICE=cpu`.
 - This 2018 Zen+ part is about 3–4× slower per window than the Apple-silicon bare-host row
   below, partly because torch's MKL backend is weak on AMD. Newer x86 parts will land
   between the two.

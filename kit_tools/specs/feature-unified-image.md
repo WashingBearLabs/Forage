@@ -493,6 +493,52 @@ binding are unchanged, and the base fragments are byte-unchanged.
 - **Gates:** `ruff check`, `ruff format --check` and `pyright` (0 errors) are clean. The full suite
   gives 5664 passed and 6 skipped (5670 collected) in 377 s.
 
+### US-003 (attempt 2, 2026-10-09)
+
+- **Corrected sites:** the `Dockerfile` header (point 2); `INFRA_ARCH.md` dependency-install
+  row, size row, sizing paragraph and disk row (per-arch: arm64 ~348 MB recorded with CPU torch,
+  amd64 an estimated ~4 GB with CUDA torch, to be measured by US-004/US-005); `CODE_ARCH.md`
+  Dockerfile and `uv.lock` tree lines; `LOCAL_DEV.md` "Where torch comes from" (rewrapped) and
+  the Troubleshooting entry; the `GOTCHAS.md` lock entry, rewritten around the scope checker,
+  including its false "the image never reads the lock" claim; `CI_CD.md` lint step 3 and its
+  red-job row; and, outside the listed sites but making the same claim, `DEPLOYMENT.md`'s image
+  row, `SECURITY.md`'s dependencies paragraph and PR checklist line, `SERVICE_MAP.md`'s runtime
+  row, `TESTING_GUIDE.md`'s two lock descriptions, `docs/configuration.md`'s GPU bullet and the
+  `kit_tools/worktree.yaml` `path_links` comment (now naming the three torch sources).
+- **`docs/releases.md`:** checked, and it has **no image-size statement**. Its MB/GiB figures are
+  memory and weights sizes, plus one `aarch64` torch wheel timing that is still accurate, so
+  nothing there changed.
+- **DECISIONS:** `kit_tools/arch/DECISIONS.md` gains the 2026-10-09 entry (one image, cu130 on
+  amd64, three torch sources). The 2026-09-07 torch-CPU-index entry is marked
+  `Superseded by 2026-10-09`, and its body is kept as history.
+- **Grep gate:** `git grep -nE 'CPU-only|pytorch-cpu|no nvidia|nvidia-' -- ':!kit_tools/specs/archive'`.
+  Every surviving match is expected. Lines per file, with the reason:
+  - `uv.lock` (43): the `cuda` extra's payload packages. This is legitimate since US-001, and the
+    checker scopes it.
+  - `pyproject.toml` (5): the `pytorch-cpu` index name, its three source rows, and the source
+    comment ("macOS/Windows wheels are CPU-only on PyPI").
+  - `scripts/check_lock_cuda_scope.py` (3) and `scripts/cuda_payload_allowlist.txt` (15): the
+    checker, its payload regex and the allowlist names.
+  - `tests/test_dependency_lock.py` (18): the checker's planted-violation tests and source pins.
+  - `tests/test_ci_workflow.py` (3): the CI regex pins and the assertion message "hermetic and
+    CPU-only" (the test suite is CPU-only, not the image).
+  - `.github/workflows/ci.yml` (4): the lint step's installed-package grep and echo, plus the
+    `test` job comment "hermetic and CPU-only" (about the suite).
+  - `kit_tools/arch/DECISIONS.md` (10): the superseded 2026-09-07 entry (4, kept as history) and
+    the new 2026-10-09 entry (6).
+  - `kit_tools/arch/INFRA_ARCH.md` (1), `kit_tools/docs/CI_CD.md` (2), `kit_tools/docs/GOTCHAS.md` (2),
+    `kit_tools/docs/LOCAL_DEV.md` (6): corrected sentences that now describe the three sources,
+    the `cpu`-profile export check and the cpu-environment troubleshooting entry.
+  - `kit_tools/worktree.yaml` (2): the corrected `path_links` comment naming the sources.
+  - Specs: `epic-forage-inference-backends.md` (2, the CPU-only *wheel* and *host*),
+    `feature-gpu-validation.md` (2, `nvidia-smi`), and this spec itself (23 after these notes; it defines the work and records this list).
+  - `kit_tools/SESSION_LOG.md` does not match the pattern. Its "CPU-pinned" lines are history.
+- **Left for later stories:** the `ci.yml` build-job comment "~200 MB of CPU torch" (budgets:
+  US-005) does not match the pattern. The Dockerfile's `uv sync --locked --no-dev` still selects
+  no extra, so it installs no torch until **US-004**. The header now describes the image US-004
+  delivers.
+- No hashed source moved, so there is no rotation.
+
 ## Refinement Notes
 
 ### Research Findings

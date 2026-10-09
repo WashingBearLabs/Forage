@@ -19,9 +19,10 @@
 #
 #  2. DEPENDENCIES COME FROM THE COMMITTED LOCK. `uv sync --locked` fails
 #     rather than resolving something new, so the image contains exactly the
-#     versions CI linted, type-checked and tested — and exactly the CPU-only
-#     torch `uv.lock` pins, instead of the ~2.7 GB of `nvidia-*` CUDA wheels a
-#     fresh resolution drags in. The previous form of this file parsed
+#     versions CI linted, type-checked and tested — and exactly the torch
+#     `uv.lock` pins for the image's architecture: CUDA (cu130) torch on amd64,
+#     CPU torch on arm64, chosen by the lock's three torch sources rather than
+#     by a build argument. The previous form of this file parsed
 #     `pyproject.toml` with a shell one-liner and pip-installed the unpinned
 #     ranges, which is a different dependency set from the one under test.
 #

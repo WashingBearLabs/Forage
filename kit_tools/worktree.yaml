@@ -31,7 +31,9 @@ env_link: []
 
 # Local sibling path-dependencies symlinked into the worktree at their
 # matching relative path. Forage has none — every dependency resolves from
-# PyPI (or the pinned pytorch-cpu index) via uv.lock.
+# PyPI or one of the three pinned torch sources (pytorch-cpu for the cpu
+# extra; pytorch-cu130 for the cuda extra on x86_64 Linux, pytorch-cpu for it
+# elsewhere) via uv.lock.
 path_links: []
 
 # Prefix the orchestrator prepends to every test/regression command it runs.

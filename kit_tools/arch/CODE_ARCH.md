@@ -53,13 +53,15 @@ Design principles:
 │                            # Valkey on an --internal network and probes it.
 │                            # Not in the image — the Dockerfile COPY list is explicit
 ├── config.yaml              # UA pool, trusted domains, blocklist, thresholds, limits
-├── Dockerfile               # CPU-torch image; digest-pinned base, uv.lock install,
+├── Dockerfile               # one image: CUDA torch on amd64, CPU torch on arm64;
+│                            # digest-pinned base, uv.lock install,
 │                            # secret-free (no build ARG, no baked weights), ships
 │                            # contract/ at /app/contract/, and normalized for
 │                            # reproducibility (no apt logs, no import-time .pyc)
 ├── docker-entrypoint.sh     # 17 lines: `exec "$@"`. Vault-free by design.
 ├── pyproject.toml           # uv/hatchling/ruff/pyright/pytest config
-├── uv.lock                  # CPU-pinned torch on Linux; `grep nvidia-` must stay empty
+├── uv.lock                  # torch per arch (cu130 amd64 / CPU arm64); CUDA payload only
+│                            # in the `cuda` extra (scripts/check_lock_cuda_scope.py)
 ├── pipeline/                # the five sanitization stages + orchestrator + contract
 ├── promptguard/             # Llama Prompt Guard 2: classify_windows + max-score classify
 ├── searxng/                 # the forage-searxng companion image: Dockerfile

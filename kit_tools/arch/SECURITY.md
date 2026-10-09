@@ -571,7 +571,7 @@ Distribution guards also pin both CI grep copies and the full-compose-only passt
 
 ### Dependencies
 
-`uv.lock` is committed and the image installs with `uv sync --locked --no-dev --no-install-project`. Torch resolves from the CPU index (`https://download.pytorch.org/whl/cpu`, pinned in `pyproject.toml` under `[[tool.uv.index]]`; `torch==2.14.0+cpu`); the CI `lint` job greps both `uv.lock` and the synced environment for `nvidia-` so a re-lock cannot silently drag in CUDA wheels. `tests/test_dependency_lock.py::test_lock_file_is_committed`, `::test_lock_contains_no_cuda_wheels`, `::test_pyproject_pins_the_cpu_torch_index`.
+`uv.lock` is committed and the image installs with `uv sync --locked --no-dev --no-install-project`. Torch lives only in the `cpu` / `cuda` extras and resolves from three explicit sources in `pyproject.toml`: the CPU index for the `cpu` extra, `pytorch-cu130` for the `cuda` extra on x86_64 Linux, and the CPU index for the `cuda` extra on other Linux architectures. `scripts/check_lock_cuda_scope.py` evaluates the lock's markers per profile and platform so the CUDA payload stays inside the `cuda` extra against an exact-set allowlist, and the CI `lint` job also greps the synced `cpu` environment, so a re-lock cannot silently drag CUDA wheels into the dev or CI profiles. Tests: `tests/test_dependency_lock.py`.
 
 ### Image pins
 
@@ -773,5 +773,5 @@ For PRs that touch fetching, parsing, the contract, startup, or the image. `.git
 - [ ] New failure paths in startup, cache, or fetch code log a fixed reason string, never `str(exc)` or a URL (CLAUDE.md invariant 6), with a test that asserts it.
 - [ ] `/health` still reports `degraded` with the right `degraded_reasons` for every new failure mode; nothing new makes a missing model or cache look healthy (CLAUDE.md invariant 5).
 - [ ] New tests mock at the seam and pass under the `pytest-socket` guard; no network in the suite.
-- [ ] No new dependency without re-locking through the CPU torch index; `uv.lock` committed and free of `nvidia-` wheels.
+- [ ] No new dependency without re-locking through the three torch sources; `uv.lock` committed and `uv run python -m scripts.check_lock_cuda_scope` clean.
 - [ ] Nothing that reads as authentication was added (`kit_tools/AGENT_README.md`).

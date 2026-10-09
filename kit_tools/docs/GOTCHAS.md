@@ -937,23 +937,28 @@ transformers/torch).
 
 ---
 
-### `uv.lock` must stay CPU-pinned — `grep nvidia- uv.lock` has to come back empty
+### The CUDA payload must stay inside the `cuda` extra — check the lock's scope, not its text
 
-**Location:** `pyproject.toml` (`[[tool.uv.index]]` + `[tool.uv.sources]`), `uv.lock`
+**Location:** `pyproject.toml` (`[[tool.uv.index]]` + `[tool.uv.sources]`), `uv.lock`,
+`scripts/check_lock_cuda_scope.py`
 **Severity:** 🟡 Medium
-**Added:** 2026-09-07 (forage-repo-bootstrap US-004)
+**Added:** 2026-09-07 (forage-repo-bootstrap US-004); rewritten 2026-10-09 (feature-unified-image US-003)
 
 **What happens:**
-Resolving torch from plain PyPI drags in **15 `nvidia-*` CUDA packages (~2.7 GB)** that no
-Forage lane needs. The pinned `pytorch-cpu` index plus a `sys_platform == 'linux'` marker
-keeps them out.
+Resolving torch from plain PyPI drags in **15 `nvidia-*` CUDA packages (~2.7 GB)**. Since the
+single-image ruling the lock *does* carry them — for the `cuda` extra on x86_64 Linux only,
+which the amd64 image installs. Three explicit torch sources keep them there: `cpu` extra → CPU
+index, `cuda` extra → `pytorch-cu130` on x86_64 Linux, `cuda` extra → CPU index elsewhere.
+`grep nvidia- uv.lock` is therefore no longer a meaningful check.
 
 **Why it matters:**
-The *image* is unaffected — its Dockerfile pip-installs from the CPU index and never reads
-the lock. The cost lands entirely on developer `uv sync`s and every CI job. Re-locking
-without the index config silently reintroduces it.
+The image *does* read the lock (`uv sync --locked`, since `forage-ci-and-image` US-003; the old
+claim that it pip-installed from the CPU index was already false). A dropped source, or a re-lock
+without the index config, silently puts the CUDA payload into the `cpu` profile every developer
+sync and CI job uses, or puts PyPI's CUDA torch into the arm64 image.
 
-**Check after any dependency change:** `grep nvidia- uv.lock` → no output.
+**Check after any dependency change:** `uv run python -m scripts.check_lock_cuda_scope` → no
+violations.
 
 ---
 

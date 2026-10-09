@@ -161,10 +161,12 @@ measurement run; "cold" means an empty GHA build cache.
    from `ghcr.io/astral-sh/uv:0.9.28`), `enable-cache: true`, `cache-dependency-glob: uv.lock`.
 2. `uv sync --extra dev --extra cpu --locked` — `--locked` fails if `uv.lock` is stale relative to
    `pyproject.toml`, so a forgotten re-lock is a red job rather than a drifting environment.
-3. Two CUDA-wheel guards: `uv.lock` must contain no `nvidia-` string, and the synced
-   environment's package list must contain no `nvidia-*` package. Resolving torch from
-   plain PyPI drags in fifteen CUDA packages; `pyproject.toml`'s `pytorch-cpu` index is what
-   keeps the image at ~348 MB.
+3. Two CUDA-scope guards: the synced `cpu` environment's package list must contain no
+   `nvidia-*`, `cuda-*` or `triton` package, and `scripts/check_lock_cuda_scope.py` proves
+   from the lock's markers that the CUDA payload appears only in the `cuda` extra on x86_64
+   Linux, against an exact-set allowlist. `uv.lock` itself now legitimately carries
+   `nvidia-*` entries: the amd64 image ships CUDA torch (estimated ~4 GB, to be measured by
+   the size budgets), while arm64 keeps CPU torch (~348 MB recorded).
 4. `uv run ruff check .` and `uv run ruff format --check .`.
 5. `actionlint` 1.7.12, downloaded from GitHub releases and verified against
    `ACTIONLINT_SHA256` before it runs, then `./actionlint -color` on the workflow itself.
@@ -562,7 +564,7 @@ Every cause below is one the workflow's own comments, `docs/releases.md`, or
 |---|---|---|---|
 | `lint` | `ruff format --check` lists files | format drift | `uv run ruff format .` and commit |
 | `lint` | `uv sync --locked` fails | `uv.lock` stale relative to `pyproject.toml` | update `uv.lock` and commit it; never edit it by hand |
-| `lint` | `uv.lock contains nvidia-* CUDA wheels` | torch resolved from plain PyPI | re-lock with the `pytorch-cpu` index configured in `pyproject.toml` |
+| `lint` | `CUDA wheels were installed by the cpu extra` or `check_lock_cuda_scope` violations | a torch source dropped or the payload leaked outside the `cuda` extra | restore the three torch sources in `pyproject.toml` and re-lock; edit `scripts/cuda_payload_allowlist.txt` only for a reviewed torch bump |
 | `lint` | actionlint error | invalid workflow YAML or expression | fix the workflow; `tests/test_ci_workflow.py` will also fail on posture regressions |
 | `typecheck` | errors CI reports but local pyright does not | local run used a system pyright, not the locked one | `uv run pyright` |
 | `test` | `tests/test_contract_export.py` red | response model or route metadata changed without a regen | `uv run python -m scripts.export_contract`, commit the three outputs, classify per `contract/GOVERNANCE.md` |
