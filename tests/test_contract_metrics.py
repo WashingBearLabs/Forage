@@ -722,7 +722,9 @@ def test_dataclass_counters_and_their_models_carry_the_same_fields(
     mixes controller properties and the cgroup splat with its own counters, and
     that section is covered by the parity test instead.
     """
-    device_sourced = _DEVICE_FIELDS if model is ModelMetricsResponse else frozenset()
+    device_sourced: frozenset[str] = (
+        _DEVICE_FIELDS if model is ModelMetricsResponse else frozenset[str]()
+    )
     assert {field.name for field in dataclasses.fields(counters)} == set(
         model.model_fields
     ) - device_sourced
