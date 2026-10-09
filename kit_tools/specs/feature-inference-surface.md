@@ -129,22 +129,22 @@ value, reasons and status.
 - **Rotation.** `contract.py` moves; follow the epic's **Rotation record procedure**.
 
 **Acceptance Criteria:**
-- [ ] `/health` matches every state-table row, plus the loaded-with-no-snapshot row: device value,
+- [x] `/health` matches every state-table row, plus the loaded-with-no-snapshot row: device value,
       reasons and status (one stubbed test per row). `promptguard_device_failover` never appears
       together with `promptguard_unavailable`.
-- [ ] A bare `MagicMock` classifier yields `None` from `_device_snapshot` (test).
-- [ ] Both reasons are in the `DegradedReason` Literal and `DEGRADED_REASONS`.
-- [ ] `CONTRACT_VERSION == "1.5.0"`, with an in-progress bullet naming both fields and both reasons.
+- [x] A bare `MagicMock` classifier yields `None` from `_device_snapshot` (test).
+- [x] Both reasons are in the `DegradedReason` Literal and `DEGRADED_REASONS`.
+- [x] `CONTRACT_VERSION == "1.5.0"`, with an in-progress bullet naming both fields and both reasons.
       `tests/golden/contract_1_5_0.json` and `_EXPECTED_ONE_FIVE_ZERO_DIFF` exist, and goldens
       1.0.0–1.4.0 are byte-unchanged.
-- [ ] The OpenAPI file, its anchor and the fixture twin are regenerated. These pass:
+- [x] The OpenAPI file, its anchor and the fixture twin are regenerated. These pass:
       `tests/test_contract_export.py`, `tests/test_contract_schema.py`,
       `tests/test_governance_docs.py` and `tests/test_bench_promptguard.py`.
-- [ ] The rotation is recorded per the epic procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The rotation is recorded per the epic procedure.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: Device counters on `/metrics`, and a device-aware bench
 
