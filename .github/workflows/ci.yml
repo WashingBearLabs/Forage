@@ -750,6 +750,47 @@ jobs:
             --timeout-seconds "${SMOKE_TIMEOUT_SECONDS}" \
             --image "${IMAGE_REF}"
 
+      - name: Failover run 2 - cuda requested, no GPU, fallback to cpu (default policy)
+        # This runner has no GPU, so `FORAGE_DEVICE=cuda` exercises the install
+        # time contract for real: the boot probe finds nothing, the service
+        # still comes up (`FORAGE_DEVICE_FALLBACK` defaults to `cpu`), and
+        # /health says so. No weights either, so the classifier is absent and
+        # the active device is null. The field expectations live in
+        # `contract_smoke.py`; only the probe's log token is grepped here,
+        # because a log line is not on the wire. A failed probe logs at WARNING,
+        # which stock uvicorn logging prints (INFO would be silent). Own container name and host
+        # port, so run 1's container (still up) is not disturbed.
+        run: |
+          set -euo pipefail
+          docker run -d --name "${SMOKE_CONTAINER}-cuda-cpu" -p 8021:8020 \
+            -e FORAGE_DEVICE=cuda "${IMAGE_REF}"
+          uv run python contract_smoke.py \
+            --base-url "http://127.0.0.1:8021" \
+            --timeout-seconds "${SMOKE_TIMEOUT_SECONDS}" \
+            --expect-requested-device cuda \
+            --expect-device null
+          docker logs "${SMOKE_CONTAINER}-cuda-cpu" 2>&1 \
+            | grep -F "promptguard_device_probe result=unavailable"
+
+      - name: Failover run 3 - cuda requested, no GPU, refuse policy exits non-zero
+        # `refuse` means the service must not start without a usable GPU. The
+        # container has to exit non-zero within the smoke budget, with the fixed
+        # `DeviceConfigurationError` message in its log. The message carries no
+        # setting values, so the log cannot leak one.
+        run: |
+          set -euo pipefail
+          name="${SMOKE_CONTAINER}-cuda-refuse"
+          docker run -d --name "${name}" \
+            -e FORAGE_DEVICE=cuda -e FORAGE_DEVICE_FALLBACK=refuse "${IMAGE_REF}"
+          code="$(timeout "${SMOKE_TIMEOUT_SECONDS}" docker wait "${name}")"
+          echo "exit code: ${code}"
+          if [ "${code}" = "0" ]; then
+            echo "::error::refuse policy exited 0 without a GPU"
+            exit 1
+          fi
+          docker logs "${name}" > refuse.log 2>&1
+          grep -F "DeviceConfigurationError: FORAGE_DEVICE=cuda with FORAGE_DEVICE_FALLBACK=refuse requires a usable GPU" refuse.log
+
       - name: CPU parity - image scores equal the CI +cpu environment
         # The same weights-free model, seeded, scored twice: in the amd64
         # candidate (CUDA-built torch, no GPU visible) and in this job's `+cpu`
@@ -812,11 +853,18 @@ jobs:
           docker inspect --format '{{json .State}}' "${SMOKE_CONTAINER}" || true
           echo "--- docker logs ${SMOKE_CONTAINER} ---"
           docker logs "${SMOKE_CONTAINER}" 2>&1 || true
+          for name in "${SMOKE_CONTAINER}-cuda-cpu" "${SMOKE_CONTAINER}-cuda-refuse"; do
+            echo "--- docker logs ${name} ---"
+            docker logs "${name}" 2>&1 || true
+          done
           echo "--- end of container log ---"
 
       - name: Remove the smoke container
         if: always()
-        run: docker rm -f "${SMOKE_CONTAINER}" > /dev/null 2>&1 || true
+        run: |
+          for name in "${SMOKE_CONTAINER}" "${SMOKE_CONTAINER}-cuda-cpu" "${SMOKE_CONTAINER}-cuda-refuse"; do
+            docker rm -f "${name}" > /dev/null 2>&1 || true
+          done
 
   publish:
     name: publish

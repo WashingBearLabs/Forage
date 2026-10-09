@@ -268,7 +268,9 @@ Consequences of memory mode, in one place:
 `FORAGE_DEVICE` and `FORAGE_DEVICE_FALLBACK` are read from the environment once, at
 startup. Values are case-insensitive and stripped, then normalised to lowercase. There is
 no `auto` value. With `cuda`, the GPU is probed (an allocation on `cuda:0`) before the app
-serves; the probe logs only the closed token `promptguard_device_probe result=ok|unavailable|oom`.
+serves; the probe logs only the closed token `promptguard_device_probe result=ok|unavailable|oom`,
+at WARNING for `unavailable` and `oom` (so the image's stock uvicorn logging prints it) and at
+INFO for `ok`.
 
 | `FORAGE_DEVICE` | `FORAGE_DEVICE_FALLBACK` | No usable GPU at boot (probe) | CUDA failure while loading weights | GPU OOM at batch 1 mid-run |
 |---|---|---|---|---|

@@ -1753,6 +1753,66 @@ class TestSmokeJob:
         )
 
 
+class TestSmokeFailoverRuns:
+    """US-006: runs 2 and 3 prove both failover policies without a GPU."""
+
+    @staticmethod
+    def _step(jobs: dict[str, Any], marker: str) -> str:
+        for step in _steps(jobs, "smoke"):
+            if marker in str(step.get("name", "")):
+                return str(step.get("run", ""))
+        raise AssertionError(f"no smoke step named like {marker!r}")
+
+    def test_run_2_asserts_the_requested_device_a_null_device_and_the_token(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = self._step(jobs, "Failover run 2")
+        assert "-e FORAGE_DEVICE=cuda" in run
+        assert "FORAGE_DEVICE_FALLBACK" not in run, "run 2 uses the default policy"
+        assert "--expect-requested-device cuda" in run
+        assert "--expect-device null" in run
+        assert "promptguard_device_probe result=unavailable" in run
+        assert "--timeout-seconds" in run and "SMOKE_TIMEOUT_SECONDS" in run
+
+    def test_run_2_does_not_collide_with_run_1(self, jobs: dict[str, Any]) -> None:
+        run = self._step(jobs, "Failover run 2")
+        assert "-p 8021:8020" in run
+        assert '--name "${SMOKE_CONTAINER}-cuda-cpu"' in run
+
+    def test_run_3_requires_a_nonzero_exit_within_the_budget(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = self._step(jobs, "Failover run 3")
+        assert "-e FORAGE_DEVICE=cuda" in run
+        assert "-e FORAGE_DEVICE_FALLBACK=refuse" in run
+        assert 'timeout "${SMOKE_TIMEOUT_SECONDS}" docker wait' in run
+        assert '"${code}" = "0"' in run, "a zero exit must fail the step"
+
+    def test_run_3_greps_the_fixed_error_message(self, jobs: dict[str, Any]) -> None:
+        run = self._step(jobs, "Failover run 3")
+        assert (
+            "DeviceConfigurationError: FORAGE_DEVICE=cuda with "
+            "FORAGE_DEVICE_FALLBACK=refuse requires a usable GPU" in run
+        )
+
+    def test_the_grepped_message_is_the_one_the_service_raises(self) -> None:
+        source = (_REPO_ROOT / "retrieval_app.py").read_text(encoding="utf-8")
+        assert '"FORAGE_DEVICE=cuda with FORAGE_DEVICE_FALLBACK=refuse "' in source
+        assert '"requires a usable GPU"' in source
+
+    def test_all_three_containers_are_dumped_and_removed(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        for marker in ("docker logs", "docker rm"):
+            text = "\n".join(
+                str(step.get("run", ""))
+                for step in _steps(jobs, "smoke")
+                if marker in str(step.get("run", ""))
+                and ("failure()" in str(step.get("if", "")) or marker == "docker rm")
+            )
+            assert "-cuda-cpu" in text and "-cuda-refuse" in text, marker
+
+
 # ---------------------------------------------------------------------------
 # The publish lane
 # ---------------------------------------------------------------------------

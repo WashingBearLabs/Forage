@@ -1208,3 +1208,70 @@ class TestMain:
             "The budget is an acceptance criterion: 30 s spans a cold torch "
             "import too tightly (round-2 finding)"
         )
+
+
+class TestDeviceExpectations:
+    """``--expect-requested-device`` and ``--expect-device`` (accepts ``null``)."""
+
+    def test_neither_is_asserted_by_default(self) -> None:
+        body = _health_response(promptguard_device="cuda")
+        assert evaluate_health(body) == []
+
+    def test_a_matching_requested_device_passes(self) -> None:
+        body = _health_response(promptguard_requested_device="cuda")
+        assert evaluate_health(body, expect_requested_device="cuda") == []
+
+    def test_a_mismatched_requested_device_fails(self) -> None:
+        failures = evaluate_health(
+            _health_response(promptguard_requested_device="cpu"),
+            expect_requested_device="cuda",
+        )
+        assert "promptguard_requested_device" in _joined(failures)
+
+    def test_null_matches_a_null_active_device(self) -> None:
+        body = _health_response(promptguard_device=None)
+        assert evaluate_health(body, expect_device="null") == []
+
+    def test_null_rejects_a_named_active_device(self) -> None:
+        failures = evaluate_health(
+            _health_response(promptguard_device="cpu"), expect_device="null"
+        )
+        assert "promptguard_device is 'cpu'" in _joined(failures)
+
+    def test_a_named_device_rejects_null(self) -> None:
+        failures = evaluate_health(
+            _health_response(promptguard_device=None), expect_device="cpu"
+        )
+        assert "promptguard_device is None" in _joined(failures)
+
+    def test_the_flags_reach_the_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: dict[str, Any] = {}
+
+        def _capture(base_url: str, **kwargs: Any) -> list[str]:
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(contract_smoke, "run_smoke", _capture)
+        contract_smoke.main(
+            ["--expect-requested-device", "cuda", "--expect-device", "null"]
+        )
+        assert seen["expect_requested_device"] == "cuda"
+        assert seen["expect_device"] == "null"
+
+    def test_the_flags_default_to_unasserted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        def _capture(base_url: str, **kwargs: Any) -> list[str]:
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(contract_smoke, "run_smoke", _capture)
+        contract_smoke.main([])
+        assert seen["expect_requested_device"] is None
+        assert seen["expect_device"] is None
+
+    def test_an_unknown_device_is_a_usage_error(self) -> None:
+        with pytest.raises(SystemExit):
+            contract_smoke.main(["--expect-device", "tpu"])

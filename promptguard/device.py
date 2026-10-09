@@ -95,5 +95,9 @@ def probe_cuda() -> ProbeResult:
     except Exception:
         # Includes a missing or broken torch; the exception text is never logged.
         result = "unavailable"
-    logger.info("promptguard_device_probe result=%s", result)
+    # A failed probe is a degradation, so it is WARNING: loud, and printed by
+    # the image's stock uvicorn logging, which leaves the root logger without
+    # handlers (only Python's WARNING-level last resort reaches stderr).
+    level = logging.INFO if result == "ok" else logging.WARNING
+    logger.log(level, "promptguard_device_probe result=%s", result)
     return result

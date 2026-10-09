@@ -639,3 +639,16 @@ that the old grep goes red.
   fixed and pinned by the test, so it does not follow the plain `ceil(1.5x)` rule.
 - **Attempt 2:** reused attempt 1's commit and typed the new test's `with:` mappings as
   `dict[str, Any]`, which clears its six strict-pyright errors.
+
+### US-006 — No-GPU failover smokes
+
+- Runs 2 and 3 use their own container names (`${SMOKE_CONTAINER}-cuda-cpu` / `-cuda-refuse`);
+  run 2 binds host port 8021 because run 1's container stays up. The failure log dump and the
+  `always()` cleanup cover all three. `--expect-device null` asserts JSON null.
+- **The probe token must actually reach `docker logs`.** The image runs stock uvicorn logging,
+  which configures only the `uvicorn.*` loggers; the root logger has no handler, so only Python's
+  WARNING-level last-resort handler prints app records. Attempt 1 grepped for an INFO line that
+  never printed. Fix: `probe_cuda` logs `unavailable`/`oom` at WARNING (degradation is loud) and
+  `ok` at INFO. `test_failed_probe_token_is_printed_under_uvicorn_default_logging` runs the probe in
+  a fresh interpreter under `uvicorn.config.LOGGING_CONFIG` and asserts the token is printed; it
+  fails against the INFO-only line. `promptguard/device.py` is not hashed: no rotation.

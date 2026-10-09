@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -106,6 +108,63 @@ def test_probe_maps_the_three_results(caplog: pytest.LogCaptureFixture) -> None:
     assert [r.getMessage() for r in caplog.records if r.name == device.__name__] == [
         f"promptguard_device_probe result={r}" for _, r in cases
     ]
+
+
+def test_probe_logs_failures_at_warning_and_ok_at_info(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    for available, level in ((False, logging.WARNING), (True, logging.INFO)):
+        caplog.clear()
+        with patch.dict(
+            sys.modules, {"torch": _fake_torch(available=available, empty=None)}
+        ):
+            probe_cuda()
+        assert [r.levelno for r in caplog.records if r.name == device.__name__] == [
+            level
+        ]
+
+
+# Runs in a fresh interpreter so uvicorn's stock logging (what the image's
+# `CMD ["uvicorn", ...]` gets) is the only configuration in play.
+_UVICORN_PROBE_SCRIPT = """
+import logging.config, sys
+from types import SimpleNamespace
+from uvicorn.config import LOGGING_CONFIG
+logging.config.dictConfig(LOGGING_CONFIG)
+class OutOfMemoryError(Exception):
+    pass
+def fake(available):
+    return SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: available, OutOfMemoryError=OutOfMemoryError
+        ),
+        empty=lambda *a, **k: None,
+    )
+from promptguard.device import probe_cuda
+sys.modules["torch"] = fake(False)
+assert probe_cuda() == "unavailable"
+sys.modules["torch"] = fake(True)
+assert probe_cuda() == "ok"
+"""
+
+
+def test_failed_probe_token_is_printed_under_uvicorn_default_logging() -> None:
+    """The CI smoke greps `docker logs` for this token; it must reach stderr."""
+    repo_root = Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, "-c", _UVICORN_PROBE_SCRIPT],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    output = proc.stdout + proc.stderr
+    assert "promptguard_device_probe result=unavailable" in output
+    # INFO stays quiet under the stock configuration; only degradation is loud.
+    assert "promptguard_device_probe result=ok" not in output
 
 
 async def test_refuse_with_failing_probe_raises_before_serving(
