@@ -84,3 +84,7 @@
 
 [11:38] validate-implementation gpu-parity-tool: 0 critical, 0 warning, 6 info; full suite 5757 passed/6 skipped; ruff/format/pyright clean
 - Files: kit_tools/AUDIT_FINDINGS.md (created)
+
+[19:00] Epic-wide validate-implementation for forage-inference-backends: 0 critical, 2 warning, 8 info; no fix loop
+- Files: kit_tools/AUDIT_FINDINGS.md (2026-10-09-008..017)
+- Decision: 3 test_corpus_docs failures classified environmental (worktree-local gitignored AUDIT_FINDINGS.md); skip when file absent
