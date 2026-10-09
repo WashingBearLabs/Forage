@@ -276,8 +276,17 @@ serves; the probe logs only the closed token `promptguard_device_probe result=ok
 | `cuda` | `cpu` (default) | model loads on CPU, **failed over** | model loads on CPU, **failed over** | switch to a CPU copy, **failed over** |
 | `cuda` | `refuse` | **startup refuses** (`DeviceConfigurationError`) | `load()` returns False, so degraded `promptguard_unavailable`; weight acquisition retries on its normal schedule | the request gets `unavailable_result` per its tier; latched `oom_refused` state until a later GPU classification succeeds |
 
-The boot probe and settings parsing are in place; the CUDA load, failover and OOM columns
-land with the rest of the inference-device work.
+The boot probe, settings parsing and the CUDA load are in place; the OOM column lands with the
+rest of the inference-device work.
+
+On `cuda` the model is loaded at full fp32 (`fp32_precision = "ieee"`, or `allow_tf32 = False`
+on older torch) and moved with `.to("cuda")`. A failed move is recovered to CPU before anything
+else; under `cpu` fallback the classifier then runs on CPU, marked failed over
+(`promptguard_device_failover reason=unavailable|oom|load_error`), and under `refuse` the load
+returns False (`promptguard_device_load_failed reason=...`), which is degraded
+`promptguard_unavailable`. Weight acquisition retries on its existing schedule, so a transient
+GPU fault self-heals under `refuse`. If the recovery itself fails, CUDA is latched unusable for
+the process: `refuse` keeps failing, `cpu` loads on CPU as `load_error` on the next attempt.
 
 ### Credential handling for `FORAGE_CACHE_HMAC_KEY`
 

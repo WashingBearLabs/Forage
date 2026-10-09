@@ -1912,6 +1912,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # rather than starting a second ~270 MiB download alongside this one.
     classifier = PromptGuardClassifier()
     classifier.configure_threads(promptguard_threads_from_config(config))
+    classifier.configure_device(device_settings, app.state.boot_probe_failed)
     app.state.classifier = classifier
     acquisition = model_fetcher.WeightAcquisition(
         classifier,

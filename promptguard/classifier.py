@@ -1,19 +1,23 @@
 """PromptGuard 2 classifier — model loading, inference, chunking.
 
 Wraps Meta's Prompt Guard 2 sequence classifiers (22M by default)
-for prompt-injection detection.  Runs on CPU only.
+for prompt-injection detection.  Runs on CPU by default; ``FORAGE_DEVICE=cuda``
+(see :mod:`promptguard.device`) moves the model to the GPU at fp32.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from pipeline.config_bounds import bounded_int
+from promptguard.device import DeviceSettings
 
 if TYPE_CHECKING:
     # Import-time only: torch and transformers are heavyweight and optional at
@@ -44,6 +48,18 @@ CHUNK_OVERLAP = 64
 MAX_PROMPTGUARD_CHUNKS = 64
 
 
+@dataclass(frozen=True)
+class DeviceState:
+    """A consistent snapshot of the classifier's device state."""
+
+    device: str
+    requested_device: str
+    failed_over: bool
+    failover_reason: str | None
+    oom_refused: bool
+    fp32_precision: str | None
+
+
 class PromptGuardThreadsConfigurationError(ValueError):
     """Raised when the configured CPU thread count is invalid."""
 
@@ -70,7 +86,6 @@ class PromptGuardClassifier:
     """
 
     def __init__(self) -> None:
-        self._model: PreTrainedModel | None = None
         self._tokenizer: PreTrainedTokenizerBase | None = None
         # Fast tokenizers configure shared backend truncation/padding before
         # encoding. Keep each complete tokenizer operation atomic across
@@ -78,6 +93,21 @@ class PromptGuardClassifier:
         self._tokenizer_lock = threading.Lock()
         self._loaded: bool = False
         self._threads = 0
+        # The (model, device) pair is ONE reference, replaced whole, so a
+        # reader that snapshots it can never see a model on one device paired
+        # with the name of another. load() is its single swap point.
+        self._active: tuple[PreTrainedModel, str] | None = None
+        self._requested_device = "cpu"
+        self._fallback = "cpu"
+        self._boot_probe_failed = False
+        self._failed_over = False
+        self._failover_reason: str | None = None
+        self._oom_refused = False
+        self._fp32_precision: str | None = None
+        # Latched when a failed CUDA move could not be recovered from: the
+        # retried load() must not touch CUDA again.
+        self._cuda_unusable = False
+        self._state_lock = threading.Lock()
         # Prompt Guard 2 is binary; the three-class model was Prompt Guard 1.
         # load() verifies the labels and replaces this default from the config.
         self._injection_label_index = 1
@@ -85,6 +115,111 @@ class PromptGuardClassifier:
     def configure_threads(self, threads: int) -> None:
         """Retain the validated boot setting for every load attempt."""
         self._threads = threads
+
+    def configure_device(
+        self, settings: DeviceSettings, boot_probe_failed: bool
+    ) -> None:
+        """Retain the validated device choice and the boot probe verdict."""
+        with self._state_lock:
+            self._requested_device = settings.device
+            self._fallback = settings.fallback
+            self._boot_probe_failed = boot_probe_failed
+
+    @property
+    def _model(self) -> PreTrainedModel | None:
+        active = self._active
+        return None if active is None else active[0]
+
+    @_model.setter
+    def _model(self, model: PreTrainedModel | None) -> None:
+        # Kept for callers that install a model directly (tests): it pairs the
+        # model with the device it is already on, i.e. the current one.
+        self._active = None if model is None else (model, self.device)
+
+    @property
+    def device(self) -> str:
+        """The device the active model runs on (``cpu`` before any load)."""
+        active = self._active
+        return "cpu" if active is None else active[1]
+
+    @property
+    def requested_device(self) -> str:
+        return self._requested_device
+
+    @property
+    def failed_over(self) -> bool:
+        return self._failed_over
+
+    @property
+    def oom_refused(self) -> bool:
+        return self._oom_refused
+
+    def device_state(self) -> DeviceState:
+        """A frozen snapshot, read under the lock so it cannot be torn."""
+        with self._state_lock:
+            return DeviceState(
+                device=self.device,
+                requested_device=self._requested_device,
+                failed_over=self._failed_over,
+                failover_reason=self._failover_reason,
+                oom_refused=self._oom_refused,
+                fp32_precision=self._fp32_precision,
+            )
+
+    def _mark_failed_over(self, reason: str) -> None:
+        with self._state_lock:
+            self._failed_over = True
+            self._failover_reason = reason
+        logger.warning("promptguard_device_failover reason=%s", reason)
+
+    def _move_to_cuda(self, model: PreTrainedModel) -> tuple[bool, str | None]:
+        """Move *model* to CUDA at fp32; on failure restore it to CPU.
+
+        Returns ``(on_cuda, failure_reason)``. The reason is a closed token:
+        ``unavailable``, ``oom``, ``load_error`` for a failed move that was
+        recovered, or ``recovery_error`` when the model could not be put back
+        on CPU (which also latches ``_cuda_unusable``). Exception text is
+        never logged or returned.
+        """
+        import torch
+
+        try:
+            # The torch stubs do not declare the newer precision knobs, so the
+            # backends are reached through Any; the AttributeError fallback is
+            # the pre-2.9 spelling of the same setting.
+            backends = cast(Any, torch.backends)
+            mode = "fp32_precision"
+            try:
+                backends.cuda.matmul.fp32_precision = "ieee"
+                backends.cudnn.conv.fp32_precision = "ieee"
+            except AttributeError:
+                mode = "allow_tf32"
+                backends.cuda.matmul.allow_tf32 = False
+                backends.cudnn.allow_tf32 = False
+            with self._state_lock:
+                self._fp32_precision = mode
+            model.to("cuda")
+            return True, None
+        except Exception as exc:
+            if isinstance(exc, torch.cuda.OutOfMemoryError):
+                reason = "oom"
+            elif isinstance(exc, (AssertionError, RuntimeError)) and not (
+                torch.cuda.is_available()
+            ):
+                reason = "unavailable"
+            else:
+                reason = "load_error"
+        try:
+            model.to("cpu")
+            # Best effort; the parameters, not the cache, are what is checked.
+            with contextlib.suppress(Exception):
+                torch.cuda.empty_cache()
+            if any(p.device.type != "cpu" for p in model.parameters()):
+                raise RuntimeError("parameters remain off cpu")
+        except Exception:
+            self._cuda_unusable = True
+            return False, "recovery_error"
+        return False, reason
 
     @property
     def loaded(self) -> bool:
@@ -199,8 +334,35 @@ class PromptGuardClassifier:
 
         self._injection_label_index = injection_index
         model.eval()
-        self._model = model
+
+        device = "cpu"
+        failover: str | None = None
+        with self._state_lock:
+            want_cuda = self._requested_device == "cuda"
+            refuse = self._fallback == "refuse"
+            probe_failed = self._boot_probe_failed
+            unusable = self._cuda_unusable
+        if want_cuda and (probe_failed or unusable):
+            reason = "unavailable" if probe_failed else "recovery_error"
+            if refuse:
+                logger.warning("promptguard_device_load_failed reason=%s", reason)
+                return False
+            failover = "unavailable" if probe_failed else "load_error"
+        elif want_cuda:
+            on_cuda, reason = self._move_to_cuda(model)
+            if on_cuda:
+                device = "cuda"
+            elif refuse or reason == "recovery_error":
+                # Degraded promptguard_unavailable; WeightAcquisition.run()
+                # retries on its schedule, which is the intended self-healing.
+                logger.warning("promptguard_device_load_failed reason=%s", reason)
+                return False
+            else:
+                failover = reason
+        if failover is not None:
+            self._mark_failed_over(failover)
         self._tokenizer = tokenizer
+        self._active = (model, device)
         self._loaded = True
         logger.info("PromptGuard 2 model loaded successfully")
         return True
@@ -277,14 +439,15 @@ class PromptGuardClassifier:
         Enforce *max_chunks* before inference, never classify only a prefix.
         If the model is not loaded, return ``([], [])`` with a warning.
         """
-        model = self._model
+        active = self._active
         tokenizer = self._tokenizer
-        if not self._loaded or model is None or tokenizer is None:
+        if not self._loaded or active is None or tokenizer is None:
             logger.warning(
                 "classify() called but model not loaded — returning safe fallback"
             )
             return [], []
 
+        model, device = active
         import torch
 
         chunks = self._chunk_text(text)
@@ -303,6 +466,8 @@ class PromptGuardClassifier:
                     max_length=MAX_SEQ_LEN,
                     padding=True,
                 )
+            if device != "cpu":
+                inputs = inputs.to(device)
             with torch.no_grad():
                 outputs = model(**inputs)
 

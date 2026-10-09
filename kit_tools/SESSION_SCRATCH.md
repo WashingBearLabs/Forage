@@ -47,3 +47,7 @@
 [17:31] inference-device US-001: device settings + boot probe in lifespan
 - Files: promptguard/device.py, retrieval_app.py, tests/test_promptguard_device.py, docs
 - Decision: probe runs right after model-id check (fail-fast, before classifier/acquisition)
+
+[now] inference-device US-002: classifier CUDA load, failover, fp32, tiny-model builder
+- Files: promptguard/classifier.py, scripts/promptguard_tiny_model.py, typings/transformers, retrieval_app.py, tests/test_promptguard_cuda_load.py
+- Decision: `_model` kept as a property over `_active` so tests that install a model directly keep working
