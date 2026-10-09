@@ -104,6 +104,7 @@ from promptguard.classifier import (
     DEFAULT_MODEL_ID,
     MAX_SEQ_LEN,
     PROMPT_GUARD_22M_ID,
+    DeviceState,
     PromptGuardClassifier,
     PromptGuardThreadsConfigurationError,
 )
@@ -283,6 +284,149 @@ async def test_health_degraded_reports_promptguard_unavailable(
     assert data["status"] == "degraded"
     assert "promptguard_unavailable" in data["degraded_reasons"]
     assert data["contract_version"] == CONTRACT_VERSION
+
+
+def _stub_device_classifier(
+    *, loaded: bool = True, state: DeviceState | None
+) -> MagicMock:
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = loaded
+    classifier.device_state.return_value = state
+    return classifier
+
+
+def _device_state(
+    device: str,
+    *,
+    requested: str = "cuda",
+    failed_over: bool = False,
+    oom_refused: bool = False,
+) -> DeviceState:
+    return DeviceState(
+        device=device,
+        requested_device=requested,
+        failed_over=failed_over,
+        failover_reason="oom" if failed_over else None,
+        oom_refused=oom_refused,
+        fp32_precision=None,
+        effective_batch_size=1,
+    )
+
+
+# (loaded, requested, snapshot, expected device, expected reasons, expected status)
+_HEALTH_DEVICE_ROWS: dict[
+    str, tuple[bool, str, DeviceState | None, str | None, list[str]]
+] = {
+    "unloaded": (False, "cuda", None, None, ["promptguard_unavailable"]),
+    "cpu_requested_cpu_active": (
+        True,
+        "cpu",
+        _device_state("cpu", requested="cpu"),
+        "cpu",
+        [],
+    ),
+    "cuda_active": (True, "cuda", _device_state("cuda"), "cuda", []),
+    "failed_over": (
+        True,
+        "cuda",
+        _device_state("cpu", failed_over=True),
+        "cpu",
+        ["promptguard_device_failover"],
+    ),
+    "oom_refused": (
+        True,
+        "cuda",
+        _device_state("cuda", oom_refused=True),
+        "cuda",
+        ["promptguard_device_oom"],
+    ),
+    # Loaded with no snapshot: stub, mock and replay classifiers.
+    "loaded_without_snapshot": (True, "cuda", None, None, []),
+}
+
+
+@pytest.mark.parametrize("row", list(_HEALTH_DEVICE_ROWS))
+async def test_health_device_fields_follow_the_state_table(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, row: str
+) -> None:
+    loaded, requested, snapshot, device, reasons = _HEALTH_DEVICE_ROWS[row]
+    monkeypatch.setattr(
+        app.state,
+        "classifier",
+        _stub_device_classifier(loaded=loaded, state=snapshot),
+    )
+    monkeypatch.setattr(
+        app.state, "promptguard_requested_device", requested, raising=False
+    )
+    app.state.cache.connected = True
+
+    data = (await client.get("/health")).json()
+
+    assert data["promptguard_device"] == device
+    assert data["promptguard_requested_device"] == requested
+    assert data["degraded_reasons"] == reasons
+    assert data["status"] == ("degraded" if reasons else "healthy")
+
+
+async def test_health_failover_reason_never_accompanies_unavailable(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unloaded classifier with a failed-over snapshot lists only unavailable."""
+    stub = _stub_device_classifier(
+        loaded=False, state=_device_state("cpu", failed_over=True)
+    )
+    monkeypatch.setattr(app.state, "classifier", stub)
+    app.state.cache.connected = True
+
+    data = (await client.get("/health")).json()
+
+    assert data["degraded_reasons"] == ["promptguard_unavailable"]
+    assert data["promptguard_device"] is None
+
+
+async def test_health_ignores_a_latched_oom_flag_on_an_active_cpu(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _stub_device_classifier(
+        state=_device_state("cpu", requested="cpu", oom_refused=True)
+    )
+    monkeypatch.setattr(app.state, "classifier", stub)
+    app.state.cache.connected = True
+
+    data = (await client.get("/health")).json()
+
+    assert data["promptguard_device"] == "cpu"
+    assert data["degraded_reasons"] == []
+
+
+async def test_a_bare_mock_classifier_has_no_device_snapshot() -> None:
+    bare = MagicMock()
+    bare.loaded = True
+    assert retrieval_app._device_snapshot(bare) is None
+    spec = MagicMock(spec=PromptGuardClassifier)
+    spec.loaded = True
+    assert retrieval_app._device_snapshot(spec) is None
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [(None, "cpu"), ("cuda", "cuda"), ("cpu", "cpu"), ("tpu", "cpu")],
+)
+async def test_lifespan_free_health_reads_the_requested_device_from_the_env(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    env: str | None,
+    expected: str,
+) -> None:
+    monkeypatch.delattr(app.state, "promptguard_requested_device", raising=False)
+    if env is None:
+        monkeypatch.delenv("FORAGE_DEVICE", raising=False)
+    else:
+        monkeypatch.setenv("FORAGE_DEVICE", env)
+
+    data = (await client.get("/health")).json()
+
+    assert data["promptguard_requested_device"] == expected
 
 
 # Both break-glass names: the current one and the pre-extraction alias. Every

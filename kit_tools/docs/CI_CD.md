@@ -453,7 +453,7 @@ of those bytes. The same file also verifies the checker can fail (a committed
 un-regenerated twin under `tests/fixtures/contract/`), that rendering is byte-stable across
 `PYTHONHASHSEED`s, and that `/extract` is in the document even though the route is off by default.
 
-The anchor (`dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db` at HEAD) is
+The anchor (`f71909b720e38dee3df958779008b53962419ddc4ae0c03ef2e5560f3133ce75` at HEAD) is
 the trust root every other copy is verified against: `smoke` hashes the in-image copy
 against it, `publish` hashes the Release assets against it, and consumers verify the copy
 they vendor against the anchor *at the same tag*, never against another copy. Whether a

@@ -1409,10 +1409,12 @@ curl -s localhost:8020/health | jq
 | Field | What it tells you |
 |-------|-------------------|
 | `status` | `healthy` or `degraded`. |
-| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable), `cache_unauthenticated` (Valkey signing is not enabled). Both cache reasons can coexist; memory mode reports neither. |
+| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable), `cache_unauthenticated` (Valkey signing is not enabled), `promptguard_device_failover` (`cuda` requested, classifier running on `cpu`; contract `1.5.0`), `promptguard_device_oom` (a GPU out-of-memory refusal is latched under `FORAGE_DEVICE_FALLBACK=refuse`; contract `1.5.0`). Both cache reasons can coexist; memory mode reports neither. |
 | `capabilities.cache_hmac_key` | Present as `1` only when a usable `FORAGE_CACHE_HMAC_KEY` was resolved at boot and the backend is Valkey. Independent of connectivity and the break-glass override; absent in memory mode. |
 | `promptguard_loaded` | Always honest, even with the break-glass override set. |
 | `promptguard_model` | The startup-selected model id, even when unloaded; a configuration echo, not readiness. |
+| `promptguard_device` | The device the classifier runs on now (`cpu` or `cuda`); `null` until it is loaded, and `null` for a loaded classifier that reports no device state. Added in contract `1.5.0`. |
+| `promptguard_requested_device` | The `FORAGE_DEVICE` this start resolved (`cpu` or `cuda`), always present. After a failover it is `cuda` while `promptguard_device` is `cpu`. Added in contract `1.5.0`. |
 | `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. It is **not** a statement that Valkey is present — read `cache_backend` for that. |
 | `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
 | `search_providers` | The resolved search-provider chain's names, in traversal order, after key-gated skips — e.g. `["searxng"]` or `["searxng", "brave"]`. Configuration echo fixed for the life of the process, not a liveness probe. Added in contract `1.2.0`. |

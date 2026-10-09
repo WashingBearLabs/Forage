@@ -327,6 +327,8 @@ def test_degraded_reasons_derive_from_one_source() -> None:
         DEGRADED_PROMPTGUARD_UNAVAILABLE,
         DEGRADED_CACHE_UNAVAILABLE,
         contract.DEGRADED_CACHE_UNAUTHENTICATED,
+        contract.DEGRADED_PROMPTGUARD_DEVICE_FAILOVER,
+        contract.DEGRADED_PROMPTGUARD_DEVICE_OOM,
     } == contract.DEGRADED_REASONS
 
 
@@ -1195,6 +1197,8 @@ def test_degraded_reasons_and_dict_vocabularies_are_documented() -> None:
         DEGRADED_PROMPTGUARD_UNAVAILABLE,
         DEGRADED_CACHE_UNAVAILABLE,
         contract.DEGRADED_CACHE_UNAUTHENTICATED,
+        contract.DEGRADED_PROMPTGUARD_DEVICE_FAILOVER,
+        contract.DEGRADED_PROMPTGUARD_DEVICE_OOM,
     ]
     assert (
         retrieval_app.CAPABILITY_SEARCH_SANITIZATION

@@ -2662,6 +2662,26 @@ unavailable classifier.
 Every reversal was read-only: the working tree was copied to a temp directory and the file replaced by
 `git show bc1c971:pipeline/<file>`. Contract and goldens are unchanged. Not replayed to Poppy.
 
+### The sixty-first rotation: `/health` device fields and reasons, contract 1.5.0 (`inference-surface` US-001)
+
+`HealthResponse` gains `promptguard_device` (active device, `null` until loaded or when the loaded classifier
+has no `DeviceState`) and `promptguard_requested_device` (boot-resolved `FORAGE_DEVICE`, always present). The
+handler lists `promptguard_device_failover` (requested `cuda`, active `cpu`, failed over) and
+`promptguard_device_oom` (`oom_refused` latched with active `cuda`); the failover reason never accompanies
+`promptguard_unavailable`. A tolerant `_device_snapshot` returns `None` for `MagicMock`, stub and replay
+classifiers, so no fabricated value reaches `/health`. These are the first degraded reasons raised with a
+loaded classifier that are not about the cache. Contract `1.5.0` is a MINOR; `tests/golden/contract_1_5_0.json`
+is new and goldens 1.0.0-1.4.0 are untouched. **Not** a sanitization-behaviour change.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`bef918e`) / `contract.py` reverted (= all-reverted control) | `6a0fcaad00a0cc918275630b3bf496efa45a98c5888a6fa60d2f0c223310a8da` |
+| After | `396ea4bfc838a708fb9f5b99324f4f1d9ab35c7215e2901c576c6e09a4a221aa` |
+
+`contract.py` is the only hashed file that changed; the reversal was read-only (a temp copy with
+`git show bef918e:pipeline/contract.py`). OpenAPI anchor is now `f71909b720e38dee3df958779008b53962419ddc4ae0c03ef2e5560f3133ce75`.
+Not replayed to Poppy.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

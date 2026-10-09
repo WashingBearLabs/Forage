@@ -70,6 +70,8 @@ def _health_body(**overrides: object) -> str:
         "status": "degraded",
         "promptguard_loaded": False,
         "promptguard_model": DEFAULT_MODEL_ID,
+        "promptguard_device": "cpu",
+        "promptguard_requested_device": "cpu",
         "cache_connected": False,
         "capabilities": {},
         "sanitizer_revision": _REVISION,

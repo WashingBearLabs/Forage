@@ -102,9 +102,11 @@ Fields to read (all present; `degraded_reasons` defaults to `[]`):
 | Field | Type | What it tells you |
 |---|---|---|
 | `status` | `"healthy"` or `"degraded"` | `degraded` whenever any reason below is present |
-| `degraded_reasons` | list of `promptguard_unavailable`, `cache_unavailable`, `cache_unauthenticated` | The closed reason vocabulary, in that order with inapplicable reasons omitted; an unlisted member cannot appear (response validation would 500). Unsigned Valkey content lacks proof of origin and is served without re-sanitization; both cache reasons may coexist, neither appears in memory mode |
+| `degraded_reasons` | list of `promptguard_unavailable`, `cache_unavailable`, `cache_unauthenticated`, `promptguard_device_failover`, `promptguard_device_oom` | The closed reason vocabulary, in that order with inapplicable reasons omitted; an unlisted member cannot appear (response validation would 500). Unsigned Valkey content lacks proof of origin and is served without re-sanitization; both cache reasons may coexist, neither appears in memory mode |
 | `promptguard_loaded` | bool | Whether the Prompt Guard model is loaded. Flips to `true` in place when weights land; no restart needed |
 | `promptguard_model` | string | Startup-selected model id, reported even while unloaded (contract 1.3.0). Defaults to `meta-llama/Llama-Prompt-Guard-2-86M` (22M by `FORAGE_MODEL_ID` opt-out); restart to change selection. Not a readiness signal |
+| `promptguard_device` | `"cpu"`, `"cuda"` or `null` | Active classifier device; `null` until loaded or when the loaded classifier reports no device state (contract 1.5.0). |
+| `promptguard_requested_device` | `"cpu"` or `"cuda"` | The `FORAGE_DEVICE` resolved at start, always present (contract 1.5.0). |
 | `cache_connected` | bool | Live ping in `valkey` mode; always `true` in `memory` mode |
 | `cache_backend` | `"valkey"` or `"memory"` | Which storage was selected at start (added in 1.1.0). `memory` means `VALKEY_URL` was fully unset |
 | `capabilities` | dict of str to int | Presence map, three keys as of 1.3.0: `search_sanitization` present when the model is loaded (or break-glass advertising is armed), `brave_api_key` when this start resolved a usable `FORAGE_BRAVE_API_KEY`, and `cache_hmac_key` only when this start resolved a usable `FORAGE_CACHE_HMAC_KEY` on Valkey (even if disconnected; absent in memory mode). Credential-presence keys are independent of sanitization and untouched by break-glass; values are `1` or the key is omitted |
@@ -518,7 +520,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`).
+`f71909b720e38dee3df958779008b53962419ddc4ae0c03ef2e5560f3133ce75`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

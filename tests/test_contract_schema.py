@@ -523,3 +523,58 @@ def test_the_1_2_0_to_1_3_0_diff_has_no_unlisted_additions() -> None:
     assert set(_ONE_THREE_ZERO_DIFFED_SCHEMAS) == set(_SCHEMA_MODELS)
     assert set(current) == set(previous)
     assert _diff_against_1_2_0(current) == _EXPECTED_ONE_THREE_ZERO_DIFF
+
+
+# ---------------------------------------------------------------------------
+# 1.5.0 coverage sweep (inference-surface US-001)
+#
+# Same engine as the 1.3.0 sweep, diffed against the frozen 1.4.0 golden. The
+# six schemas are unchanged; only HealthResponse moves.
+# ---------------------------------------------------------------------------
+
+_GOLDEN_1_4_0_PATH = _GOLDEN_DIR / "contract_1_4_0.json"
+
+_EXPECTED_ONE_FIVE_ZERO_DIFF: frozenset[str] = frozenset(
+    {
+        "HealthResponse.promptguard_device",
+        "HealthResponse.promptguard_requested_device",
+        "HealthResponse.degraded_reasons[items][enum]=promptguard_device_failover",
+        "HealthResponse.degraded_reasons[items][enum]=promptguard_device_oom",
+    }
+)
+
+
+def _diff_against_1_4_0(current: dict[str, Any]) -> set[str]:
+    """Every addition in ``current`` over the frozen 1.4.0 golden, across schemas."""
+    previous = json.loads(_GOLDEN_1_4_0_PATH.read_text())
+    added: set[str] = set()
+    for name in _ONE_THREE_ZERO_DIFFED_SCHEMAS:
+        added |= _added_paths(previous[name], current[name], name)
+    return added
+
+
+def test_the_four_1_5_0_additions_are_all_golden_pinned() -> None:
+    """Presence half: every named addition is in both the golden and announcement."""
+    current = json.loads((_GOLDEN_DIR / "contract_1_5_0.json").read_text())
+    entry = _slice_entry(
+        (_GOLDEN_DIR.parent.parent / "pipeline" / "contract.py").read_text(), "1.5.0"
+    )
+    assert len(_EXPECTED_ONE_FIVE_ZERO_DIFF) == 4
+    for path in _EXPECTED_ONE_FIVE_ZERO_DIFF:
+        field_path, _, enum_member = path.partition("[")
+        model, field = field_path.split(".")
+        properties = current[model]["properties"]
+        assert field in properties, path
+        assert f"``{field}``" in entry, path
+        if enum_member:
+            member = enum_member.split("=", 1)[1]
+            assert member in properties[field]["items"]["enum"], path
+            assert f"``{member}``" in entry, path
+
+
+def test_the_1_4_0_to_1_5_0_diff_has_no_unlisted_additions() -> None:
+    """Completeness sweep: the diff is exactly the recorded additions."""
+    previous = json.loads(_GOLDEN_1_4_0_PATH.read_text())
+    current = json.loads((_GOLDEN_DIR / "contract_1_5_0.json").read_text())
+    assert set(current) == set(previous) == set(_SCHEMA_MODELS)
+    assert _diff_against_1_4_0(current) == _EXPECTED_ONE_FIVE_ZERO_DIFF

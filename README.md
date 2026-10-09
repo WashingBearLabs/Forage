@@ -67,7 +67,7 @@ The stage 2 and stage 3 defences are measured, not asserted: a corpus of indirec
 
 <!-- boundary-text:end -->
 
-The response contract is versioned (`contract_version`, currently **1.4.0**). Consumers
+The response contract is versioned (`contract_version`, currently **1.5.0**). Consumers
 should refuse to activate on a mismatch rather than guess.
 
 ## Quickstart

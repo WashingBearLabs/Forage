@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.4.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.5.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, add a golden fixture
 under `tests/golden/` (older ones are retained, never edited), and note the change for the
 consuming repo.
@@ -743,6 +743,14 @@ beside the existing `wait_timed_out` guard. Each file was reverted alone, read-o
 with a both-reverted control reproducing `2c6d0382…` under default, `config.yaml` and
 `bench/config.yaml`. The classifier (`promptguard/classifier.py`) is not hashed. Not replayed to
 Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The sixty-first rotation is `6a0fcaad…` → `396ea4bf…` for `inference-surface` US-001 —
+**not a sanitization-behaviour change**: contract `1.5.0` adds `/health.promptguard_device`,
+`promptguard_requested_device` and the degraded reasons `promptguard_device_failover` and
+`promptguard_device_oom`. `contract.py` is the only hashed file that moves; a read-only
+whole-file reversal against `bef918e` reproduces `6a0fcaad…` under default, `config.yaml` and
+`bench/config.yaml`. `retrieval_app.py` (the handler, `_device_snapshot`) is not hashed. Old
+cache keys invalidate. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

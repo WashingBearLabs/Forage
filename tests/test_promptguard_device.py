@@ -137,6 +137,7 @@ async def test_cpu_fallback_with_failing_probe_starts_and_records_it(
     ):
         async with lifespan(probe_app):
             assert probe_app.state.boot_probe_failed is True
+            assert probe_app.state.promptguard_requested_device == "cuda"
 
 
 async def test_default_settings_never_probe_or_import_torch(
@@ -154,5 +155,6 @@ async def test_default_settings_never_probe_or_import_torch(
     ):
         async with lifespan(cpu_app):
             assert cpu_app.state.boot_probe_failed is False
+            assert cpu_app.state.promptguard_requested_device == "cpu"
             assert "torch" not in sys.modules
     probe.assert_not_called()
