@@ -2723,6 +2723,24 @@ agree.
 
 `orchestrator.py` is the only hashed file that changed; the reversal was read-only. Not replayed to Poppy.
 
+### GPU validation on thelab: US-001 smoke and latency (`gpu-validation` US-001, 2026-10-09)
+
+No rotation. This is an owner-gate measurement of the `main` image at `2c9b28f`
+(`forage:gpu-cand-2c9b28f`, ID `8e2394d06cfa`) on an RTX 4070 Ti, driver 590.48.01.
+
+- **86M on cuda:**
+  - healthy, with `promptguard_device: "cuda"`;
+  - marginal per-window cost `m50` 16.0 ms (bar ≤ 25 ms: met);
+  - projected 64-window p95 1,100 ms (bar < 2 s: met);
+  - VRAM peak 2,879 MiB;
+  - host cgroup peak 2,185 MiB, which confirms the overlay's 3,072 MiB default.
+- **22M on cuda:** `m50` 8.8 ms, projected p95 641 ms, VRAM peak 1,311 MiB.
+- **Production attestation:** before and after equal (23 containers, `5f7ae386…`); the guard raised
+  0 alerts.
+
+The full table, the operative VRAM floor ruling (3,391 MiB free for later gates) and the
+umask build hazard are in `kit_tools/specs/feature-gpu-validation.md` Implementation Notes.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

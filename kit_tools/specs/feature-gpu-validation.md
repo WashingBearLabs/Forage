@@ -140,13 +140,13 @@ evidence.
 - **If a bar is missed:** record the figures; the owner rules, and the release waits.
 
 **Acceptance Criteria:**
-- [ ] The safety pre-flight (floor, quiet window, attestation hash), the mid-run guard and teardown
+- [x] The safety pre-flight (floor, quiet window, attestation hash), the mid-run guard and teardown
       are recorded, and the attestation hash is equal before and after.
-- [ ] `/health` was healthy with `promptguard_device: "cuda"` for the 86M.
-- [ ] `m50` ≤ 25 ms, and the projected 64-window p95 < 2,000 ms over 10+ runs, with the window-count
+- [x] `/health` was healthy with `promptguard_device: "cuda"` for the 86M.
+- [x] `m50` ≤ 25 ms, and the projected 64-window p95 < 2,000 ms over 10+ runs, with the window-count
       sanity check passing. 1w p50/p95, VRAM peak and host RSS peak are recorded. The 22M figures are
       recorded.
-- [ ] The host RSS figure is compared with the overlay's provisional 3,072 MiB default, and the
+- [x] The host RSS figure is compared with the overlay's provisional 3,072 MiB default, and the
       default is confirmed or a change is recorded.
 
 ### US-002: Owner gate — parity runs
@@ -319,6 +319,67 @@ the pins prepared, so that tagging is the only step left.
   [docs/releases.md](../../docs/releases.md)
 
 ## Implementation Notes
+
+### US-001 — GPU smoke and latency (owner gate, run 2026-10-09)
+
+- **Approval:** the owner approved the US-001 sequence in-session on 2026-10-09. The run went
+  through `ssh thelab-claude` as the `claude` user. The window ran from 21:02 to 23:09 UTC, and
+  Poppy was idle (load average 0.7).
+- **Host:** RTX 4070 Ti (12,282 MiB), driver 590.48.01, Threadripper 2970WX (48 threads), 31 GiB
+  RAM.
+- **Image:** `forage:gpu-cand-2c9b28f`, image ID `8e2394d06cfa`, built on thelab from `main` at
+  `2c9b28f` (PR #47's merge). The build-time check printed `image content check: amd64 ok, torch
+  2.14.0+cu130`; inside, torch is `2.14.0+cu130` (CUDA 13.0) and the runtime uid is 999 (`poppy`).
+- **First build was unusable, and why.** The scratch checkout was cloned under `umask 077`. Its files
+  were owner-only, `COPY` carries modes into the image, and the non-root user could not execute
+  `/app/docker-entrypoint.sh` (exit 126). Restoring git's modes (`chmod -R u=rwX,go=rX`, then 0755
+  for every mode-100755 file) and rebuilding fixed it. CI builds from a default-umask checkout and
+  is unaffected. The image's runtime permissions depend on the builder's umask, which is worth a
+  Dockerfile hardening note.
+- **Weights:** the owner fetched both pinned revisions with their own read token
+  (`~/forage-validation/fetch-weights.sh`: hidden prompt, token via the environment only). They went
+  into a scratch cache, never production's, with every file's SHA-256 checked against
+  `weights_manifest.json`. The cache is mounted read-only at `/app/model-cache` with
+  `HF_HUB_OFFLINE=1`.
+- **Container:** `--restart no --gpus device=0 --cpus 8 --cpu-shares 256 --memory 3072m`,
+  `FORAGE_DEVICE=cuda`, the model id, `-p 127.0.0.1:18020:8020`, and `bench/config.yaml` at
+  `/app/config.yaml:ro`. No `VALKEY_URL` and no `HF_TOKEN`. There was a fresh container per input.
+- **Operative VRAM floor (owner ruling, 2026-10-09).** Read literally, the floor formula cannot be
+  met while Ollama's only model (`qwen3-embedding`, 5,954 MiB) is already resident, because it counts
+  that model twice. The operative rule:
+  - start only if free VRAM ≥ the candidate peak + 512 MiB;
+  - stop the candidate if free VRAM drops below 512 MiB or any production container restarts.
+
+  The rule started from the 2.5 GiB estimate; the **measured 86M peak is 2,879 MiB**, so the floor
+  for later gates is **3,391 MiB free**. Free VRAM before the run was 4,501 MiB.
+- **Mid-run guard:** polled free VRAM and a hash of the production containers' start times every
+  5 s. **0 alerts.** Minimum free VRAM was 1,622 MiB, during the 86M budget run.
+
+| | 86M | 22M |
+|---|---|---|
+| `/health` | healthy, `promptguard_device: "cuda"`, `requested: "cuda"`, contract 1.5.0 | same |
+| `sanitizer_revision` (cuda) | `280511c1…` | — |
+| cold load (start → loaded) | 19.8 s / 17.9 s | 16.3 s / 16.5 s |
+| `budget_windows` (sanity: > 1) | 55 | 40 |
+| warm p50 / p95, 1w (20 runs) | 61.3 / 83.2 ms | 61.2 / 79.0 ms |
+| warm p50 / p95, budget (20 runs) | 926.9 / 951.3 ms | 404.4 / 420.0 ms |
+| `m50` = (p50 budget − p50 1w) / (windows − 1) | **16.0 ms** (bar ≤ 25 ms: met) | 8.8 ms |
+| `p` = (p95 budget − p50 1w) / (windows − 1) | **16.5 ms** | 9.2 ms |
+| projected 64-window p95 = p95 budget + (64 − windows) × p | **1,100 ms** (bar < 2,000 ms: met) | 641 ms |
+| VRAM peak over the 7,376 MiB baseline | **2,879 MiB** (budget) | 1,311 MiB |
+| host: container RSS / cgroup peak | 1,155 / 2,185 MiB | 1,032 / 1,294 MiB |
+
+- `p50` is the 1-window warm median. `cold load` is wall time from `docker run` to
+  `promptguard_loaded`; the two values per model are the 1w and budget containers.
+- **Overlay `mem_limit`:** the highest cgroup reading, 2,185 MiB, is 71% of the provisional
+  3,072 MiB, leaving about 0.9 GiB of headroom. **The default is confirmed** and stays `3072m`.
+- **GPU utilisation** during the runs was not sampled (the guard recorded free VRAM only). It is
+  recorded as not measured.
+- **Teardown:** the candidate was removed and is absent from `nvidia-smi --query-compute-apps`.
+  Used VRAM is back to exactly 7,376 MiB, the baseline. The scratch checkout, venv and cache are
+  **kept** for US-002 and US-003.
+- **Production attestation:** before (21:02:46 UTC) and after (23:08:45 UTC), 23 containers, SHA-256
+  `5f7ae38680f1e40269fb5fc885c1f16a59eca1dafa8a1d5bcaf1b1ba4680cc72`. **Equal.**
 
 ## Refinement Notes
 
