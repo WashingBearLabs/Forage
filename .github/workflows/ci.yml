@@ -149,21 +149,7 @@ jobs:
       - name: Sync dev environment
         # --locked fails if uv.lock is stale relative to pyproject.toml, so a
         # dependency edit that skipped re-locking cannot reach main.
-        run: uv sync --extra dev --locked
-
-      - name: Assert the committed lock is CPU-only
-        # Resolving torch from plain PyPI drags in 15 nvidia-* CUDA packages
-        # (~2.7 GB) no Forage lane needs. The committed lock is the artifact
-        # that has to stay clean; the installed-environment check below proves
-        # the lock is actually what CI installs.
-        run: |
-          set -euo pipefail
-          if grep -q 'nvidia-' uv.lock; then
-            echo "::error file=uv.lock::uv.lock contains nvidia-* CUDA wheels — re-lock with the pytorch-cpu index configured in pyproject.toml"
-            grep -n 'nvidia-' uv.lock | head -20
-            exit 1
-          fi
-          echo "uv.lock is CPU-only: no nvidia-* wheels."
+        run: uv sync --extra dev --extra cpu --locked
 
       - name: Assert the synced environment pulled no CUDA wheels
         # The cold-cache evidence for US-001's AC: on a cache miss the step
@@ -172,12 +158,12 @@ jobs:
         run: |
           set -euo pipefail
           uv pip list > installed-packages.txt
-          if grep -qiE '^nvidia-' installed-packages.txt; then
-            echo "::error::CUDA wheels were installed despite a CPU-only lock"
-            grep -iE '^nvidia-' installed-packages.txt
+          if grep -qiE '^(nvidia-|cuda-|triton\b)' installed-packages.txt; then
+            echo "::error::CUDA wheels were installed by the cpu extra"
+            grep -iE '^(nvidia-|cuda-|triton\b)' installed-packages.txt
             exit 1
           fi
-          echo "No nvidia-* packages in the synced environment."
+          echo "No nvidia-*, cuda-* or triton packages in the synced environment."
           grep -iE '^torch ' installed-packages.txt || true
           rm -f installed-packages.txt
 
@@ -276,7 +262,7 @@ jobs:
         # Same `--locked` sync as lint: pyright's answers depend on the exact
         # dependency versions it sees, so the types checked in CI have to come
         # from the committed lock, not from a fresh resolution.
-        run: uv sync --extra dev --locked
+        run: uv sync --extra dev --extra cpu --locked
 
       - name: pyright (strict)
         # Zero errors, zero baseline. The only rule-level relaxation in the
@@ -313,7 +299,7 @@ jobs:
         # Same `--locked` sync as the other two lanes: the suite must run
         # against the dependency versions the lock pins, or a green run says
         # nothing about what a consumer installs.
-        run: uv sync --extra dev --locked
+        run: uv sync --extra dev --extra cpu --locked
 
       - name: Verify sanitizer revision derivation
         # Mirrors Poppy's ci.yml step of the same name. Redundant with the full
@@ -645,7 +631,7 @@ jobs:
         # Same `--locked` sync as every other lane: the smoke's expectations
         # are Python objects imported from this tree, so they have to be
         # resolved against the versions the lock pins.
-        run: uv sync --extra dev --locked
+        run: uv sync --extra dev --extra cpu --locked
 
       - name: Download the image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1477,7 +1463,7 @@ jobs:
           save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Sync dev environment
-        run: uv sync --extra dev --locked
+        run: uv sync --extra dev --extra cpu --locked
 
       - name: Download the companion image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

@@ -34,11 +34,16 @@ dependencies = [
     # `idna < 3.7` carries CVE-2024-3651 (quadratic `encode` on crafted
     # input), and the hosts reaching that call are provider-controlled.
     "idna>=3.7",
-    "torch>=2.2.0",
     "python-multipart==0.0.20",
 ]
 
 [project.optional-dependencies]
+# Torch is an extra, not a base dependency: the device is an install-time
+# choice. `cpu` and `cuda` pin the same version and differ only in which index
+# serves it (see [tool.uv.sources]); `[tool.uv] conflicts` makes them mutually
+# exclusive. A bare `uv sync` installs no torch, and tests/conftest.py says so.
+cpu = ["torch==2.14.0"]
+cuda = ["torch==2.14.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24.0",
@@ -52,19 +57,36 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Torch resolves to the CPU build on Linux. Plain PyPI drags in 15 `nvidia-*`
-# CUDA packages (~2.7 GB) that no Forage lane needs: the image installs torch
-# from the CPU index itself and never reads this lock, so the CUDA payload
-# would only ever cost developer `uv sync`s and CI jobs. macOS/Windows wheels
-# are already CPU-only on PyPI, hence the `sys_platform == 'linux'` marker.
+# Torch comes from the extras above. On Linux the `cpu` extra resolves to the
+# CPU index and the `cuda` extra to the cu130 index on x86_64 (CPU index on
+# other architectures, where no CUDA wheel is published). Plain PyPI would drag
+# 15 `nvidia-*` packages (~2.7 GB) into every extra, so every Linux source is
+# explicit; macOS/Windows wheels are CPU-only on PyPI, hence the
+# `sys_platform == 'linux'` markers. Source:
+# https://docs.astral.sh/uv/guides/integration/pytorch/
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cuda" },
+    ],
+]
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu130", extra = "cuda", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { index = "pytorch-cpu", extra = "cuda", marker = "sys_platform == 'linux' and platform_machine != 'x86_64'" },
 ]
 
 # The service keeps a flat module layout (no `forage/` package directory —

@@ -160,7 +160,7 @@ key, start**, never a mixed-key rolling restart.
 Local development:
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --extra cpu
 uv run pytest
 uv run ruff check .
 ```

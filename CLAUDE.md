@@ -127,7 +127,7 @@ reason. Any new startup or cache code must preserve this.
 ## Development
 
 ```bash
-uv sync --extra dev     # environment (creates .venv)
+uv sync --extra dev --extra cpu     # environment (creates .venv)
 uv run pytest           # hermetic blocking CI gate; 5557 collected, no xfails (count: TESTING_GUIDE.md)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
@@ -169,7 +169,7 @@ execute here". Record work done here in this repo's Implementation Notes, not in
 originals.
 
 `kit_tools/worktree.yaml` is the environment contract the orchestrator reads
-(`env_bootstrap: uv sync --extra dev`, `run_prefix: uv run`). Keep it accurate — a missing
+(`env_bootstrap: uv sync --extra dev --extra cpu`, `run_prefix: uv run`). Keep it accurate — a missing
 `run_prefix` makes the orchestrator run system Python and report false regressions.
 
 ---

@@ -159,7 +159,7 @@ measurement run; "cold" means an empty GHA build cache.
 
 1. `astral-sh/setup-uv` at `UV_VERSION: "0.9.28"` (the same pin the `Dockerfile` copies
    from `ghcr.io/astral-sh/uv:0.9.28`), `enable-cache: true`, `cache-dependency-glob: uv.lock`.
-2. `uv sync --extra dev --locked` — `--locked` fails if `uv.lock` is stale relative to
+2. `uv sync --extra dev --extra cpu --locked` — `--locked` fails if `uv.lock` is stale relative to
    `pyproject.toml`, so a forgotten re-lock is a red job rather than a drifting environment.
 3. Two CUDA-wheel guards: `uv.lock` must contain no `nvidia-` string, and the synced
    environment's package list must contain no `nvidia-*` package. Resolving torch from
@@ -417,7 +417,7 @@ The CI gates are the same four commands developers run, and all of them must go 
 numbers that do not reproduce:
 
 ```bash
-uv sync --extra dev             # once; CI adds --locked
+uv sync --extra dev --extra cpu             # once; CI adds --locked
 uv run pytest                   # = the `test` job
 uv run ruff check .             # = half of `lint`
 uv run ruff format --check .    # = the other half of `lint` (fix with: uv run ruff format .)

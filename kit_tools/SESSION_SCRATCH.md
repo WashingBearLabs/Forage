@@ -68,3 +68,6 @@
 
 [19:02] validate-implementation feature-inference-surface: 0 critical, 1 warning, 7 info; suite 5660 passed/6 skipped; ruff/pyright clean
 - Files: kit_tools/AUDIT_FINDINGS.md (gitignored)
+[now] unified-image US-001: torch moved to conflicting cpu/cuda extras, cu130 index, install commands -> `--extra dev --extra cpu`
+- Pre-change `uv export --frozen --extra dev` vs post `--extra dev --extra cpu`: identical package set/versions/markers; only non-linux torch gained extra wheel hashes (pre copy in /tmp/us001/pre.txt)
+- Dockerfile still `uv sync --locked --no-dev` (installs no torch now) -> US-004

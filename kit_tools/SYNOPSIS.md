@@ -67,7 +67,7 @@ record updated.
 
 ```bash
 # Environment (creates .venv, installs runtime + dev extras)
-uv sync --extra dev
+uv sync --extra dev --extra cpu
 
 # Tests
 uv run pytest

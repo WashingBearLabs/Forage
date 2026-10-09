@@ -15,7 +15,7 @@ Full set of commands:
 
 ```bash
 # Environment (once per checkout / worktree)
-uv sync --extra dev
+uv sync --extra dev --extra cpu
 
 # Everything
 uv run pytest

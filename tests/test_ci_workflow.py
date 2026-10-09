@@ -681,16 +681,22 @@ class TestLintJob:
         )
 
     def test_lint_syncs_against_the_committed_lock(self, jobs: dict[str, Any]) -> None:
-        assert "--locked" in _run_text(jobs, "lint"), (
+        assert "--extra cpu --locked" in _run_text(jobs, "lint"), (
             "uv sync must run with --locked so a dependency edit that skipped "
             "re-locking fails CI instead of resolving something else"
         )
 
-    def test_lint_asserts_lock_is_cpu_only(self, jobs: dict[str, Any]) -> None:
+    def test_lint_asserts_the_synced_environment_has_no_cuda_wheels(
+        self, jobs: dict[str, Any]
+    ) -> None:
         run_text = _run_text(jobs, "lint")
-        assert "nvidia-" in run_text and "uv.lock" in run_text, (
-            "lint must grep the committed uv.lock for nvidia-* CUDA wheels — "
+        assert "^(nvidia-|cuda-|triton\\b)" in run_text, (
+            "lint must grep the installed-package listing for CUDA wheels — "
             "a warm uv cache makes job-log inspection alone vacuous"
+        )
+        assert "grep -q 'nvidia-' uv.lock" not in run_text, (
+            "the lock now carries the cuda extra's wheels by design; only the "
+            "synced cpu environment is asserted CUDA-free"
         )
 
     def test_uv_setup_enables_caching(self, jobs: dict[str, Any]) -> None:
@@ -945,7 +951,7 @@ class TestTypecheckJob:
     def test_typecheck_syncs_against_the_committed_lock(
         self, jobs: dict[str, Any]
     ) -> None:
-        assert "--locked" in _run_text(jobs, "typecheck"), (
+        assert "--extra cpu --locked" in _run_text(jobs, "typecheck"), (
             "pyright's answers depend on the exact dependency versions it "
             "sees, so the sync must come from the committed lock"
         )
@@ -1099,7 +1105,7 @@ class TestTestJob:
     def test_test_job_syncs_against_the_committed_lock(
         self, jobs: dict[str, Any]
     ) -> None:
-        assert "--locked" in _run_text(jobs, "test"), (
+        assert "--extra cpu --locked" in _run_text(jobs, "test"), (
             "The suite must run against the versions the lock pins, or a green "
             "run says nothing about what a consumer installs"
         )
@@ -1718,7 +1724,7 @@ class TestSmokeJob:
         )
 
     def test_smoke_syncs_against_the_committed_lock(self, jobs: dict[str, Any]) -> None:
-        assert "--locked" in _run_text(jobs, "smoke"), (
+        assert "--extra cpu --locked" in _run_text(jobs, "smoke"), (
             "The smoke's expectations are Python objects imported from this "
             "tree, so they must resolve against the versions the lock pins"
         )
@@ -3461,7 +3467,9 @@ class TestSearxngSmokeJob:
         )
 
     def test_the_smoke_syncs_with_locked(self, jobs: dict[str, Any]) -> None:
-        assert "uv sync --extra dev --locked" in _run_text(jobs, "searxng-smoke"), (
+        assert "uv sync --extra dev --extra cpu --locked" in _run_text(
+            jobs, "searxng-smoke"
+        ), (
             "Reuse the same `--locked` sync as every other lane: the smoke "
             "imports from this tree and must resolve against the pinned "
             "dependency versions"
