@@ -620,6 +620,17 @@ components:
 
         section is the only place a fetch in flight is visible.'
       properties:
+        device_failovers:
+          description: Times the classifier moved from the GPU to the CPU.
+          title: Device Failovers
+          type: integer
+        effective_batch_size:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Windows per GPU forward pass right now; null on the CPU or when no
+            classifier snapshot exists.
+          title: Effective Batch Size
         fetch_failures:
           description: Acquisition attempts that failed.
           title: Fetch Failures
@@ -628,6 +639,14 @@ components:
           description: Whether an acquisition is running right now.
           title: Fetch In Progress
           type: boolean
+        oom_batch_reductions:
+          description: Times a GPU out-of-memory error halved the batch size.
+          title: Oom Batch Reductions
+          type: integer
+        oom_refusals:
+          description: Classifications refused after GPU out-of-memory.
+          title: Oom Refusals
+          type: integer
         quarantines:
           description: Weight sets moved out of the loader's scan tree.
           title: Quarantines
@@ -647,6 +666,10 @@ components:
       - quarantines
       - fetch_in_progress
       - retries_scheduled
+      - device_failovers
+      - oom_batch_reductions
+      - oom_refusals
+      - effective_batch_size
       title: ModelMetricsResponse
       type: object
     Pipeline422ErrorResponse:

@@ -296,6 +296,10 @@ Backed by `model_fetcher.ModelMetrics`.
 | `quarantines` | counter | Per successful move of a refused set to `$HF_HOME/quarantine/`. | Same as above, and disk is being consumed by refused sets. |
 | `fetch_in_progress` | bool | `true` during `snapshot_download` or the oras pull + extract + verify. | A download is happening now. |
 | `retries_scheduled` | counter | Each time `WeightAcquisition.run()` arms a retry (30 s doubling to 600 s, ±20 % jitter, forever). | The loop is waiting out backoff between failed rounds. |
+| `device_failovers` | counter | Each time the classifier migrates from the GPU to the CPU after an out-of-memory error. Read from the classifier's device snapshot, `0` without one. | The GPU is not keeping up with the batch; check `/health` `promptguard_device_failover`. |
+| `oom_batch_reductions` | counter | Each time a GPU out-of-memory error halves the batch size. `0` without a snapshot. | The configured CUDA batch size does not fit; lower `promptguard_cuda_batch_size`. |
+| `oom_refusals` | counter | Each classification refused after GPU out-of-memory under `FORAGE_DEVICE_FALLBACK=refuse`. `0` without a snapshot. | The GPU is out of memory and the service will not fall back; `/health` reports `promptguard_device_oom`. |
+| `effective_batch_size` | gauge, nullable | Windows per GPU forward pass right now. `null` on the `cpu` device or without a snapshot. | A value below the configured batch size means OOM reductions took effect. |
 
 ### Reading `promptguard_loaded: false`
 

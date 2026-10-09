@@ -57,3 +57,7 @@
 [17:58] inference-device US-004: GPU OOM handling (halve/failover/refuse), stage3 mapping, step 8 cache guard, rotation 60 recorded
 - Files: promptguard/classifier.py, pipeline/stage3_promptguard.py, pipeline/orchestrator.py, tests/test_promptguard_oom.py
 - Decision: counters as properties, stage3 log has tier not route
+
+[now] inference-surface US-002: /metrics.model device fields, bench device fields, rotation 62 (396ea4bf -> 2384820b)
+- Files: retrieval_app.py, promptguard/classifier.py (DeviceState counters), pipeline/contract.py, scripts/bench_promptguard.py, MONITORING.md
+- Decision: counters ride on DeviceState (defaulted 0) so /metrics reads one snapshot

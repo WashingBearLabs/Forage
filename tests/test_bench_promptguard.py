@@ -71,6 +71,8 @@ KEYS = {
     "promptguard_model",
     "sanitizer_revision",
     "contract_version",
+    "promptguard_device",
+    "promptguard_requested_device",
 }
 
 
@@ -81,6 +83,8 @@ def health(**updates: object) -> HttpResponse:
         "promptguard_model": DEFAULT_MODEL_ID,
         "sanitizer_revision": "a" * 64,
         "contract_version": "1.5.0",
+        "promptguard_device": "cpu",
+        "promptguard_requested_device": "cpu",
     }
     body.update(updates)
     return HttpResponse(200, json.dumps(body))

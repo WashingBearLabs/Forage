@@ -211,7 +211,11 @@ MINOR when fields are only added.
   the classifier loaded that are not about the cache; the failover reason never
   accompanies ``promptguard_unavailable``. Every addition is additive; a consumer
   comparing MAJOR keeps working untouched, and one that rejects unknown
-  ``degraded_reasons`` members must learn the two new ones.
+  ``degraded_reasons`` members must learn the two new ones. ``GET /metrics``'s
+  ``model`` section gains ``device_failovers``, ``oom_batch_reductions`` and
+  ``oom_refusals`` (counters, ``0`` without a classifier snapshot) and
+  ``effective_batch_size`` (windows per GPU forward pass; ``null`` on ``cpu`` or
+  without a snapshot); all additive.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

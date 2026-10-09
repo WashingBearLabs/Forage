@@ -1015,6 +1015,21 @@ class ModelMetricsResponse(BaseModel):
             "fetch_in_progress false is the 'waiting to try again' state."
         )
     )
+    device_failovers: int = Field(
+        description="Times the classifier moved from the GPU to the CPU."
+    )
+    oom_batch_reductions: int = Field(
+        description="Times a GPU out-of-memory error halved the batch size."
+    )
+    oom_refusals: int = Field(
+        description="Classifications refused after GPU out-of-memory."
+    )
+    effective_batch_size: int | None = Field(
+        description=(
+            "Windows per GPU forward pass right now; null on the CPU or "
+            "when no classifier snapshot exists."
+        )
+    )
 
 
 # ``extra="forbid"`` on all six metrics models is a choice about failure mode,
@@ -2249,6 +2264,7 @@ async def metrics(request: Request) -> dict[str, Any]:
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
     cache_metrics: CacheMetrics = request.app.state.cache_metrics
     model_metrics: ModelMetrics = request.app.state.model_metrics
+    device = _device_snapshot(getattr(request.app.state, "classifier", None))
     return {
         "contract_version": CONTRACT_VERSION,
         "extraction": {
@@ -2337,6 +2353,16 @@ async def metrics(request: Request) -> dict[str, Any]:
             "quarantines": model_metrics.quarantines,
             "fetch_in_progress": model_metrics.fetch_in_progress,
             "retries_scheduled": model_metrics.retries_scheduled,
+            # Device state, not acquisition: read from the classifier's
+            # snapshot, zeros and null when there is none.
+            "device_failovers": device.device_failovers if device else 0,
+            "oom_batch_reductions": device.oom_batch_reductions if device else 0,
+            "oom_refusals": device.oom_refusals if device else 0,
+            "effective_batch_size": (
+                device.effective_batch_size
+                if device and device.device != "cpu"
+                else None
+            ),
         },
     }
 

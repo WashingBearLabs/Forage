@@ -2682,6 +2682,24 @@ is new and goldens 1.0.0-1.4.0 are untouched. **Not** a sanitization-behaviour c
 `git show bef918e:pipeline/contract.py`). OpenAPI anchor is now `f71909b720e38dee3df958779008b53962419ddc4ae0c03ef2e5560f3133ce75`.
 Not replayed to Poppy.
 
+### The sixty-second rotation: `/metrics` device fields (`inference-surface` US-002)
+
+`ModelMetricsResponse` gains `device_failovers`, `oom_batch_reductions`, `oom_refusals` (counters, `0`
+without a classifier snapshot) and `effective_batch_size` (`null` on `cpu` or without a snapshot), read
+from `_device_snapshot(classifier)` — `DeviceState` now carries the three counters (defaulted to 0). The
+handler builds its dict field by field, so the model is never constructed from `ModelMetrics`; the parity
+test excludes `_DEVICE_FIELDS`. The metrics models are not in `_SCHEMA_MODELS`, so the 1.5.0 golden and
+`_EXPECTED_ONE_FIVE_ZERO_DIFF` are unchanged. The bench row copies `promptguard_device` and
+`promptguard_requested_device` from `/health`. **Not** a sanitization-behaviour change.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`fd10964`) / `contract.py` reverted (= all-reverted control) | `396ea4bfc838a708fb9f5b99324f4f1d9ab35c7215e2901c576c6e09a4a221aa` |
+| After | `2384820b1b8b83b2dcc63099aba6ab529b550faa6b47c42af930bc16a2fb6584` |
+
+`contract.py` is the only hashed file that changed; the reversal was read-only. OpenAPI anchor is now
+`9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`. Not replayed to Poppy.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

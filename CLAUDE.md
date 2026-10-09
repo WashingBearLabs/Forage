@@ -752,6 +752,14 @@ whole-file reversal against `bef918e` reproduces `6a0fcaad…` under default, `c
 `bench/config.yaml`. `retrieval_app.py` (the handler, `_device_snapshot`) is not hashed. Old
 cache keys invalidate. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
 
+The sixty-second rotation is `396ea4bf…` → `2384820b…` for `inference-surface` US-002 —
+**not a sanitization-behaviour change**: the held `1.5.0` entry in `pipeline/contract.py` names
+`/metrics.model`'s `device_failovers`, `oom_batch_reductions`, `oom_refusals` and
+`effective_batch_size`. `contract.py` is the only hashed file that moves; a read-only whole-file
+reversal against `fd10964` reproduces `396ea4bf…` under default, `config.yaml` and
+`bench/config.yaml`. Old cache keys invalidate. Not replayed to Poppy. Full values:
+`docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

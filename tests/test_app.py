@@ -868,6 +868,10 @@ async def test_metrics_exposes_the_model_acquisition_counters(
         "quarantines": 0,
         "fetch_in_progress": False,
         "retries_scheduled": 0,
+        "device_failovers": 0,
+        "oom_batch_reductions": 0,
+        "oom_refusals": 0,
+        "effective_batch_size": None,
     }
 
 
@@ -890,6 +894,10 @@ async def test_metrics_model_counters_reflect_the_live_metrics_object(
         "quarantines": 1,
         "fetch_in_progress": True,
         "retries_scheduled": 1,
+        "device_failovers": 0,
+        "oom_batch_reductions": 0,
+        "oom_refusals": 0,
+        "effective_batch_size": None,
     }
 
 
@@ -1790,6 +1798,10 @@ async def test_a_credential_less_boot_stays_degraded_and_says_so_once(
                 "quarantines": 0,
                 "fetch_in_progress": False,
                 "retries_scheduled": 1,
+                "device_failovers": 0,
+                "oom_batch_reductions": 0,
+                "oom_refusals": 0,
+                "effective_batch_size": None,
             }
 
     errors = [

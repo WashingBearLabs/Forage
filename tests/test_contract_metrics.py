@@ -33,7 +33,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -55,6 +55,8 @@ from pipeline.search_providers.base import ProviderFailure, ProviderSearchResult
 from pipeline.search_providers.brave import BraveApiProvider, BraveSettings
 from pipeline.search_providers.searxng import SearxngProvider, SearxngSettings
 from promptguard.classifier import (
+    DeviceState,
+    PromptGuardClassifier,
     promptguard_cuda_batch_size_from_config,
     promptguard_threads_from_config,
 )
@@ -195,6 +197,38 @@ _ONE_FOUR_ZERO_ADDITIONS = frozenset(
 )
 
 
+# The model section's fields before 1.5.0: the acquisition counters alone.
+_ONE_FOUR_ZERO_MODEL_FIELDS = frozenset(
+    {
+        "fetch_failures",
+        "verify_failures",
+        "quarantines",
+        "fetch_in_progress",
+        "retries_scheduled",
+    }
+)
+
+# Sourced from the classifier's device snapshot, not from ``ModelMetrics``.
+_DEVICE_FIELDS = frozenset(
+    {
+        "device_failovers",
+        "oom_batch_reductions",
+        "oom_refusals",
+        "effective_batch_size",
+    }
+)
+
+
+def test_every_1_5_0_metric_addition_is_named_in_the_contract_entry() -> None:
+    entry = _slice_entry((_REPO_ROOT / "pipeline" / "contract.py").read_text(), "1.5.0")
+    added = set(ModelMetricsResponse.model_fields) - _ONE_FOUR_ZERO_MODEL_FIELDS
+    assert added == _DEVICE_FIELDS
+    assert set(ModelMetricsResponse.model_fields) >= _ONE_FOUR_ZERO_MODEL_FIELDS
+    assert all(f"``{name}``" in entry for name in added)
+    for model in (RetrieveMetricsResponse, CacheMetricsResponse):
+        assert not _DEVICE_FIELDS & set(model.model_fields)
+
+
 def test_every_1_4_0_metric_addition_is_named_in_the_contract_entry() -> None:
     entry = _slice_entry((_REPO_ROOT / "pipeline" / "contract.py").read_text(), "1.4.0")
     added = set(RetrieveMetricsResponse.model_fields) - _ONE_THREE_ZERO_RETRIEVE_FIELDS
@@ -227,7 +261,11 @@ def test_every_1_3_0_metric_addition_is_named_in_the_contract_entry() -> None:
     for section, model in _SECTION_MODELS.items():
         previous = _ONE_TWO_ZERO_SECTION_FIELDS[section]
         # Fields 1.4.0 added are named in its entry, not this one.
-        later = _ONE_FOUR_ZERO_ADDITIONS if section == "retrieve" else frozenset[str]()
+        later = frozenset[str]()
+        if section == "retrieve":
+            later = _ONE_FOUR_ZERO_ADDITIONS
+        elif section == "model":
+            later = _DEVICE_FIELDS
         assert previous <= set(model.model_fields), section
         assert all(
             f"``{section}.{name}``" in entry
@@ -684,9 +722,11 @@ def test_dataclass_counters_and_their_models_carry_the_same_fields(
     mixes controller properties and the cgroup splat with its own counters, and
     that section is covered by the parity test instead.
     """
+    device_sourced = _DEVICE_FIELDS if model is ModelMetricsResponse else frozenset()
     assert {field.name for field in dataclasses.fields(counters)} == set(
         model.model_fields
-    )
+    ) - device_sourced
+    assert device_sourced <= set(model.model_fields)
 
 
 # ---------------------------------------------------------------------------
@@ -1235,3 +1275,52 @@ def test_unknown_config_key_warning_is_documented() -> None:
     assert "config_unknown_key" in _section(logging, "## Logger Inventory")
     troubleshooting = (_REPO_ROOT / "kit_tools/docs/TROUBLESHOOTING.md").read_text()
     assert "restart" in _section(troubleshooting, "### config_unknown_key")
+
+
+# ---------------------------------------------------------------------------
+# The model section's device fields mirror the classifier snapshot
+# ---------------------------------------------------------------------------
+
+
+async def _model_section_with(
+    client: httpx.AsyncClient, state: DeviceState | None
+) -> dict[str, Any]:
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = state is not None
+    classifier.device_state.return_value = state
+    with patch.object(app.state, "classifier", classifier, create=True):
+        return cast(dict[str, Any], (await client.get("/metrics")).json()["model"])
+
+
+async def test_model_device_fields_mirror_the_snapshot(
+    client: httpx.AsyncClient,
+) -> None:
+    state = DeviceState(
+        device="cuda",
+        requested_device="cuda",
+        failed_over=False,
+        failover_reason=None,
+        oom_refused=False,
+        fp32_precision=None,
+        effective_batch_size=8,
+        device_failovers=1,
+        oom_batch_reductions=3,
+        oom_refusals=2,
+    )
+    section = await _model_section_with(client, state)
+    assert section["device_failovers"] == 1
+    assert section["oom_batch_reductions"] == 3
+    assert section["oom_refusals"] == 2
+    assert section["effective_batch_size"] == 8
+
+
+async def test_model_device_fields_are_null_on_cpu_and_zero_without_a_snapshot(
+    client: httpx.AsyncClient,
+) -> None:
+    cpu = DeviceState("cpu", "cpu", False, None, False, None, 1)
+    assert (await _model_section_with(client, cpu))["effective_batch_size"] is None
+    section = await _model_section_with(client, None)
+    assert section["device_failovers"] == 0
+    assert section["oom_batch_reductions"] == 0
+    assert section["oom_refusals"] == 0
+    assert section["effective_batch_size"] is None

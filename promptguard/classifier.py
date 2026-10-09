@@ -61,6 +61,9 @@ class DeviceState:
     oom_refused: bool
     fp32_precision: str | None
     effective_batch_size: int
+    device_failovers: int = 0
+    oom_batch_reductions: int = 0
+    oom_refusals: int = 0
 
 
 class PromptGuardThreadsConfigurationError(ValueError):
@@ -209,6 +212,9 @@ class PromptGuardClassifier:
                 oom_refused=self._oom_refused,
                 fp32_precision=self._fp32_precision,
                 effective_batch_size=self._effective_batch,
+                device_failovers=self._device_failovers,
+                oom_batch_reductions=self._oom_batch_reductions,
+                oom_refusals=self._oom_refusals,
             )
 
     def _mark_failed_over(self, reason: str) -> None:
