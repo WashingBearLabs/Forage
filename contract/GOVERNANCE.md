@@ -26,7 +26,7 @@ response, and does every name it already knows still mean what it meant?
 | Schema fixtures | `tests/golden/contract_X_Y_Z.json` | by hand, one per contract version |
 | What the running service serves | `/openapi.json` `info.version`, `/health`'s `contract_version` | from `CONTRACT_VERSION` at import |
 
-The current contract version is **1.4.0**. *(That sentence is checked against
+The current contract version is **1.5.0**. *(That sentence is checked against
 `pipeline/contract.py` by `tests/test_governance_docs.py`; a bump that leaves it stale is
 a red test, not a stale doc.)*
 
@@ -73,9 +73,10 @@ the opt-in 86M classifier selectable and serves contract `1.3.0`, unchanged from
 The next mapping is **prepared, not yet published**: image `v1.3.0` serves contract `1.4.0`,
 the next MINOR. Both "next MINOR" windows are **closed in 1.4.0** (2026-10-07): ruling (g)'s
 `retrieve.max_promptguard_chunks` flip (to `64`) and ruling (l)'s validation-422 key drop.
-**No compatibility window is open.** A process built from this tree reports `1.4.0` on
-`/health`; `contract_1_4_0.json` is regenerated until the tag. Image `v1.0.0` serving
-contract `1.4.0` is not a mapping that exists; the example above stays the one that shows
+**No compatibility window is open.** A process built from this tree reports `1.5.0` on
+`/health` (the unpublished `inference-surface` MINOR: the device fields and two degraded
+reasons; `contract_1_4_0.json` is now frozen beside `contract_1_5_0.json`). Image `v1.0.0`
+serving contract `1.5.0` is not a mapping that exists; the example above stays the one that shows
 the two semvers diverging.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the

@@ -23,6 +23,7 @@ class BatchEncoding(Mapping[str, torch.Tensor]):
     def __getitem__(self, key: str) -> torch.Tensor: ...
     def __iter__(self) -> Iterator[str]: ...
     def __len__(self) -> int: ...
+    def to(self, device: str) -> BatchEncoding: ...
 
 class SequenceClassifierOutput:
     """The forward-pass result the classifier reads `logits` off."""
@@ -32,7 +33,7 @@ class SequenceClassifierOutput:
 class PreTrainedTokenizerBase:
     def __call__(
         self,
-        text: str,
+        text: str | list[str],
         *,
         return_tensors: str | None = ...,
         truncation: bool = ...,
@@ -46,11 +47,29 @@ class PreTrainedTokenizerBase:
 
 class PreTrainedModel:
     def eval(self) -> PreTrainedModel: ...
+    def to(self, device: str) -> PreTrainedModel: ...
+    def parameters(self) -> Iterator[torch.nn.Parameter]: ...
     def __call__(self, **kwargs: torch.Tensor) -> SequenceClassifierOutput: ...
 
 class PretrainedConfig:
     id2label: dict[int, str]
     num_labels: int
+
+class DebertaV2Config(PretrainedConfig):
+    def __init__(
+        self,
+        *,
+        vocab_size: int = ...,
+        hidden_size: int = ...,
+        num_hidden_layers: int = ...,
+        num_attention_heads: int = ...,
+        intermediate_size: int = ...,
+        max_position_embeddings: int = ...,
+        num_labels: int = ...,
+    ) -> None: ...
+
+class DebertaV2ForSequenceClassification(PreTrainedModel):
+    def __init__(self, config: DebertaV2Config) -> None: ...
 
 class AutoConfig:
     @classmethod

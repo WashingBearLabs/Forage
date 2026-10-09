@@ -23,6 +23,9 @@ MEBIBYTE = 1024 * 1024
 # reservation stays measured against the 22M, the smaller model; each model's
 # delta below is relative to it, so the default 86M carries its 405 MiB here.
 PARENT_RESERVATION_BYTES = 512 * MEBIBYTE
+# Not included above: a GPU out-of-memory failover (FORAGE_DEVICE=cuda, fallback
+# cpu) builds a second, host-side copy of the weights (~1.1 GB for the 86M).
+# docs/configuration.md "GPU out of memory mid-run" covers sizing for it.
 CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL: Mapping[str, int] = {
     PROMPT_GUARD_22M_ID: 0,
     # Measured (corpus-86m-enablement US-003): the largest process VmRSS

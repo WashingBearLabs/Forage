@@ -69,7 +69,7 @@ Forage is the only internal service. Its pipeline stages (`pipeline/stage1_*` th
 | **Purpose** | Extraction and telemetry service for safe web access by LLM agents: fetch a URL (`/retrieve`), search the web (`/search`), or classify an uploaded document (`/extract`), running every result through structural and ML prompt-injection scans and reporting trust signals rather than deciding for the caller. |
 | **Repository** | This repo — `https://github.com/WashingBearLabs/Forage` (public since 2026-09-10). Extracted from the Poppy monorepo on 2026-09-07; never imports `poppy` (`CLAUDE.md` invariant 1). |
 | **Image** | `ghcr.io/washingbearlabs/forage` (`linux/amd64`, `linux/arm64`; arm64 is built but never executed in CI). Base `python:3.12-slim`, digest-pinned in `Dockerfile`; no build `ARG` at all (`CLAUDE.md` invariant 2). |
-| **Runtime** | Python 3.12, FastAPI + uvicorn, one worker (`CMD` has no `--workers`); uv-managed lockfile; CPU-only torch/transformers loaded lazily by `promptguard/classifier.py`. |
+| **Runtime** | Python 3.12, FastAPI + uvicorn, one worker (`CMD` has no `--workers`); uv-managed lockfile; torch (CUDA build on amd64, CPU on arm64; device `FORAGE_DEVICE`, default `cpu`)/transformers loaded lazily by `promptguard/classifier.py`. |
 | **Port** | `8020` in-container (`EXPOSE 8020`, uvicorn `--host 0.0.0.0`); published as `127.0.0.1:8020` by both compose fragments. |
 | **Health Check** | `GET /health` — **always HTTP 200; the truth is in the body** (`status`, `degraded_reasons`, `promptguard_loaded`, `cache_connected`, `cache_backend`, `capabilities`, `search_providers`, `sanitizer_revision`, `contract_version`). No image-level `HEALTHCHECK`; both compose fragments declare `curl -fsS -o /dev/null` liveness (30 s interval, 5 s timeout, three retries, 30 s start period). It must not gate traffic, `depends_on: service_healthy` or activation. |
 | **Contract** | `contract_version` **1.3.0** (`pipeline/contract.py`), frozen as `contract/openapi.yaml` with a committed `openapi.yaml.sha256` anchor. Image tag and contract version are independent semvers: v1.2.1 published and verified 2026-09-23, replacing withdrawn v1.2.0 without changing the contract; v1.2.2 (PATCH, published 2026-10-04 and verified) retains `1.3.0` unchanged. |
@@ -207,14 +207,14 @@ behaviour is described here from Forage's own docs and tests
 **What Poppy must do:**
 - Compare `/health.contract_version` (**1.3.0**) on its **MAJOR** and refuse to activate on
   a mismatch (`CLAUDE.md` invariant 4). **Never** compare `sanitizer_revision`: the two
-  repos' revisions diverged deliberately fifty-nine times (Forage `2c6d0382…`, Poppy still
+  repos' revisions diverged deliberately sixty-three times (Forage `02f7abcf…`, Poppy still
   `e6b2b56d…`; `docs/bootstrap-notes.md` is the running record, not this count).
 - Vendor the contract by the procedure in `contract/GOVERNANCE.md`: pick a tag (never
   `latest`); fetch `openapi.yaml` and `openapi.yaml.sha256` from the **same** tag (git
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
   `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`); run
   `sha256sum -c openapi.yaml.sha256`; commit both; record the tag. The anchor is
-  currently `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`.
+  currently `9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`.
 - Its client caches `sanitizer_revision` from `/health`, pins the ten `/extract` error
   codes, rejects an `/extract` 422 lacking `sanitizer_revision`, gates web search on
   `capabilities.search_sanitization`, and buckets unknown `omitted_by_reason` /

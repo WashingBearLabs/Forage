@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: inference-device
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: "T3 — run the classifier where the hardware is: CPU and GPU from one image"
@@ -11,7 +11,8 @@ epic: forage-inference-backends
 epic_seq: 1
 epic_final: false
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-10-09
+completed: 2026-10-09
 ---
 
 # Feature Spec: Inference Device — Install-Time Device, Failover, GPU Batching
@@ -111,26 +112,26 @@ under `refuse` stop the service immediately and loudly.
   - `kit_tools/docs/ENV_REFERENCE.md`.
 
 **Acceptance Criteria:**
-- [ ] `resolve_device_settings` accepts `cpu`/`cuda` and `cpu`/`refuse`, case-insensitively and
+- [x] `resolve_device_settings` accepts `cpu`/`cuda` and `cpu`/`refuse`, case-insensitively and
       stripped, with defaults `cpu`/`cpu`, and treats blank as unset. An invalid value raises
       `DeviceConfigurationError`, whose message names the variable and not the value. One test per
       variable checks that a sentinel value is absent from the message.
-- [ ] `requested_device_token` returns `"cpu"`, `"cuda"` or `"invalid"`, never raises, and agrees
+- [x] `requested_device_token` returns `"cpu"`, `"cuda"` or `"invalid"`, never raises, and agrees
       with `resolve_device_settings` on every valid input (parametrised test).
-- [ ] `probe_cuda` maps a mocked unavailable GPU, an OOM and a generic error to the three results,
+- [x] `probe_cuda` maps a mocked unavailable GPU, an OOM and a generic error to the three results,
       and logs only the closed token. A caplog test injects an exception carrying a sentinel and
       asserts the sentinel is absent from every log record.
-- [ ] `cuda` + `refuse` with a failing probe raises during lifespan startup, before serving. `cuda`
+- [x] `cuda` + `refuse` with a failing probe raises during lifespan startup, before serving. `cuda`
       + `cpu` with a failing probe starts the app (app-factory tests).
-- [ ] With default settings, `probe_cuda` is never called and the lifespan imports no torch (mock
+- [x] With default settings, `probe_cuda` is never called and the lifespan imports no torch (mock
       assertion).
-- [ ] The configuration doc and ENV_REFERENCE document both variables and the table.
-- [ ] Both variables are in `_CLEARED_ENV_VARS`, and `tests/test_hermeticity.py`'s exact set is
+- [x] The configuration doc and ENV_REFERENCE document both variables and the table.
+- [x] Both variables are in `_CLEARED_ENV_VARS`, and `tests/test_hermeticity.py`'s exact set is
       updated.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: Load the classifier on CUDA, with failover and fp32
 
@@ -198,28 +199,28 @@ fallback `cpu`, so that a GPU host classifies on the GPU and a broken one keeps 
   files, because CPU kernels differ by platform. Never construct the 86M.
 
 **Acceptance Criteria:**
-- [ ] `scripts/promptguard_tiny_model.py` exists and imports nothing beyond torch, transformers and
+- [x] `scripts/promptguard_tiny_model.py` exists and imports nothing beyond torch, transformers and
       the standard library (an import test with pytest blocked).
-- [ ] With default settings, `load()` makes no `Module.to` call, and `classify_windows` equals
+- [x] With default settings, `load()` makes no `Module.to` call, and `classify_windows` equals
       `reference_scores` exactly (`==`) on the builder's model (test).
-- [ ] `cuda` with a working mocked GPU applies the fp32 settings before `.to("cuda")`, records the
+- [x] `cuda` with a working mocked GPU applies the fp32 settings before `.to("cuda")`, records the
       precision mode, and moves the inputs to cuda (test with a recording fake model).
-- [ ] A move that relocates half the parameters and then raises ends with every parameter on CPU,
+- [x] A move that relocates half the parameters and then raises ends with every parameter on CPU,
       `failed_over` true and one closed `promptguard_device_failover` WARNING under fallback
       `cpu` (test).
-- [ ] A recovery `.to("cpu")` that itself raises makes `load()` return False with
+- [x] A recovery `.to("cpu")` that itself raises makes `load()` return False with
       `reason=recovery_error`. Under fallback `cpu`, the next `load()` loads on CPU, marked failed
       over with reason `load_error` (test).
-- [ ] Under `refuse` it returns False, with a `promptguard_device_load_failed` token, and the
+- [x] Under `refuse` it returns False, with a `promptguard_device_load_failed` token, and the
       classifier stays unloaded (test).
-- [ ] A boot-probe failure under fallback `cpu` loads on CPU, marked failed over with reason
+- [x] A boot-probe failure under fallback `cpu` loads on CPU, marked failed over with reason
       `unavailable` (test).
-- [ ] `device_state()` returns a consistent snapshot taken under the lock (test).
-- [ ] No log record from the load path contains exception text (sentinel caplog test).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `device_state()` returns a consistent snapshot taken under the lock (test).
+- [x] No log record from the load path contains exception text (sentinel caplog test).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-003: Batch a page's windows on the GPU
 
@@ -258,18 +259,18 @@ exactly one forward pass per window.
   measured in spec 4.
 
 **Acceptance Criteria:**
-- [ ] `promptguard_cuda_batch_size` is bounded 1–64 (default 16), registered, classified, present
+- [x] `promptguard_cuda_batch_size` is bounded 1–64 (default 16), registered, classified, present
       in both configs and documented. `configure_batch_size(n)` sets the effective batch size on
       that instance only, and a second instance is unaffected. `device_state().effective_batch_size`
       reports it (tests).
-- [ ] On `cpu`, `classify_windows` makes exactly one forward pass per window (call-count test).
-- [ ] The forced batched path returns the right count, in window order, each score within 1e-5 of
+- [x] On `cpu`, `classify_windows` makes exactly one forward pass per window (call-count test).
+- [x] The forced batched path returns the right count, in window order, each score within 1e-5 of
       batch 1, for page sizes 1, b−1, b, b+1 and 3b. The max difference is recorded.
-- [ ] The `max_chunks` refusal fires before any forward pass on the batched path (test).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] The `max_chunks` refusal fires before any forward pass on the batched path (test).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-004: Handle GPU out-of-memory safely
 
@@ -346,37 +347,37 @@ GPU degrades the service honestly instead of failing requests at random.
   record procedure**: each file reverted alone, plus a both-reverted control.
 
 **Acceptance Criteria:**
-- [ ] An OOM at batch 16 retries at 8, and the request returns all scores in order. The effective
+- [x] An OOM at batch 16 retries at 8, and the request returns all scores in order. The effective
       batch stays 8 for the next request, and `oom_batch_reductions` increments (test).
-- [ ] Two threads OOMing from one event halve the batch once, not twice (threaded test).
-- [ ] An OOM at batch 1 under fallback `cpu` builds the CPU copy from host-side state (no
+- [x] Two threads OOMing from one event halve the batch once, not twice (threaded test).
+- [x] An OOM at batch 1 under fallback `cpu` builds the CPU copy from host-side state (no
       `deepcopy` of a cuda module; asserted by patching `copy.deepcopy` to raise) and swaps it
       exactly once, even with two concurrent callers. It sets `failed_over` and increments
       `device_failovers`, and the request returns scores (threaded test).
-- [ ] `device_state()` is not blocked while the copy is built: the read completes during a
+- [x] `device_state()` is not blocked while the copy is built: the read completes during a
       deliberately slow build (test).
-- [ ] A failing copy build gives that request the refuse outcome with reason `copy_failed`, and
+- [x] A failing copy build gives that request the refuse outcome with reason `copy_failed`, and
       `failed_over` stays false (test).
-- [ ] A third thread already mid-forward on the cuda snapshot during the swap finishes without a
+- [x] A third thread already mid-forward on the cuda snapshot during the swap finishes without a
       device-mismatch error (threaded test with an event-gated fake forward).
-- [ ] An OOM at batch 1 under `refuse` gives `unavailable_result` for that request's tier: one
+- [x] An OOM at batch 1 under `refuse` gives `unavailable_result` for that request's tier: one
       fail-closed and one fail-open tier tested. It sets `oom_refused` and increments
       `oom_refusals`. A later cuda success clears `oom_refused` (tests).
-- [ ] An OOM-refused body is never written to the content cache on any caching route (test,
+- [x] An OOM-refused body is never written to the content cache on any caching route (test,
       mirroring the wait-timeout guard test).
-- [ ] The existing wait-timeout guard still blocks the cache write when the classifier was unloaded
+- [x] The existing wait-timeout guard still blocks the cache write when the classifier was unloaded
       at request entry and loaded before the timeout (test).
-- [ ] Only `torch.cuda.OutOfMemoryError`, and the recognised device-mismatch `RuntimeError` on a
+- [x] Only `torch.cuda.OutOfMemoryError`, and the recognised device-mismatch `RuntimeError` on a
       stale snapshot (retried once), enter this path. A second failure, and every other exception,
       propagate as today (tests). Logs are closed tokens only (caplog sentinel test).
-- [ ] `docs/configuration.md` documents the `refuse` and fail-open interaction, and the
+- [x] `docs/configuration.md` documents the `refuse` and fail-open interaction, and the
       restart-to-recover batch size.
-- [ ] The rotation (`stage3_promptguard.py`, `orchestrator.py`) is measured and recorded per the
+- [x] The rotation (`stage3_promptguard.py`, `orchestrator.py`) is measured and recorded per the
       epic procedure.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 
@@ -417,6 +418,14 @@ GPU degrades the service honestly instead of failing requests at random.
   `model_fetcher.py`, [GOTCHAS.md](../docs/GOTCHAS.md)
 
 ## Implementation Notes
+
+- **US-003 tolerance record.** Forced batched path (`_score_batched`) vs the batch-1 reference on
+  the seeded tiny model, b = 4, page sizes 1, 3, 4, 5, 12 (built by cycling
+  `tiny.sample_inputs()`): **max |difference| = 0.0** (measured 2026-10-08, macOS arm64,
+  torch 2.14; padding is masked). The test asserts < 1e-5 per window, plus count, order and slice
+  sizes `[min(b, n - start) …]`. Real-model drift is spec 4's measurement.
+- **US-003 shape.** The CUDA path moves the whole tokenized page to the device once, then slices;
+  the transformers stub's tokenizer `__call__` widened to `str | list[str]`.
 
 ## Refinement Notes
 
@@ -468,3 +477,11 @@ memory fraction is advisory: https://github.com/pytorch/pytorch/issues/69688.
 - **Q:** Batch on GPU? **A:** Yes, GPU only.
 - **Q:** Config shape? **A:** `FORAGE_DEVICE=cpu|cuda` plus `FORAGE_DEVICE_FALLBACK=cpu|refuse`, with
   no `auto`.
+
+### US-004 notes
+
+- Classifier counters are properties (`oom_batch_reductions`, `device_failovers`, `oom_refusals`); spec 2 surfaces them. `DeviceState` is unchanged.
+- `_score_batched` raises an internal `_CudaOutOfMemoryError` carrying finished scores, so a retry scores only the remaining windows. The CPU loop moved to `_score_serial` (unchanged behaviour).
+- stage3 logs `promptguard_oom_refused tier=...` (no route is known at that layer); the classifier logs `promptguard_oom_refused reason=oom|copy_failed`.
+- The existing `test_model_warmup_during_fetch_counts_timeout_and_never_caches[initially_loaded=False]` covers the wait-timeout guard for a classifier unloaded at entry.
+- Rotation 60: `2c6d0382…` → `6a0fcaad…`; stage3 alone `f081a4e1…`, orchestrator alone `ed928917…`, both-reverted control `2c6d0382…`.

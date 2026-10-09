@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: gpu-parity-tool
-status: active
+status: completed
 session_ready: true
 depends_on: [unified-image]
 vision_ref: "T3 — run the classifier where the hardware is: CPU and GPU from one image"
@@ -11,7 +11,8 @@ epic: forage-inference-backends
 epic_seq: 4
 epic_final: false
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-10-09
+completed: 2026-10-09
 ---
 
 # Feature Spec: GPU Parity Tool — Prove Any Backend Against the CPU Cassettes
@@ -80,17 +81,17 @@ parity tool load classifiers identically and safely.
   (belt and braces).
 
 **Acceptance Criteria:**
-- [ ] `scripts/corpus/live.py` implements the ordered loader. `record.py` uses it, and
+- [x] `scripts/corpus/live.py` implements the ordered loader. `record.py` uses it, and
       `tests/test_corpus_record.py` passes unmodified.
-- [ ] Tests cover:
+- [x] Tests cover:
   - each refusal, including `device_env_set`;
   - the call order with fakes;
   - the device and batch arguments applied before load.
-- [ ] `_SCRUBBED_ENV` includes both device variables.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `_SCRUBBED_ENV` includes both device variables.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: The parity tool
 
@@ -179,22 +180,22 @@ disproven, mechanically.
   zero drift) and how to read batch 16 against batch 1.
 
 **Acceptance Criteria:**
-- [ ] The live and replay drives, the tuple comparison, post-hoc `max_chunks` and miss handling are
+- [x] The live and replay drives, the tuple comparison, post-hoc `max_chunks` and miss handling are
       implemented. Tests cover an offset, a boundary flip, a count mismatch and an unrecorded sha.
-- [ ] A cassette with an unrecorded sha still completes the replay drive over the remaining records,
+- [x] A cassette with an unrecorded sha still completes the replay drive over the remaining records,
       reports the excluded ids, and exits 1. A never-produced sha alone exits 0 (tests).
-- [ ] `--batch-size` defaults to 1. `--device cpu --batch-size 16` exits 2 (test).
-- [ ] Runs with `failed_over`, OOM reductions, a batch mismatch or a device mismatch exit 1 (tests).
-- [ ] The long-text check is reported, and its synthetic text contains no corpus text. A fake that
+- [x] `--batch-size` defaults to 1. `--device cpu --batch-size 16` exits 2 (test).
+- [x] Runs with `failed_over`, OOM reductions, a batch mismatch or a device mismatch exit 1 (tests).
+- [x] The long-text check is reported, and its synthetic text contains no corpus text. A fake that
       returns the wrong window count, or crosses the threshold between batch 1 and the requested
       batch, exits 1 (tests).
-- [ ] No output contains corpus text (test scanning stdout, stderr and the JSON file against a
+- [x] No output contains corpus text (test scanning stdout, stderr and the JSON file against a
       record's text). Exit codes are 0/1/2 as specified.
-- [ ] `docs/corpus.md` documents the procedure, the control run and the batch pairing.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `docs/corpus.md` documents the procedure, the control run and the batch pairing.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 

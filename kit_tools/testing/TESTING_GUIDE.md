@@ -15,7 +15,7 @@ Full set of commands:
 
 ```bash
 # Environment (once per checkout / worktree)
-uv sync --extra dev
+uv sync --extra dev --extra cpu
 
 # Everything
 uv run pytest
@@ -165,7 +165,7 @@ the story implementer did not run it.
 | `tests/test_searxng_docker.py` | 28 | `searxng/Dockerfile` + baked config: the negatives (no wildcard pass list, no baked secret, no header trust) and engine parity with `SEARXNG_ENGINES` (read through `pipeline/orchestrator.py`'s `_SEARXNG_ENGINES` alias) |
 | `tests/test_hermeticity.py` | 10 | Executing canary for the autouse socket guard |
 | `tests/test_sanitizer_revision.py` | 42 | Revision hashing over `_REVISION_SOURCES` and the `MODEL_ID@revision` model identity; exact ASCII-compatible UTF-8 bytes for numeric Unicode, invalid Unicode and lone-surrogate threshold strings |
-| `tests/test_dependency_lock.py` | 3 | `uv.lock` stays CPU-only (no `nvidia-*` wheels) |
+| `tests/test_dependency_lock.py` | 3 | `uv.lock` keeps the CUDA payload inside the `cuda` extra (`scripts/check_lock_cuda_scope.py`, planted violations) and the three torch sources |
 | `tests/test_contract_errors.py` | 53 | Documented error vocabulary and raise-site coverage, mirror/wire parity and route unions; redacted validation 422s on all three routes, 100-entry cap, runtime location allowlist and every-field marker fuzz, total-handler malformed-entry guards, root-log non-reflection and guard-of-the-guard counterexamples |
 | `tests/test_contract_metrics.py` | 69 | Typed `/metrics` body and served app metadata: handler/wire parity, flat cgroup keys, `extra="forbid"`, counter/model ties, `info.version`, documented endpoints, latency counters and config registry/reader coverage. Resource-envelope US-003 adds the explicit dotted security/non-security registry partition and shipped-equals-code-default pin, reading actual empty-config lifespan/settings values rather than duplicating defaults. This protects the shipped baseline only, never an operator's stricter replacement. |
 | `tests/test_contract_export.py` | 177 | The frozen `contract/openapi.yaml`: that the committed bytes are what the app generates, that the committed `.sha256` anchor is the sha256 of those bytes in `sha256sum -c` form, that the render is byte-stable across processes and `PYTHONHASHSEED` values (measured in subprocesses, not asserted), that the canonical form round-trips and carries no YAML anchors, and that `/extract` is documented while `extract_route_enabled` is `false`. The drift check's own failure case is committed as `tests/fixtures/contract/unregenerated_openapi.yaml` and fed to the same checker |
@@ -371,7 +371,7 @@ paths FastAPI actually serves) — are the ones most easily left unmapped.
 They still need mappings: without one the orchestrator falls back to a heuristic glob over
 the whole suite, and a workflow, lock, Dockerfile or config edit either runs everything or
 nothing. `pyproject.toml` maps to two modules because it carries two independently-guarded
-concerns: the CPU-only dependency lock and the type-checking policy.
+concerns: the CUDA-scoped dependency lock and the type-checking policy.
 
 `retrieval_app.py`, `models.py` and `pipeline/contract.py` all gained
 `tests/test_contract_export.py` in `feature-forage-contract` US-002. That is the whole

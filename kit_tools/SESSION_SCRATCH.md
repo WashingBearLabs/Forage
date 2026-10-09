@@ -44,3 +44,47 @@
 [now] validate-epic round 3 (focused, 14 agents) applied to forage-inference-backends specs
 - Files: kit_tools/specs/feature-{inference-device,inference-surface,unified-image,gpu-parity-tool,gpu-validation}.md
 - Decision: parity replay drive filters records by live shas (drive_all aborts on unrecorded); never-produced shas informational; batch size per-instance; Step 8 keeps not wait_timed_out AND adds unavailable_allowed+loaded; 64-window p95 projected (bench yields ~55); arm64 checks publish-lane only + static lock rule
+[17:31] inference-device US-001: device settings + boot probe in lifespan
+- Files: promptguard/device.py, retrieval_app.py, tests/test_promptguard_device.py, docs
+- Decision: probe runs right after model-id check (fail-fast, before classifier/acquisition)
+
+[now] inference-device US-002: classifier CUDA load, failover, fp32, tiny-model builder
+- Files: promptguard/classifier.py, scripts/promptguard_tiny_model.py, typings/transformers, retrieval_app.py, tests/test_promptguard_cuda_load.py
+- Decision: `_model` kept as a property over `_active` so tests that install a model directly keep working
+[now] inference-device US-003: CUDA batching (promptguard_cuda_batch_size, configure_batch_size, _score_batched)
+- Files: promptguard/classifier.py, retrieval_app.py, configs, docs/configuration.md, typings/transformers, tests/test_promptguard_batching.py
+- Decision: page tokens moved to device once then sliced; measured batched-vs-batch-1 max diff 0.0 on tiny model
+[17:58] inference-device US-004: GPU OOM handling (halve/failover/refuse), stage3 mapping, step 8 cache guard, rotation 60 recorded
+- Files: promptguard/classifier.py, pipeline/stage3_promptguard.py, pipeline/orchestrator.py, tests/test_promptguard_oom.py
+- Decision: counters as properties, stage3 log has tier not route
+
+[now] inference-surface US-002: /metrics.model device fields, bench device fields, rotation 62 (396ea4bf -> 2384820b)
+- Files: retrieval_app.py, promptguard/classifier.py (DeviceState counters), pipeline/contract.py, scripts/bench_promptguard.py, MONITORING.md
+- Decision: counters ride on DeviceState (defaulted 0) so /metrics reads one snapshot
+
+[now] inference-surface US-003: device@cuda revision input, active_device in cache fingerprint, step-8 failover guard, rotation 63 (2384820b -> 02f7abcf; cuda 280511c1)
+- Files: pipeline/sanitizer_revision.py, cache.py, pipeline/orchestrator.py, promptguard/classifier.py (device_snapshot moved here), retrieval_app.py, docs/configuration.md
+- Decision: tolerant accessor lives in promptguard/classifier.py (unhashed) so orchestrator and app share it
+
+[19:02] validate-implementation feature-inference-surface: 0 critical, 1 warning, 7 info; suite 5660 passed/6 skipped; ruff/pyright clean
+- Files: kit_tools/AUDIT_FINDINGS.md (gitignored)
+[now] unified-image US-001: torch moved to conflicting cpu/cuda extras, cu130 index, install commands -> `--extra dev --extra cpu`
+- Pre-change `uv export --frozen --extra dev` vs post `--extra dev --extra cpu`: identical package set/versions/markers; only non-linux torch gained extra wheel hashes (pre copy in /tmp/us001/pre.txt)
+- Dockerfile still `uv sync --locked --no-dev` (installs no torch now) -> US-004
+[now] unified-image US-004: arch-selected `--extra` in Dockerfile sync RUN, scripts/image_content_check.py build step, CI parity+size steps in smoke
+- Files: Dockerfile, .dockerignore, scripts/image_content_check.py, tests, ci.yml, CI_CD.md
+- Local docker builds verified both archs; amd64 gzip layer sum ~3.15 GB; CI parity result still pending first run
+[now] unified-image US-004 attempt 2: CI run 37962323278 green; parity ==; gzip 3.14 GB, uncompressed 5.96 GB, largest 5.75 GB; recorded in CI_CD.md + spec
+
+[11:05] validate-implementation feature-unified-image (6e6fb72..4b3604c): 0 critical, 0 warning, 13 info; suite 5723 passed/6 skipped, ruff/format/pyright clean
+- Files: kit_tools/AUDIT_FINDINGS.md (gitignored, 2026-10-09-001..013)
+- Decision: extra-6-forage marker finding re-described (6 = name-length prefix, not extras count)
+[11:29] gpu-parity-tool US-002: scripts/corpus/parity.py (ParityClassifier, live+replay drives, validity + long-text checks), tests/test_corpus_parity.py, docs/corpus.md Backend parity
+- Decision: docs section is ### under "Recording and re-recording" (test pins nine ## sections); long-text word count calibrated against the classifier at batch 1
+
+[11:38] validate-implementation gpu-parity-tool: 0 critical, 0 warning, 6 info; full suite 5757 passed/6 skipped; ruff/format/pyright clean
+- Files: kit_tools/AUDIT_FINDINGS.md (created)
+
+[19:00] Epic-wide validate-implementation for forage-inference-backends: 0 critical, 2 warning, 8 info; no fix loop
+- Files: kit_tools/AUDIT_FINDINGS.md (2026-10-09-008..017)
+- Decision: 3 test_corpus_docs failures classified environmental (worktree-local gitignored AUDIT_FINDINGS.md); skip when file absent

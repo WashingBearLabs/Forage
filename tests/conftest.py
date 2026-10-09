@@ -30,6 +30,7 @@ Two jobs:
 
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -39,6 +40,26 @@ from pytest_socket import disable_socket
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Fail the session up front when no torch extra is installed.
+
+    Torch lives in the ``cpu`` / ``cuda`` extras, so a bare ``uv sync`` (or
+    ``--extra dev`` alone) builds an environment in which half the suite dies
+    with an unrelated-looking ImportError.
+    """
+    require_torch()
+
+
+def require_torch() -> None:
+    try:
+        importlib.import_module("torch")
+    except ImportError:
+        raise pytest.UsageError(
+            "torch is not installed — install with `uv sync --extra dev --extra cpu`"
+        ) from None
+
 
 # Cleared for every test; a test that wants one sets it with `monkeypatch`,
 # which runs after this fixture and is undone after the test.
@@ -53,6 +74,8 @@ _CLEARED_ENV_VARS = (
     "FORAGE_SEARCH_PROVIDERS",
     "FORAGE_BRAVE_API_KEY",
     "FORAGE_CACHE_HMAC_KEY",
+    "FORAGE_DEVICE",
+    "FORAGE_DEVICE_FALLBACK",
 )
 
 

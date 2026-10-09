@@ -729,7 +729,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved fifty-nine times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved sixty-three times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -795,11 +795,15 @@ were recorded at their implementation boundaries:
 | `release-padding-gate` US-001 | `23444fe4…` | Fifty-seventh, **the eighteenth sanitization-behaviour-changing rotation**: the confusable-fold limit is `max(2n, n + 256)` (was 4n) and a refused fold is a **BLOCK** (penalty 0.0, `encoded_payload` flag kept) where it was a SUSPICIOUS flag; `/search` omits the result as `structural_blocked` with the field's name. `stage2_structural.py` and `orchestrator.py` move (each reverted alone; all-reverted control reproduces `d582f8da…` under default, `config.yaml` and `bench/config.yaml`). GOVERNANCE ruling (m), no bump; corpus baseline, floors and cassettes byte-unchanged. |
 | `release-1-3-0` US-003 | `91455b21…` | Fifty-eighth, **not a sanitization-behaviour change**: `contract.py` (final 1.4.0 entry) and `orchestrator.py` (a stale comment) move among the hashed sources, both text only. Each read-only reversal against `616beed` gives `53280032…` (contract alone) and `78c55633…` (orchestrator alone); the both-reverted control reproduces `23444fe4…` under default, `config.yaml` and `bench/config.yaml`. |
 | v1.3.0 validation fix (2026-10-07-003) | `2c6d0382…` | Fifty-ninth, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.4.0 entry no longer calls 256 the announced next default). A read-only whole-file reversal against `2ab79d0` reproduces `91455b21…` under default, `config.yaml` and `bench/config.yaml`. |
+| `inference-device` US-004 | `6a0fcaad…` | Sixtieth, **not a sanitization-behaviour change at shipped defaults**: `stage3_promptguard.py` (maps `PromptGuardUnavailableError` to `unavailable_result`) and `orchestrator.py` (step 8 never caches `unavailable_allowed` while the classifier was loaded) move. Each read-only reversal against `bc1c971` gives `f081a4e1…` (stage 3 alone) and `ed928917…` (orchestrator alone); the both-reverted control reproduces `2c6d0382…` under default, `config.yaml` and `bench/config.yaml`. |
+| `inference-surface` US-001 | `396ea4bf…` | Sixty-first, **not a sanitization-behaviour change**: only `contract.py` moves (contract `1.5.0`: `/health.promptguard_device`, `promptguard_requested_device`, reasons `promptguard_device_failover` and `promptguard_device_oom`). A read-only whole-file reversal against `bef918e` reproduces `6a0fcaad…` under default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` is not hashed. |
+| `inference-surface` US-002 | `2384820b…` | Sixty-second, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.5.0 entry names `/metrics.model` `device_failovers`, `oom_batch_reductions`, `oom_refusals`, `effective_batch_size`). A read-only whole-file reversal against `fd10964` reproduces `396ea4bf…` under default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` and `promptguard/classifier.py` are not hashed. |
+| `inference-surface` US-003 | `02f7abcf…` | Sixty-third, **not a sanitization-behaviour change at shipped defaults**: only `orchestrator.py` moves (active device in `cache_policy_fingerprint`, step 8 skips the write if it changed). A read-only reversal against `3acbb81` reproduces `2384820b…` under default, `config.yaml` and `bench/config.yaml`. The `device@cuda` revision input is a no-rotation for cpu (`sanitizer_revision.py` is unhashed); cuda is `280511c1…`. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Thirty-nine of the fifty-nine rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Forty-one of the sixty-three rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),
@@ -933,23 +937,28 @@ transformers/torch).
 
 ---
 
-### `uv.lock` must stay CPU-pinned — `grep nvidia- uv.lock` has to come back empty
+### The CUDA payload must stay inside the `cuda` extra — check the lock's scope, not its text
 
-**Location:** `pyproject.toml` (`[[tool.uv.index]]` + `[tool.uv.sources]`), `uv.lock`
+**Location:** `pyproject.toml` (`[[tool.uv.index]]` + `[tool.uv.sources]`), `uv.lock`,
+`scripts/check_lock_cuda_scope.py`
 **Severity:** 🟡 Medium
-**Added:** 2026-09-07 (forage-repo-bootstrap US-004)
+**Added:** 2026-09-07 (forage-repo-bootstrap US-004); rewritten 2026-10-09 (feature-unified-image US-003)
 
 **What happens:**
-Resolving torch from plain PyPI drags in **15 `nvidia-*` CUDA packages (~2.7 GB)** that no
-Forage lane needs. The pinned `pytorch-cpu` index plus a `sys_platform == 'linux'` marker
-keeps them out.
+Resolving torch from plain PyPI drags in **15 `nvidia-*` CUDA packages (~2.7 GB)**. Since the
+single-image ruling the lock *does* carry them — for the `cuda` extra on x86_64 Linux only,
+which the amd64 image installs. Three explicit torch sources keep them there: `cpu` extra → CPU
+index, `cuda` extra → `pytorch-cu130` on x86_64 Linux, `cuda` extra → CPU index elsewhere.
+`grep nvidia- uv.lock` is therefore no longer a meaningful check.
 
 **Why it matters:**
-The *image* is unaffected — its Dockerfile pip-installs from the CPU index and never reads
-the lock. The cost lands entirely on developer `uv sync`s and every CI job. Re-locking
-without the index config silently reintroduces it.
+The image *does* read the lock (`uv sync --locked`, since `forage-ci-and-image` US-003; the old
+claim that it pip-installed from the CPU index was already false). A dropped source, or a re-lock
+without the index config, silently puts the CUDA payload into the `cpu` profile every developer
+sync and CI job uses, or puts PyPI's CUDA torch into the arm64 image.
 
-**Check after any dependency change:** `grep nvidia- uv.lock` → no output.
+**Check after any dependency change:** `uv run python -m scripts.check_lock_cuda_scope` → no
+violations.
 
 ---
 

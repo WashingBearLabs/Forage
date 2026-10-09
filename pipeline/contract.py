@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
-CONTRACT_VERSION = "1.4.0"
+CONTRACT_VERSION = "1.5.0"
 """The retrieval sidecar's wire-shape version, carried on ``/health``.
 
 Bump MAJOR when a field is removed/renamed or its semantics change; bump
@@ -201,6 +201,21 @@ MINOR when fields are only added.
   (GOVERNANCE ruling (m)). Every addition above is additive except the
   placeholder-key drop (ruling (l)); a consumer comparing MAJOR keeps working
   untouched.
+* ``1.5.0`` — ``GET /health`` gains ``promptguard_device`` (the active device,
+  ``cpu`` or ``cuda``, ``null`` until the classifier is loaded or when its device
+  cannot be read) and ``promptguard_requested_device`` (the ``FORAGE_DEVICE``
+  this start resolved, always present), and ``degraded_reasons`` gains
+  ``promptguard_device_failover`` (``cuda`` requested, model running on ``cpu``)
+  and ``promptguard_device_oom`` (a GPU out-of-memory refusal is latched under
+  ``FORAGE_DEVICE_FALLBACK=refuse``). These are the first reasons raised with
+  the classifier loaded that are not about the cache; the failover reason never
+  accompanies ``promptguard_unavailable``. Every addition is additive; a consumer
+  comparing MAJOR keeps working untouched, and one that rejects unknown
+  ``degraded_reasons`` members must learn the two new ones. ``GET /metrics``'s
+  ``model`` section gains ``device_failovers``, ``oom_batch_reductions`` and
+  ``oom_refusals`` (counters, ``0`` without a classifier snapshot) and
+  ``effective_batch_size`` (windows per GPU forward pass; ``null`` on ``cpu`` or
+  without a snapshot); all additive.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
@@ -218,8 +233,17 @@ DegradedReason = Literal[
     "promptguard_unavailable",
     "cache_unavailable",
     "cache_unauthenticated",
+    "promptguard_device_failover",
+    "promptguard_device_oom",
 ]
 """Every reason ``/health`` may list in ``degraded_reasons``.
+
+``promptguard_device_failover`` and ``promptguard_device_oom`` (contract 1.5.0)
+are the first reasons raised while the classifier **is loaded** that are not
+about the cache: the first means ``cuda`` was requested and the model is
+running on ``cpu``; the second means a GPU out-of-memory refusal is latched
+under ``FORAGE_DEVICE_FALLBACK=refuse``. The failover reason never accompanies
+``promptguard_unavailable``.
 
 ``HealthResponse.degraded_reasons`` is typed ``list[DegradedReason]``, so this
 alias is not documentation — it is a **response-validation gate**. A reason
@@ -233,6 +257,8 @@ disagree.
 DEGRADED_PROMPTGUARD_UNAVAILABLE: DegradedReason = "promptguard_unavailable"
 DEGRADED_CACHE_UNAVAILABLE: DegradedReason = "cache_unavailable"
 DEGRADED_CACHE_UNAUTHENTICATED: DegradedReason = "cache_unauthenticated"
+DEGRADED_PROMPTGUARD_DEVICE_FAILOVER: DegradedReason = "promptguard_device_failover"
+DEGRADED_PROMPTGUARD_DEVICE_OOM: DegradedReason = "promptguard_device_oom"
 
 DEGRADED_REASONS = frozenset(get_args(DegradedReason))
 

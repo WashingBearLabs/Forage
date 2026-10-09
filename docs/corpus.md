@@ -152,6 +152,79 @@ new file: delete the old one in the same commit.
 The gate cannot detect a real-model load failure: it measures replayed scores.
 `/health.promptguard_loaded` remains the runtime truth.
 
+### Backend parity
+
+A cassette holds no text, so a backend (a GPU, a batch size) is proven by
+re-driving the corpus with the live classifier and comparing it with a replay of
+the committed cassette. The tool drives every record twice through the real
+pipeline: once with the live classifier, once with the cassette, and compares
+the stage-3 verdict tuple per record, route and config
+(`outcome`, `injection_detected`, `promptguard_state`, `omit_reason`, `refusal`,
+`status_code`). Scores are compared per text hash and reported as drift, never
+as a verdict.
+
+```bash
+unset FORAGE_MODEL_ID FORAGE_MODEL_REVISION FORAGE_DEVICE FORAGE_DEVICE_FALLBACK
+read -rs HF_TOKEN && export HF_TOKEN
+# The control run: CPU against the CPU cassette. Expect zero drift and exit 0.
+uv run python -m scripts.corpus.parity --model-id meta-llama/Llama-Prompt-Guard-2-22M \
+    --json /tmp/parity-cpu.json
+# A GPU run at the shipped batch size, then the same at batch 1.
+uv run python -m scripts.corpus.parity --model-id meta-llama/Llama-Prompt-Guard-2-22M \
+    --device cuda --batch-size 16 --json /tmp/parity-cuda-16.json
+uv run python -m scripts.corpus.parity --model-id meta-llama/Llama-Prompt-Guard-2-22M \
+    --device cuda --batch-size 1 --json /tmp/parity-cuda-1.json
+unset HF_TOKEN
+```
+
+`--batch-size` defaults to 1, and `--device cpu` refuses any other value (exit 2):
+batching is GPU-only. The cassette is chosen by the manifest pin for
+`--model-id`; no cassette, or one at another revision, is a refusal.
+
+**The control run.** CPU at batch 1 reproduces the recording, so every drift
+figure is 0 and nothing changes verdict. A control run that is not clean means the
+cassette is stale or the environment differs (torch version, threads), not that
+the tool is wrong; re-record first.
+
+**Reading batch 16 against batch 1.** The two GPU runs are paired. Batch 1 isolates
+the device (CUDA kernels against the CPU recording); batch 16 adds padding and
+batched kernels on top. Drift of about 1e-4 to 1e-3 on both is float noise. A verdict
+change or a threshold crossing at batch 16 that batch 1 does not show is a batching
+fault. The same change at both is a device fault. The long-text check is the direct
+live-against-live comparison of batch 1 with the requested batch.
+
+**The run must have happened as requested.** At the end the tool reads the
+classifier's device state and exits 1 if it failed over to CPU, halved the batch
+after an out-of-memory error, ended at another batch size, or ran on another
+device. A "batch 16, cuda" result that was partly batch 4 or partly CPU proves
+nothing. The same check is repeated after the long-text check.
+
+**The long-text check.** The corpus reaches 11 windows at most, so it never crosses
+a second batch. The tool generates a benign text (a fixed invented vocabulary; no
+corpus text) of `2 x batch + 3` windows, calibrates its length until the classifier
+reports exactly that many at batch 1, then classifies it at the requested batch on the
+same loaded instance. A different window count, or any window whose verdict crosses
+the shipped threshold between the two runs, exits 1; the largest window drift is reported.
+
+| Exit | Meaning |
+|------|---------|
+| 0 | clean |
+| 1 | verdict change, window-count mismatch, unrecorded sha, OOM event, failover, device or batch mismatch, or a long-text count mismatch or threshold crossing (`failures` in the JSON names each) |
+| 2 | refusal; one reason word on stderr, nothing run |
+
+**Unrecorded and never-produced hashes.** A text the live drive classified that the
+cassette lacks is *unrecorded*: the run exits 1 (re-record). The replay drive still
+completes over the records whose texts are all recorded, and the excluded record ids
+are listed with their hashes. A cassette hash no record produced is *never-produced*
+and is reported for information only. **Near-threshold** ids (a live window score
+within one hundredth of the shipped threshold) are listed and never affect the exit code.
+
+The JSON report holds ids, hashes and numbers only, never corpus text: device, torch
+version and precision mode, requested and effective batch, OOM and failover counters,
+records driven, max and p99 window drift, page-max drift, verdict changes (id, route,
+config, changed fields), near-threshold ids, unrecorded and never-produced hashes and the
+long-text result.
+
 ## The gate
 
 `tests/test_corpus_gate.py` replays the whole corpus under every committed

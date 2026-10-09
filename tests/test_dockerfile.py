@@ -486,6 +486,46 @@ class TestLockDrivenInstall:
                 "nothing has linted, type-checked or tested."
             )
 
+    def test_the_extra_is_selected_inside_the_run_from_the_architecture(
+        self, instructions: list[str]
+    ) -> None:
+        sync = next(line for line in instructions if "uv sync" in line)
+        assert "dpkg --print-architecture" in sync
+        assert "TARGETARCH" not in sync
+        assert re.search(r"amd64\)\s*extra=cuda\s*;;", sync)
+        assert re.search(r"arm64\)\s*extra=cpu\s*;;", sync)
+        assert re.search(r'\*\)\s*echo "unsupported architecture .*?exit 1', sync)
+        assert '--extra "${extra}"' in sync
+        assert "--no-dev" in sync
+
+    def test_the_content_check_runs_per_architecture_and_is_cleaned_up(
+        self, instructions: list[str]
+    ) -> None:
+        copies = _instructions_named(instructions, "COPY")
+        assert any(
+            "scripts/image_content_check.py" in c
+            and "scripts/cuda_payload_allowlist.txt" in c
+            for c in copies
+        )
+        run = next(
+            line
+            for line in instructions
+            if "image_content_check.py" in line and line.startswith("RUN")
+        )
+        assert "dpkg --print-architecture" in run
+        assert "cuda_payload_allowlist.txt" in run
+        assert "rm -rf /tmp/image-check" in run
+        assert "TARGETARCH" not in run
+
+    def test_the_content_check_files_survive_dockerignore(self) -> None:
+        text = DOCKERIGNORE_PATH.read_text().splitlines()
+        for path in (
+            "scripts/image_content_check.py",
+            "scripts/cuda_payload_allowlist.txt",
+        ):
+            assert f"!{path}" in text
+            assert text.index(f"!{path}") > text.index("scripts/")
+
     def test_lock_is_copied_into_the_build(self, instructions: list[str]) -> None:
         assert any(
             "uv.lock" in text for text in _instructions_named(instructions, "COPY")

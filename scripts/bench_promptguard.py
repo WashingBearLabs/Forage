@@ -468,6 +468,10 @@ def _run(
                 "contract_version",
             )
         },
+        **{
+            key: health.get(key)
+            for key in ("promptguard_device", "promptguard_requested_device")
+        },
     }
     name = options.input_name
     document = one if name == "1w" else budget

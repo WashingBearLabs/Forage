@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.4.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.5.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, add a golden fixture
 under `tests/golden/` (older ones are retained, never edited), and note the change for the
 consuming repo.
@@ -127,7 +127,7 @@ reason. Any new startup or cache code must preserve this.
 ## Development
 
 ```bash
-uv sync --extra dev     # environment (creates .venv)
+uv sync --extra dev --extra cpu     # environment (creates .venv)
 uv run pytest           # hermetic blocking CI gate; 5557 collected, no xfails (count: TESTING_GUIDE.md)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
@@ -169,7 +169,7 @@ execute here". Record work done here in this repo's Implementation Notes, not in
 originals.
 
 `kit_tools/worktree.yaml` is the environment contract the orchestrator reads
-(`env_bootstrap: uv sync --extra dev`, `run_prefix: uv run`). Keep it accurate — a missing
+(`env_bootstrap: uv sync --extra dev --extra cpu`, `run_prefix: uv run`). Keep it accurate — a missing
 `run_prefix` makes the orchestrator run system Python and report false regressions.
 
 ---
@@ -732,6 +732,43 @@ moves, rewording the final 1.4.0 entry so it no longer calls 256 "the announced 
 default" (the owner ruling shipped 64). A read-only whole-file reversal against `2ab79d0`
 reproduces `91455b21…` under default, `config.yaml` and `bench/config.yaml`. Text only;
 old cache keys invalidate. Full values: `docs/bootstrap-notes.md`.
+
+The sixtieth rotation is `2c6d0382…` → `6a0fcaad…` for `inference-device` US-004 —
+**not a sanitization-behaviour change at shipped defaults** (`FORAGE_DEVICE=cpu`): GPU
+out-of-memory handling. `stage3_promptguard.py` maps `PromptGuardUnavailableError` to
+`unavailable_result` for the request's tier (token `promptguard_oom_refused`), and `orchestrator.py`
+step 8 refuses to cache any `unavailable_allowed` body while the classifier was loaded at entry,
+beside the existing `wait_timed_out` guard. Each file was reverted alone, read-only, against
+`HEAD` (`f081a4e1…` with only stage 3 reverted, `ed928917…` with only the orchestrator reverted),
+with a both-reverted control reproducing `2c6d0382…` under default, `config.yaml` and
+`bench/config.yaml`. The classifier (`promptguard/classifier.py`) is not hashed. Not replayed to
+Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The sixty-first rotation is `6a0fcaad…` → `396ea4bf…` for `inference-surface` US-001 —
+**not a sanitization-behaviour change**: contract `1.5.0` adds `/health.promptguard_device`,
+`promptguard_requested_device` and the degraded reasons `promptguard_device_failover` and
+`promptguard_device_oom`. `contract.py` is the only hashed file that moves; a read-only
+whole-file reversal against `bef918e` reproduces `6a0fcaad…` under default, `config.yaml` and
+`bench/config.yaml`. `retrieval_app.py` (the handler, `_device_snapshot`) is not hashed. Old
+cache keys invalidate. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The sixty-second rotation is `396ea4bf…` → `2384820b…` for `inference-surface` US-002 —
+**not a sanitization-behaviour change**: the held `1.5.0` entry in `pipeline/contract.py` names
+`/metrics.model`'s `device_failovers`, `oom_batch_reductions`, `oom_refusals` and
+`effective_batch_size`. `contract.py` is the only hashed file that moves; a read-only whole-file
+reversal against `fd10964` reproduces `396ea4bf…` under default, `config.yaml` and
+`bench/config.yaml`. Old cache keys invalidate. Not replayed to Poppy. Full values:
+`docs/bootstrap-notes.md`.
+
+The sixty-third rotation is `2384820b…` → `02f7abcf…` for `inference-surface` US-003 —
+**not a sanitization-behaviour change at shipped defaults**: only `pipeline/orchestrator.py`
+moves among the hashed sources (the active device read at entry feeds
+`cache_policy_fingerprint(active_device=...)`, and step 8 skips the cache write when the device
+re-read there differs). A read-only whole-file reversal against `HEAD` reproduces `2384820b…` under
+default, `config.yaml` and `bench/config.yaml`. The new `device@cuda` revision input adds **no
+rotation for cpu** (`sanitizer_revision.py` is not a hashed source and `cpu`/unset hash nothing); the
+cuda value is `280511c1bfd3c801091bae9fa1901038b54ef43db663b7e99c5457c3d66da6a6`. Old cache keys
+invalidate. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

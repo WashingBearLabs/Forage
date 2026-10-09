@@ -2641,6 +2641,88 @@ sanitization-behaviour change; only `contract.py` moves among the hashed sources
 Goldens and `contract/openapi.yaml` are unchanged: the docstring is not part of the OpenAPI document. Not replayed
 to Poppy.
 
+### The sixtieth rotation: GPU out-of-memory handling (`inference-device` US-004)
+
+`classify_windows` on a cuda snapshot now halves the shared batch on `torch.cuda.OutOfMemoryError`, and at
+batch 1 either swaps in a CPU copy built from host-side tensors (fallback `cpu`) or raises the new
+`PromptGuardUnavailableError` (`refuse`, or a failed copy build). `stage3_promptguard.py` maps that error to
+`unavailable_result` for the request's tier, and `orchestrator.py` step 8 adds
+`not (promptguard_state == "unavailable_allowed" and classifier_loaded)` beside `not wait_timed_out`, so an
+OOM-refused body is never cached. This is **not** a sanitization-behaviour change at shipped defaults: a CPU
+deployment never reaches the new path. Under `refuse` a fail-open tier is served unscanned, as for any
+unavailable classifier.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`bc1c971`) / both files reverted (= all-reverted control) | `2c6d0382cd0f94158a64710db7b5beb8b26ea411d4f65eabd0d0ca03c1572591` |
+| `orchestrator.py` reverted alone | `ed9289171b483dcc61486ebf85f8e837851cdab6a04a794e8c2289ccaddbe64a` |
+| `stage3_promptguard.py` reverted alone | `f081a4e10e1d185ca206302febf841336376f0bfeaeb5df29a3ea768a291bf72` |
+| After | `6a0fcaad00a0cc918275630b3bf496efa45a98c5888a6fa60d2f0c223310a8da` |
+
+Every reversal was read-only: the working tree was copied to a temp directory and the file replaced by
+`git show bc1c971:pipeline/<file>`. Contract and goldens are unchanged. Not replayed to Poppy.
+
+### The sixty-first rotation: `/health` device fields and reasons, contract 1.5.0 (`inference-surface` US-001)
+
+`HealthResponse` gains `promptguard_device` (active device, `null` until loaded or when the loaded classifier
+has no `DeviceState`) and `promptguard_requested_device` (boot-resolved `FORAGE_DEVICE`, always present). The
+handler lists `promptguard_device_failover` (requested `cuda`, active `cpu`, failed over) and
+`promptguard_device_oom` (`oom_refused` latched with active `cuda`); the failover reason never accompanies
+`promptguard_unavailable`. A tolerant `_device_snapshot` returns `None` for `MagicMock`, stub and replay
+classifiers, so no fabricated value reaches `/health`. These are the first degraded reasons raised with a
+loaded classifier that are not about the cache. Contract `1.5.0` is a MINOR; `tests/golden/contract_1_5_0.json`
+is new and goldens 1.0.0-1.4.0 are untouched. **Not** a sanitization-behaviour change.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`bef918e`) / `contract.py` reverted (= all-reverted control) | `6a0fcaad00a0cc918275630b3bf496efa45a98c5888a6fa60d2f0c223310a8da` |
+| After | `396ea4bfc838a708fb9f5b99324f4f1d9ab35c7215e2901c576c6e09a4a221aa` |
+
+`contract.py` is the only hashed file that changed; the reversal was read-only (a temp copy with
+`git show bef918e:pipeline/contract.py`). OpenAPI anchor is now `f71909b720e38dee3df958779008b53962419ddc4ae0c03ef2e5560f3133ce75`.
+Not replayed to Poppy.
+
+### The sixty-second rotation: `/metrics` device fields (`inference-surface` US-002)
+
+`ModelMetricsResponse` gains `device_failovers`, `oom_batch_reductions`, `oom_refusals` (counters, `0`
+without a classifier snapshot) and `effective_batch_size` (`null` on `cpu` or without a snapshot), read
+from `_device_snapshot(classifier)` — `DeviceState` now carries the three counters (defaulted to 0). The
+handler builds its dict field by field, so the model is never constructed from `ModelMetrics`; the parity
+test excludes `_DEVICE_FIELDS`. The metrics models are not in `_SCHEMA_MODELS`, so the 1.5.0 golden and
+`_EXPECTED_ONE_FIVE_ZERO_DIFF` are unchanged. The bench row copies `promptguard_device` and
+`promptguard_requested_device` from `/health`. **Not** a sanitization-behaviour change.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`fd10964`) / `contract.py` reverted (= all-reverted control) | `396ea4bfc838a708fb9f5b99324f4f1d9ab35c7215e2901c576c6e09a4a221aa` |
+| After | `2384820b1b8b83b2dcc63099aba6ab529b550faa6b47c42af930bc16a2fb6584` |
+
+`contract.py` is the only hashed file that changed; the reversal was read-only. OpenAPI anchor is now
+`9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`. Not replayed to Poppy.
+
+### The sixty-third rotation: active device in the cache key (`inference-surface` US-003)
+
+`cache_policy_fingerprint` takes a required `active_device: str | None`, read at `/retrieve` entry from
+the classifier's device state through `promptguard.classifier.device_snapshot` (the tolerant accessor,
+moved out of `retrieval_app.py` so the orchestrator can import it; `retrieval_app._device_snapshot` is
+the same function). Step 8 re-reads it and skips the cache write when it differs from the entry value,
+including `None` against a value. **Not** a sanitization-behaviour change at shipped defaults.
+
+`derive_sanitizer_revision` also gains the `device@cuda` input (after the model identity, only when
+`requested_device_token(os.environ) == "cuda"`). `sanitizer_revision.py` is not a `_REVISION_SOURCES`
+member, so this is a **no-rotation** input for cpu (the `hardening-promptguard-86m` US-001 precedent);
+every call site reads the same environment, so the lifespan value, `/health` and both `/extract` bodies
+agree.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`3acbb81`) / `orchestrator.py` reverted (= all-reverted control; includes the cpu device input) | `2384820b1b8b83b2dcc63099aba6ab529b550faa6b47c42af930bc16a2fb6584` |
+| After, `FORAGE_DEVICE` unset or `cpu` | `02f7abcf34ae7bc5781f0e90f317aab59c7f21a3b5cc8e4fba5cfdf9606aaa67` |
+| After, `FORAGE_DEVICE=cuda` | `280511c1bfd3c801091bae9fa1901038b54ef43db663b7e99c5457c3d66da6a6` |
+| `orchestrator.py` reverted, `FORAGE_DEVICE=cuda` | `034570d2a95fab708b9e7dba0502e5ae8571ae61d3f7c86f7f17a7e2bd3d504d` |
+
+`orchestrator.py` is the only hashed file that changed; the reversal was read-only. Not replayed to Poppy.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

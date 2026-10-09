@@ -681,16 +681,30 @@ class TestLintJob:
         )
 
     def test_lint_syncs_against_the_committed_lock(self, jobs: dict[str, Any]) -> None:
-        assert "--locked" in _run_text(jobs, "lint"), (
+        assert "--extra cpu --locked" in _run_text(jobs, "lint"), (
             "uv sync must run with --locked so a dependency edit that skipped "
             "re-locking fails CI instead of resolving something else"
         )
 
-    def test_lint_asserts_lock_is_cpu_only(self, jobs: dict[str, Any]) -> None:
+    def test_lint_asserts_the_synced_environment_has_no_cuda_wheels(
+        self, jobs: dict[str, Any]
+    ) -> None:
         run_text = _run_text(jobs, "lint")
-        assert "nvidia-" in run_text and "uv.lock" in run_text, (
-            "lint must grep the committed uv.lock for nvidia-* CUDA wheels — "
+        assert "^(nvidia-|cuda-|triton\\b)" in run_text, (
+            "lint must grep the installed-package listing for CUDA wheels — "
             "a warm uv cache makes job-log inspection alone vacuous"
+        )
+        assert "grep -q 'nvidia-' uv.lock" not in run_text, (
+            "the lock now carries the cuda extra's wheels by design; only the "
+            "synced cpu environment is asserted CUDA-free"
+        )
+
+    def test_lint_runs_the_cuda_scope_checker(self, jobs: dict[str, Any]) -> None:
+        assert "uv run python -m scripts.check_lock_cuda_scope" in _run_text(
+            jobs, "lint"
+        ), (
+            "lint must run the behavioural lock checker — the installed-package "
+            "grep cannot see the cuda extra or the arm64 torch variant"
         )
 
     def test_uv_setup_enables_caching(self, jobs: dict[str, Any]) -> None:
@@ -945,7 +959,7 @@ class TestTypecheckJob:
     def test_typecheck_syncs_against_the_committed_lock(
         self, jobs: dict[str, Any]
     ) -> None:
-        assert "--locked" in _run_text(jobs, "typecheck"), (
+        assert "--extra cpu --locked" in _run_text(jobs, "typecheck"), (
             "pyright's answers depend on the exact dependency versions it "
             "sees, so the sync must come from the committed lock"
         )
@@ -1099,7 +1113,7 @@ class TestTestJob:
     def test_test_job_syncs_against_the_committed_lock(
         self, jobs: dict[str, Any]
     ) -> None:
-        assert "--locked" in _run_text(jobs, "test"), (
+        assert "--extra cpu --locked" in _run_text(jobs, "test"), (
             "The suite must run against the versions the lock pins, or a green "
             "run says nothing about what a consumer installs"
         )
@@ -1718,7 +1732,7 @@ class TestSmokeJob:
         )
 
     def test_smoke_syncs_against_the_committed_lock(self, jobs: dict[str, Any]) -> None:
-        assert "--locked" in _run_text(jobs, "smoke"), (
+        assert "--extra cpu --locked" in _run_text(jobs, "smoke"), (
             "The smoke's expectations are Python objects imported from this "
             "tree, so they must resolve against the versions the lock pins"
         )
@@ -1737,6 +1751,66 @@ class TestSmokeJob:
         assert with_block.get("enable-cache") is True, (
             "setup-uv must enable caching in every job on the free tier"
         )
+
+
+class TestSmokeFailoverRuns:
+    """US-006: runs 2 and 3 prove both failover policies without a GPU."""
+
+    @staticmethod
+    def _step(jobs: dict[str, Any], marker: str) -> str:
+        for step in _steps(jobs, "smoke"):
+            if marker in str(step.get("name", "")):
+                return str(step.get("run", ""))
+        raise AssertionError(f"no smoke step named like {marker!r}")
+
+    def test_run_2_asserts_the_requested_device_a_null_device_and_the_token(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = self._step(jobs, "Failover run 2")
+        assert "-e FORAGE_DEVICE=cuda" in run
+        assert "FORAGE_DEVICE_FALLBACK" not in run, "run 2 uses the default policy"
+        assert "--expect-requested-device cuda" in run
+        assert "--expect-device null" in run
+        assert "promptguard_device_probe result=unavailable" in run
+        assert "--timeout-seconds" in run and "SMOKE_TIMEOUT_SECONDS" in run
+
+    def test_run_2_does_not_collide_with_run_1(self, jobs: dict[str, Any]) -> None:
+        run = self._step(jobs, "Failover run 2")
+        assert "-p 8021:8020" in run
+        assert '--name "${SMOKE_CONTAINER}-cuda-cpu"' in run
+
+    def test_run_3_requires_a_nonzero_exit_within_the_budget(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        run = self._step(jobs, "Failover run 3")
+        assert "-e FORAGE_DEVICE=cuda" in run
+        assert "-e FORAGE_DEVICE_FALLBACK=refuse" in run
+        assert 'timeout "${SMOKE_TIMEOUT_SECONDS}" docker wait' in run
+        assert '"${code}" = "0"' in run, "a zero exit must fail the step"
+
+    def test_run_3_greps_the_fixed_error_message(self, jobs: dict[str, Any]) -> None:
+        run = self._step(jobs, "Failover run 3")
+        assert (
+            "DeviceConfigurationError: FORAGE_DEVICE=cuda with "
+            "FORAGE_DEVICE_FALLBACK=refuse requires a usable GPU" in run
+        )
+
+    def test_the_grepped_message_is_the_one_the_service_raises(self) -> None:
+        source = (_REPO_ROOT / "retrieval_app.py").read_text(encoding="utf-8")
+        assert '"FORAGE_DEVICE=cuda with FORAGE_DEVICE_FALLBACK=refuse "' in source
+        assert '"requires a usable GPU"' in source
+
+    def test_all_three_containers_are_dumped_and_removed(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        for marker in ("docker logs", "docker rm"):
+            text = "\n".join(
+                str(step.get("run", ""))
+                for step in _steps(jobs, "smoke")
+                if marker in str(step.get("run", ""))
+                and ("failure()" in str(step.get("if", "")) or marker == "docker rm")
+            )
+            assert "-cuda-cpu" in text and "-cuda-refuse" in text, marker
 
 
 # ---------------------------------------------------------------------------
@@ -3461,7 +3535,9 @@ class TestSearxngSmokeJob:
         )
 
     def test_the_smoke_syncs_with_locked(self, jobs: dict[str, Any]) -> None:
-        assert "uv sync --extra dev --locked" in _run_text(jobs, "searxng-smoke"), (
+        assert "uv sync --extra dev --extra cpu --locked" in _run_text(
+            jobs, "searxng-smoke"
+        ), (
             "Reuse the same `--locked` sync as every other lane: the smoke "
             "imports from this tree and must resolve against the pinned "
             "dependency versions"
@@ -3926,6 +4002,65 @@ class TestActionsStorageFootprint:
 
 
 _SETUP_UV = "astral-sh/setup-uv"
+
+# `forage-inference-backends` US-005: budgets for the ~3 GB amd64 dependency layer.
+_IMAGE_JOBS = ["build-amd64", "secret-grep", "smoke", "publish"]
+# Initial values, set before the larger image existed. After the PR's first
+# green run each is re-pinned to ceil(1.5 x measured) (CI_CD.md, "Timeout and
+# cache budgets"); change the number here and in ci.yml together.
+_TIMEOUT_MINUTES = {"build-amd64": 90, "secret-grep": 45, "smoke": 45, "publish": 90}
+_MIN_FREE_KB = 20 * 1024 * 1024
+
+
+class TestImageJobBudgets:
+    """Disk, timeout and cache budgets for the larger image (US-005)."""
+
+    @pytest.mark.parametrize("job", _IMAGE_JOBS)
+    def test_every_image_job_frees_and_asserts_20_gib(
+        self, jobs: dict[str, Any], job: str
+    ) -> None:
+        steps = [
+            step
+            for step in _steps(jobs, job)
+            if step.get("name") == "Free runner disk space"
+        ]
+        assert len(steps) == 1, f"{job} needs exactly one disk-free step"
+        run = str(steps[0]["run"])
+        assert "rm -rf /usr/share/dotnet" in run
+        assert "df --output=avail" in run
+        assert str(_MIN_FREE_KB) in run, f"{job} must assert >= 20 GiB free"
+        assert "exit 1" in run
+        names = [step.get("name") for step in _steps(jobs, job)]
+        consumers = [n for n in names if n and ("Load the image" in n or "Build" in n)]
+        assert names.index("Free runner disk space") < names.index(consumers[0]), (
+            f"{job} must free disk before it loads or builds"
+        )
+
+    @pytest.mark.parametrize("job", _IMAGE_JOBS)
+    def test_timeouts_are_pinned(self, jobs: dict[str, Any], job: str) -> None:
+        assert jobs[job]["timeout-minutes"] == _TIMEOUT_MINUTES[job]
+
+    def test_publish_timeout_covers_a_two_architecture_rebuild(
+        self, jobs: dict[str, Any]
+    ) -> None:
+        assert jobs["publish"]["timeout-minutes"] >= 90
+
+    def test_the_cache_decision_covers_both_scopes(self, jobs: dict[str, Any]) -> None:
+        """Decision (CI_CD.md): both scopes are kept unchanged.
+
+        Projected: build-amd64 mode=min ~3.2 GB + publish mode=max (amd64 ~3.2 GB
+        + arm64 ~0.4 GB) ~3.6 GB = ~6.8 GB, under 80% (8 GB) of the 10 GB GHA
+        limit. The Dockerfile is single-stage, so mode=max adds no layers over
+        mode=min. Re-decide from the measured figure after the first main run.
+        """
+        build: dict[str, Any] = (
+            _step_using(jobs, "build-amd64", _BUILD_ACTION).get("with") or {}
+        )
+        assert "mode=min" in str(build.get("cache-to"))
+        publish: dict[str, Any] = (
+            _step_using(jobs, "publish", _BUILD_ACTION).get("with") or {}
+        )
+        assert str(publish.get("cache-to")).strip() == "type=gha,mode=max,scope=publish"
 
 
 class TestUvCacheIsSavedFromMainOnly:

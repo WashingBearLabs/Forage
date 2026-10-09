@@ -53,13 +53,15 @@ Design principles:
 │                            # Valkey on an --internal network and probes it.
 │                            # Not in the image — the Dockerfile COPY list is explicit
 ├── config.yaml              # UA pool, trusted domains, blocklist, thresholds, limits
-├── Dockerfile               # CPU-torch image; digest-pinned base, uv.lock install,
+├── Dockerfile               # one image: CUDA torch on amd64, CPU torch on arm64;
+│                            # digest-pinned base, uv.lock install,
 │                            # secret-free (no build ARG, no baked weights), ships
 │                            # contract/ at /app/contract/, and normalized for
 │                            # reproducibility (no apt logs, no import-time .pyc)
 ├── docker-entrypoint.sh     # 17 lines: `exec "$@"`. Vault-free by design.
 ├── pyproject.toml           # uv/hatchling/ruff/pyright/pytest config
-├── uv.lock                  # CPU-pinned torch on Linux; `grep nvidia-` must stay empty
+├── uv.lock                  # torch per arch (cu130 amd64 / CPU arm64); CUDA payload only
+│                            # in the `cuda` extra (scripts/check_lock_cuda_scope.py)
 ├── pipeline/                # the five sanitization stages + orchestrator + contract
 ├── promptguard/             # Llama Prompt Guard 2: classify_windows + max-score classify
 ├── searxng/                 # the forage-searxng companion image: Dockerfile
@@ -507,7 +509,7 @@ output byte-identical) moves it to `d582f8da…`; the fifty-seventh (`release-pa
 look-alike fold BLOCKS at `max(2n, n + 256)`, `stage2_structural.py` and `orchestrator.py`, the eighteenth
 sanitization-behaviour-changing rotation) moves it to `23444fe4…`; the fifty-eighth (`release-1-3-0` US-003, the final
 1.4.0 entry and a stale comment, text only, not behaviour-changing) moves it to `91455b21…`; the fifty-ninth (the
-v1.3.0 validation fix rewording that entry, text only) moves it to `2c6d0382…`.
+v1.3.0 validation fix rewording that entry, text only) moves it to `2c6d0382…`; the sixtieth (`inference-device` US-004, GPU OOM handling in `stage3_promptguard.py` and `orchestrator.py`) moves it to `6a0fcaad…`; the sixty-first (`inference-surface` US-001, contract `1.5.0`, `contract.py` only) moves it to `396ea4bf…`.
 
 **Network reads enforce the raw ceiling before allocation.**
 `pipeline/provider_transport.py` connects both providers through HTTPX's public

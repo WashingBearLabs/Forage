@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: unified-image
-status: active
+status: completed
 session_ready: true
 depends_on: [inference-surface]
 vision_ref: "T3 — run the classifier where the hardware is: CPU and GPU from one image"
@@ -11,7 +11,8 @@ epic: forage-inference-backends
 epic_seq: 3
 epic_final: false
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-10-09
+completed: 2026-10-09
 ---
 
 # Feature Spec: Unified Image — CUDA Torch on amd64, CPU Torch on arm64, One Tag
@@ -131,22 +132,22 @@ commit leaves CI, the orchestrator worktree or a developer without torch, or red
   source and the `conflicts` table.
 
 **Acceptance Criteria:**
-- [ ] torch is only in the `cpu` and `cuda` extras (`==2.14.0`), with the conflicts table and three
+- [x] torch is only in the `cpu` and `cuda` extras (`==2.14.0`), with the conflicts table and three
       sources. `uv lock --check` passes, and the stale comment is replaced.
-- [ ] The post-change `--extra dev --extra cpu` export is identical to the pre-change `--extra dev`
+- [x] The post-change `--extra dev --extra cpu` export is identical to the pre-change `--extra dev`
       export, with the diff command recorded. `--extra cuda` gives `+cu130` under the x86_64 Linux
       marker and `+cpu` under the aarch64 Linux marker (recorded outputs).
-- [ ] Every listed sync site uses the `cpu` extra in this commit. `tests/test_ci_workflow.py` pins
+- [x] Every listed sync site uses the `cpu` extra in this commit. `tests/test_ci_workflow.py` pins
       the new strings, and `kit_tools/worktree.yaml` `env_bootstrap` is
       `uv sync --extra dev --extra cpu`. A repo grep (excluding archives) finds no extra-less
       `uv sync`; the grep is recorded.
-- [ ] The old lock-grep test and CI grep step are gone, the temporary export-based assertion passes,
+- [x] The old lock-grep test and CI grep step are gone, the temporary export-based assertion passes,
       and the widened CI environment pattern is pinned.
-- [ ] A missing torch fails the session with the install hint (test).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] A missing torch fails the session with the install hint (test).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: A behavioural CUDA-scope checker with per-class provenance
 
@@ -200,15 +201,15 @@ into the public image.
   `tests/test_ci_workflow.py`.
 
 **Acceptance Criteria:**
-- [ ] The checker enforces all four rules with marker evaluation under explicit environments, and
+- [x] The checker enforces all four rules with marker evaluation under explicit environments, and
       passes on the committed lock.
-- [ ] Each of the eight planted violations fails it (one test each). The temporary US-001 assertion
+- [x] Each of the eight planted violations fails it (one test each). The temporary US-001 assertion
       is removed.
-- [ ] CI lint runs the checker (pinned).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] CI lint runs the checker (pinned).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-003: Correct the CPU-only claims in the docs
 
@@ -235,9 +236,9 @@ equals the recorded list of expected surviving matches.
 - Docs only. No rotation.
 
 **Acceptance Criteria:**
-- [ ] Every listed site is corrected, and the grep output equals the recorded expected list.
-- [ ] The DECISIONS.md entry supersedes :522.
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Every listed site is corrected, and the grep output equals the recorded expected list.
+- [x] The DECISIONS.md entry supersedes :522.
+- [x] Full test suite passes (`uv run pytest`)
 
 ### US-004: One Dockerfile with arch-selected torch and build-time content checks
 
@@ -290,18 +291,18 @@ are unchanged on amd64. Then I install once and pick the device at install time.
   owner; do not drop CUDA.
 
 **Acceptance Criteria:**
-- [ ] The Dockerfile selects the extra inside `RUN`, with no `ARG`. `tests/test_dockerfile.py` pins
+- [x] The Dockerfile selects the extra inside `RUN`, with no `ARG`. `tests/test_dockerfile.py` pins
       the mapping and the build-time checks, and its existing assertions pass.
-- [ ] The build-time checks assert the torch suffix and the payload set per architecture, and fail
+- [x] The build-time checks assert the torch suffix and the payload set per architecture, and fail
       on mismatch.
-- [ ] The CI CPU-parity step compares the amd64 candidate with the CI `+cpu` environment and passes
+- [x] The CI CPU-parity step compares the amd64 candidate with the CI `+cpu` environment and passes
       on `==`, or the mismatch is recorded with an owner decision.
-- [ ] The gzip-sum size, uncompressed size and largest layer are recorded in Implementation Notes and
+- [x] The gzip-sum size, uncompressed size and largest layer are recorded in Implementation Notes and
       CI_CD.md, with gzip-sum ≤ 5 GB.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-005: CI disk, timeout and cache budgets for the larger image
 
@@ -336,15 +337,15 @@ the cache decision. The baseline figures are recorded.
 - **Publish.** Confirm the diff_ids layer-identity gate still matches with the large layer.
 
 **Acceptance Criteria:**
-- [ ] The baseline figures are recorded in Implementation Notes and CI_CD.md.
-- [ ] Disk-free steps asserting ≥ 20 GB exist on build-amd64, the consumers and publish. Initial
+- [x] The baseline figures are recorded in Implementation Notes and CI_CD.md.
+- [x] Disk-free steps asserting ≥ 20 GB exist on build-amd64, the consumers and publish. Initial
       `timeout-minutes` values are set (publish ≥ 90), and the cache decision covering both scopes
       is recorded, all pinned in `tests/test_ci_workflow.py`.
-- [ ] The post-PR-run timeout adjustment procedure is documented in CI_CD.md. The measured values
+- [x] The post-PR-run timeout adjustment procedure is documented in CI_CD.md. The measured values
       are filled in at PR time.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
 
 ### US-006: No-GPU failover smokes in CI
 
@@ -372,12 +373,12 @@ All are pinned in `tests/test_ci_workflow.py`.
   message, with no traceback that includes values.
 
 **Acceptance Criteria:**
-- [ ] `contract_smoke.py` supports the two device expectations (tests).
-- [ ] The smoke job runs runs 2 and 3 with the stated assertions, pinned in `tests/test_ci_workflow.py`.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `contract_smoke.py` supports the two device expectations (tests).
+- [x] The smoke job runs runs 2 and 3 with the stated assertions, pinned in `tests/test_ci_workflow.py`.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-007: The `compose/gpu.yml` overlay and the GPU install guide
 
@@ -422,14 +423,14 @@ binding are unchanged, and the base fragments are byte-unchanged.
   - **`kit_tools/docs/DEPLOYMENT.md`:** the GPU steps.
 
 **Acceptance Criteria:**
-- [ ] `compose/gpu.yml` requests one GPU and sets `FORAGE_DEVICE: cuda`, a
+- [x] `compose/gpu.yml` requests one GPU and sets `FORAGE_DEVICE: cuda`, a
       `FORAGE_DEVICE_FALLBACK` defaulting to `cpu`, and the provisional `mem_limit` default. Merged with each base fragment, ports and binding are unchanged, and the
       base fragments are byte-unchanged (tests).
-- [ ] The `docs/configuration.md` GPU section covers each listed topic. README shows the overlay
+- [x] The `docs/configuration.md` GPU section covers each listed topic. README shows the overlay
       command, and DEPLOYMENT lists the steps.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
 
 ## Edge Cases
 
@@ -462,6 +463,123 @@ binding are unchanged, and the base fragments are byte-unchanged.
   [DECISIONS.md](../arch/DECISIONS.md) :522, `compose/`
 
 ## Implementation Notes
+
+### US-001 (landed by the supervisor, 2026-10-09)
+
+- **Commit:** `bddc120`, implemented in attempt 1. Its verifier session, and attempts 2 and 3,
+  were killed by session timeouts while the host was asleep overnight (`pmset` shows Deep Idle
+  sleep from ~19:14 PDT). It was not a defect in the change. The supervisor verified the commit
+  independently in a separate worktree with its own environment, then fast-forwarded the epic
+  branch to it.
+- **Lock:** `uv lock --check` passes (uv 0.9.28, 98 packages).
+- **Install-set proof:** the pre-change `uv export --frozen --no-hashes --extra dev
+  --format requirements-txt --no-emit-project` (from `6e6fb72`) and the post-change export with
+  `--extra dev --extra cpu` were stripped of comments and blank lines, sorted, and compared with
+  `diff`. They are **identical** (77 lines each).
+- **Per-architecture torch** (`uv export --frozen --no-hashes --extra cuda`):
+  `torch==2.14.0+cu130 ; platform_machine == 'x86_64' and sys_platform == 'linux'`,
+  `torch==2.14.0+cpu ; platform_machine != 'x86_64' and sys_platform == 'linux'`,
+  `torch==2.14.0 ; sys_platform != 'linux'`.
+- **Payload scope:** `--extra dev --extra cpu` exports 0 lines matching
+  `^(nvidia-|cuda-|triton==)`. `--extra cuda` exports 19, every one under a
+  `platform_machine == 'x86_64' and sys_platform == 'linux'` marker.
+- **Sync-site grep:** `git grep -nE 'uv sync'` (excluding spec archives, specs, `SESSION_LOG.md`
+  and `bootstrap-notes.md`), filtered for lines without `--extra cpu|cuda`. Every CI sync site
+  (`ci.yml` lines 152, 265, 302, 634 and 1466) reads `uv sync --extra dev --extra cpu --locked`.
+  The remaining hits are:
+  - the Dockerfile's `uv sync --locked --no-dev`, which installs no torch until **US-004**
+    selects the extra per architecture;
+  - prose in `kit_tools/arch/*`, `CI_CD.md`, `GOTCHAS.md` and `LOCAL_DEV.md`, left for
+    **US-003**'s claims sweep.
+- **Gates:** `ruff check`, `ruff format --check` and `pyright` (0 errors) are clean. The full suite
+  gives 5664 passed and 6 skipped (5670 collected) in 377 s.
+
+### US-003 (attempt 2, 2026-10-09)
+
+- **Corrected sites:** the `Dockerfile` header (point 2); `INFRA_ARCH.md` dependency-install
+  row, size row, sizing paragraph and disk row (per-arch: arm64 ~348 MB recorded with CPU torch,
+  amd64 an estimated ~4 GB with CUDA torch, to be measured by US-004/US-005); `CODE_ARCH.md`
+  Dockerfile and `uv.lock` tree lines; `LOCAL_DEV.md` "Where torch comes from" (rewrapped) and
+  the Troubleshooting entry; the `GOTCHAS.md` lock entry, rewritten around the scope checker,
+  including its false "the image never reads the lock" claim; `CI_CD.md` lint step 3 and its
+  red-job row; and, outside the listed sites but making the same claim, `DEPLOYMENT.md`'s image
+  row, `SECURITY.md`'s dependencies paragraph and PR checklist line, `SERVICE_MAP.md`'s runtime
+  row, `TESTING_GUIDE.md`'s two lock descriptions, `docs/configuration.md`'s GPU bullet and the
+  `kit_tools/worktree.yaml` `path_links` comment (now naming the three torch sources).
+- **`docs/releases.md`:** checked, and it has **no image-size statement**. Its MB/GiB figures are
+  memory and weights sizes, plus one `aarch64` torch wheel timing that is still accurate, so
+  nothing there changed.
+- **DECISIONS:** `kit_tools/arch/DECISIONS.md` gains the 2026-10-09 entry (one image, cu130 on
+  amd64, three torch sources). The 2026-09-07 torch-CPU-index entry is marked
+  `Superseded by 2026-10-09`, and its body is kept as history.
+- **Grep gate:** `git grep -nE 'CPU-only|pytorch-cpu|no nvidia|nvidia-' -- ':!kit_tools/specs/archive'`.
+  Every surviving match is expected. Lines per file, with the reason:
+  - `uv.lock` (43): the `cuda` extra's payload packages. This is legitimate since US-001, and the
+    checker scopes it.
+  - `pyproject.toml` (5): the `pytorch-cpu` index name, its three source rows, and the source
+    comment ("macOS/Windows wheels are CPU-only on PyPI").
+  - `scripts/check_lock_cuda_scope.py` (3) and `scripts/cuda_payload_allowlist.txt` (15): the
+    checker, its payload regex and the allowlist names.
+  - `tests/test_dependency_lock.py` (18): the checker's planted-violation tests and source pins.
+  - `tests/test_ci_workflow.py` (3): the CI regex pins and the assertion message "hermetic and
+    CPU-only" (the test suite is CPU-only, not the image).
+  - `.github/workflows/ci.yml` (4): the lint step's installed-package grep and echo, plus the
+    `test` job comment "hermetic and CPU-only" (about the suite).
+  - `kit_tools/arch/DECISIONS.md` (10): the superseded 2026-09-07 entry (4, kept as history) and
+    the new 2026-10-09 entry (6).
+  - `kit_tools/arch/INFRA_ARCH.md` (1), `kit_tools/docs/CI_CD.md` (2), `kit_tools/docs/GOTCHAS.md` (2),
+    `kit_tools/docs/LOCAL_DEV.md` (6): corrected sentences that now describe the three sources,
+    the `cpu`-profile export check and the cpu-environment troubleshooting entry.
+  - `kit_tools/worktree.yaml` (2): the corrected `path_links` comment naming the sources.
+  - Specs: `epic-forage-inference-backends.md` (2, the CPU-only *wheel* and *host*),
+    `feature-gpu-validation.md` (2, `nvidia-smi`), and this spec itself (23 after these notes; it defines the work and records this list).
+  - `kit_tools/SESSION_LOG.md` does not match the pattern. Its "CPU-pinned" lines are history.
+- **Left for later stories:** the `ci.yml` build-job comment "~200 MB of CPU torch" (budgets:
+  US-005) does not match the pattern. The Dockerfile's `uv sync --locked --no-dev` still selects
+  no extra, so it installs no torch until **US-004**. The header now describes the image US-004
+  delivers.
+- No hashed source moved, so there is no rotation.
+
+### US-004 (attempt 1, 2026-10-09)
+
+- **Dockerfile.** The sync RUN maps `dpkg --print-architecture` amd64 -> `cuda`, arm64 -> `cpu`,
+  anything else exits 1 ("unsupported architecture"), then `uv sync --locked --no-dev
+  --no-install-project --extra "${extra}"`. No ARG. The content check is
+  `scripts/image_content_check.py` (torch suffix `+cu130`/`+cpu` per arch; installed
+  `nvidia-*`/`cuda-*`/`triton` distributions, PEP 503-normalised, equal the allowlist on amd64
+  and are empty on arm64), COPYed with `scripts/cuda_payload_allowlist.txt` to
+  `/tmp/image-check/`, run, and removed in one RUN. `.dockerignore` re-includes those two files
+  (`scripts/` stays excluded). `tests/test_vendor_weights.py`'s "no scripts in Dockerfile" guard
+  now permits exactly those two names.
+- **Local builds (Apple Silicon, docker).** Native arm64: `arm64 ok, torch 2.14.0+cpu`.
+  `--platform linux/amd64` (emulated): `amd64 ok, torch 2.14.0+cu130`. So both legs of the check
+  passed for real, not just statically.
+- **Image venv path:** `/app/.venv/bin/python` (`UV_PROJECT_ENVIRONMENT=/app/.venv`).
+- **Size (amd64, measured locally on the emulated build, gzip -6 per layer):** gzip sum
+  3,153,366,807 B (~3.15 GB, under the 5 GB gate); uncompressed layers 3,166,057,432 B; largest
+  layer 3,087,698,222 B (the dependency layer). CUDA libs barely compress. CI's own numbers land
+  in the job summary of the `smoke` job and should replace these on the first run.
+- **CPU parity.** CI steps added to `smoke` (parity + size). Locally, the emulated amd64 image
+  and this Mac's arm64 `+cpu` venv printed identical `float.hex()` lines (7 scores), but that is
+  *not* the CI comparison (x86 image vs x86 `+cpu` env); the real verdict is the first CI run.
+  If CI diffs, record the max difference and stop for the owner.
+- **Split recorded** in CI_CD.md: arm64 build-time checks run in the publish multi-arch build;
+  PR-time arm64 guarantee is the checker's rule 2.
+
+### US-004 (attempt 2, 2026-10-09) — CI verdicts
+
+- Attempt 1's commit was recovered unchanged and run in CI through a throwaway draft PR
+  (#46, branch `ci-probe/inference-backends-us-004`, closed afterwards). Run 37962323278:
+  every job green (`lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`).
+- **Build-time check (x86 runner):** `image content check: amd64 ok, torch 2.14.0+cu130`.
+- **CPU parity:** `==`. `diff image.txt ci.txt` empty, `CPU parity: 7 scores identical`
+  (amd64 candidate with `CUDA_VISIBLE_DEVICES=` vs CI's `+cpu` env). No owner decision needed;
+  the epic's "byte-identical" wording stands for amd64 CPU installs.
+- **Size (CI, `docker save`, gzip -6 per layer):** gzip sum **3,143,866,537 B (~3.14 GB)**, under
+  the 5 GB gate; uncompressed **5,961,397,760 B (~5.96 GB)**; largest layer **5,751,717,376 B**
+  (the dependency sync). Attempt 1's local "uncompressed" figure (3.17 GB) was wrong, because the
+  local containerd store saves already-compressed layer blobs. The CI figures supersede it, and
+  CI_CD.md now carries them in place of the "~4 GB estimated" text.
 
 ## Refinement Notes
 
@@ -499,3 +617,39 @@ that the old grep goes red.
 ### Session 2026-10-08
 - **Q:** A separate repo or tag suffix? **A:** Neither. One image.
 - **Q:** Which CUDA build? **A:** cu130.
+
+### US-005 (attempt 1, 2026-10-09)
+
+- **Baseline** (`main` run 37863820132, old ~350 MB image): build-amd64 2m43s (build 137s,
+  save+zstd 8s, upload 4s); secret-grep 41s (download 9s, load 28s); smoke 53s (download 3s,
+  load 33s); publish 4m48s (download 4s, load 17s, multi-arch build 246s). Artifact 298,264,769 B.
+  Repo cache 6.12 GB / 302 entries.
+- **Changes:** "Free runner disk space" step (rm toolchains, `df` assert >= 20 GiB) first in
+  build-amd64, secret-grep, smoke and publish. Timeouts 90 / 45 / 45 / 90 (were 45 / 20 / 20 / 60).
+  Pinned in `tests/test_ci_workflow.py::TestImageJobBudgets`.
+- **Cache decision:** keep both scopes. Projected 3.2 + 3.6 = ~6.8 GB < 8 GB (80%). Single-stage
+  Dockerfile, so publish `mode=max` == `mode=min` in layers. Thin margin; re-decide from the
+  measured figure after the first main push.
+- **Pending at PR time:** measured timeouts and `ceil(1.5x)` re-pin (procedure in CI_CD.md),
+  and confirming the diff_ids gate on the first `publish` run. Neither can be done before the
+  larger image runs in CI on `main`.
+- **Size wording swept:** the `~4 GB estimated` text in INFRA_ARCH.md, DEPLOYMENT.md and
+  DECISIONS.md now carries the CI-measured figures from run 37962323278 (~3.14 GB compressed,
+  ~5.96 GB on disk). No hashed source moved, so there is no revision rotation.
+- **Publish re-pin rule:** `publish` is `max(90, ceil(1.5 x measured))`. The 90-minute floor is
+  fixed and pinned by the test, so it does not follow the plain `ceil(1.5x)` rule.
+- **Attempt 2:** reused attempt 1's commit and typed the new test's `with:` mappings as
+  `dict[str, Any]`, which clears its six strict-pyright errors.
+
+### US-006 — No-GPU failover smokes
+
+- Runs 2 and 3 use their own container names (`${SMOKE_CONTAINER}-cuda-cpu` / `-cuda-refuse`);
+  run 2 binds host port 8021 because run 1's container stays up. The failure log dump and the
+  `always()` cleanup cover all three. `--expect-device null` asserts JSON null.
+- **The probe token must actually reach `docker logs`.** The image runs stock uvicorn logging,
+  which configures only the `uvicorn.*` loggers; the root logger has no handler, so only Python's
+  WARNING-level last-resort handler prints app records. Attempt 1 grepped for an INFO line that
+  never printed. Fix: `probe_cuda` logs `unavailable`/`oom` at WARNING (degradation is loud) and
+  `ok` at INFO. `test_failed_probe_token_is_printed_under_uvicorn_default_logging` runs the probe in
+  a fresh interpreter under `uvicorn.config.LOGGING_CONFIG` and asserts the token is printed; it
+  fails against the INFO-only line. `promptguard/device.py` is not hashed: no rotation.

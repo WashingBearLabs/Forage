@@ -22,6 +22,10 @@ __pycache__/
 tests/
 kit_tools/
 # Operator-only, run by hand from a checkout; the Dockerfile COPY list names
-# nothing here and the image has no use for it.
+# nothing here and the image has no use for it — except the build-time content
+# check and the payload allowlist it reads, which the Dockerfile COPYs to a
+# build-only path and removes.
 scripts/
+!scripts/image_content_check.py
+!scripts/cuda_payload_allowlist.txt
 bench/

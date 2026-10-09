@@ -1,0 +1,22 @@
+# CUDA payload packages the lock may contain (PEP 503 names), one per line.
+# Reviewed by hand: edit only when a torch bump adds or drops a package.
+# Checked by scripts/check_lock_cuda_scope.py.
+cuda-bindings
+cuda-pathfinder
+cuda-toolkit
+nvidia-cublas
+nvidia-cuda-cupti
+nvidia-cuda-nvrtc
+nvidia-cuda-runtime
+nvidia-cudnn-cu13
+nvidia-cufft
+nvidia-cufile
+nvidia-curand
+nvidia-cusolver
+nvidia-cusparse
+nvidia-cusparselt-cu13
+nvidia-nccl-cu13
+nvidia-nvjitlink
+nvidia-nvshmem-cu13
+nvidia-nvtx
+triton

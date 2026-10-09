@@ -159,12 +159,16 @@ measurement run; "cold" means an empty GHA build cache.
 
 1. `astral-sh/setup-uv` at `UV_VERSION: "0.9.28"` (the same pin the `Dockerfile` copies
    from `ghcr.io/astral-sh/uv:0.9.28`), `enable-cache: true`, `cache-dependency-glob: uv.lock`.
-2. `uv sync --extra dev --locked` — `--locked` fails if `uv.lock` is stale relative to
+2. `uv sync --extra dev --extra cpu --locked` — `--locked` fails if `uv.lock` is stale relative to
    `pyproject.toml`, so a forgotten re-lock is a red job rather than a drifting environment.
-3. Two CUDA-wheel guards: `uv.lock` must contain no `nvidia-` string, and the synced
-   environment's package list must contain no `nvidia-*` package. Resolving torch from
-   plain PyPI drags in fifteen CUDA packages; `pyproject.toml`'s `pytorch-cpu` index is what
-   keeps the image at ~348 MB.
+3. Two CUDA-scope guards: the synced `cpu` environment's package list must contain no
+   `nvidia-*`, `cuda-*` or `triton` package, and `scripts/check_lock_cuda_scope.py` proves
+   from the lock's markers that the CUDA payload appears only in the `cuda` extra on x86_64
+   Linux, against an exact-set allowlist. `uv.lock` itself now legitimately carries
+   `nvidia-*` entries: the amd64 image ships CUDA torch (measured in CI on 2026-10-09, run
+   37962323278: gzip layer sum 3,143,866,537 B ≈ 3.14 GB; uncompressed 5,961,397,760 B ≈
+   5.96 GB; largest layer 5,751,717,376 B, the dependency sync), while arm64 keeps CPU torch
+   (~348 MB recorded).
 4. `uv run ruff check .` and `uv run ruff format --check .`.
 5. `actionlint` 1.7.12, downloaded from GitHub releases and verified against
    `ACTIONLINT_SHA256` before it runs, then `./actionlint -color` on the workflow itself.
@@ -251,6 +255,23 @@ hashes it against the committed `contract/openapi.yaml.sha256`. The 120 s budget
 and a guard test ties the number to the script's own default. On failure the job dumps the
 container log; the container is removed either way. `kit_tools/docs/MONITORING.md` covers
 running the same probe against a deployment.
+
+After the contract smoke, two more steps run in the same job. **CPU parity** runs
+`scripts/promptguard_tiny_model.py` (seeded, weights-free; one `float.hex()` score per line)
+in the candidate (`--entrypoint /app/.venv/bin/python`, `CUDA_VISIBLE_DEVICES=` empty,
+`scripts/` mounted read-only) and in the job's `+cpu` environment, and `diff`s the two — exact
+equality is expected; a difference is an owner decision, not a retry. **Size budget** sums each
+layer's gzip size from `docker save` and fails above 5 GB, reporting the uncompressed total and
+the largest layer. First CI run (2026-10-09, run 37962323278): parity `==` (7 scores
+identical); gzip sum 3,143,866,537 B, uncompressed 5,961,397,760 B, largest layer
+5,751,717,376 B.
+
+**Where the image's content checks run.** The Dockerfile's `scripts/image_content_check.py`
+step (torch suffix `+cu130`/`+cpu`; payload equals `scripts/cuda_payload_allowlist.txt` on
+amd64, empty on arm64) runs at build time on whatever architecture is being built. PR CI builds
+amd64 only, so the arm64 assertions run in the `publish` lane's multi-arch build, where a
+failure aborts before any push. The PR-time arm64 guarantee is static: the lock checker's rule 2
+(linux/aarch64 resolves `+cpu`, no payload). No qemu build is added to PR CI.
 
 CI passes neither `--expect-status` nor `--anchor` and relies on their defaults:
 `--expect-status degraded` (the weights-free contract above; `/health` is polled until it
@@ -417,7 +438,7 @@ The CI gates are the same four commands developers run, and all of them must go 
 numbers that do not reproduce:
 
 ```bash
-uv sync --extra dev             # once; CI adds --locked
+uv sync --extra dev --extra cpu             # once; CI adds --locked
 uv run pytest                   # = the `test` job
 uv run ruff check .             # = half of `lint`
 uv run ruff format --check .    # = the other half of `lint` (fix with: uv run ruff format .)
@@ -453,7 +474,7 @@ of those bytes. The same file also verifies the checker can fail (a committed
 un-regenerated twin under `tests/fixtures/contract/`), that rendering is byte-stable across
 `PYTHONHASHSEED`s, and that `/extract` is in the document even though the route is off by default.
 
-The anchor (`dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db` at HEAD) is
+The anchor (`9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d` at HEAD) is
 the trust root every other copy is verified against: `smoke` hashes the in-image copy
 against it, `publish` hashes the Release assets against it, and consumers verify the copy
 they vendor against the anchor *at the same tag*, never against another copy. Whether a
@@ -479,6 +500,58 @@ one human-only credential flow around the image, vendoring weights with
 `scripts/vendor_weights.py`, never runs in CI.
 
 ---
+
+## Timeout and Cache Budgets
+
+Set by `forage-inference-backends` US-005 for the ~3 GB amd64 dependency layer. The image jobs
+(`build-amd64`, `secret-grep`, `smoke`, `publish`) each start with a **Free runner disk space**
+step that removes the preinstalled dotnet, Android, GHC and CodeQL toolchains and fails the job
+if `df` shows under 20 GiB free on `/`. `publish` has its own step because it builds rather
+than only loading. All four are pinned in `tests/test_ci_workflow.py::TestImageJobBudgets`.
+
+**Baseline** (the old ~350 MB image; `main` run 37863820132, merge of PR #45, 2026-10-09):
+
+| Job | Duration | Notable steps |
+|---|---|---|
+| `build-amd64` | 2m43s | build 137s, `docker save \| zstd` 8s, artifact upload 4s |
+| `secret-grep` | 41s | artifact download 9s, `docker load` 28s |
+| `smoke` | 53s | artifact download 3s, `docker load` 33s |
+| `publish` | 4m48s | artifact download 4s, `docker load` 17s, multi-arch build and push 246s |
+
+Artifact `forage-amd64-image`: 298,264,769 B (zstd). Repo-wide Actions cache at that time:
+6.12 GB across 302 entries (all refs, all scopes).
+
+**Initial timeouts** (set before the larger image existed, so generous):
+
+| Job | Was | Initial | Measured | Final `ceil(1.5 x measured)` |
+|---|---|---|---|---|
+| `build-amd64` | 45 | 90 | _fill at PR time_ | _fill_ |
+| `secret-grep` | 20 | 45 | _fill at PR time_ | _fill_ |
+| `smoke` | 20 | 45 | _fill at PR time_ | _fill_ |
+| `publish` | 60 | 90 (floor: it rebuilds both architectures) | _fill at PR time_ | _fill_ (`max(90, ceil(1.5 x measured))`) |
+
+**Adjustment procedure** (after the PR's first green run):
+
+1. Read each job's wall-clock from the run (`gh run view <id> --json jobs`), cold-cache run for
+   `build-amd64` and `publish`.
+2. Set `timeout-minutes` to `ceil(1.5 x measured minutes)`, in `ci.yml` and in
+   `_TIMEOUT_MINUTES` in the test, in the same commit. `publish` is the one exception: its value
+   is `max(90, ceil(1.5 x measured))`. The 90-minute floor is fixed and pinned by
+   `test_publish_timeout_covers_a_two_architecture_rebuild`, because it rebuilds both architectures and the
+   emulated arm64 leg is slow when the cache is cold.
+3. Fill the "Measured" and "Final" columns above and the matching line in the spec's
+   Implementation Notes. Record the artifact size and the upload and download times too.
+4. After the first push to `main`, read `gh api repos/{owner}/{repo}/actions/cache/usage` and
+   re-run the cache decision below with the real figure.
+
+**Cache decision.** Two scopes write to the 10 GB GHA cache: `build-amd64`'s default scope
+(`mode=min`, main pushes only) and `scope=publish` (`mode=max`, both architectures). Projected
+~3.2 GB + ~3.6 GB = ~6.8 GB, below the 80% line (8 GB), so **both are kept unchanged**. The
+Dockerfile is single-stage, so `mode=max` adds no layers over `mode=min` and moving publish
+would save nothing. The margin is thin and the figure is an estimate. If the measured total
+crosses 8 GB, drop `build-amd64`'s `cache-to` or move publish to `mode=min`, and record it
+here. The diff_ids layer-identity gate compares layers by digest, not size; it is exercised
+by the first `publish` run on `main` with the large layer.
 
 ## Caching and Reproducibility
 
@@ -562,7 +635,7 @@ Every cause below is one the workflow's own comments, `docs/releases.md`, or
 |---|---|---|---|
 | `lint` | `ruff format --check` lists files | format drift | `uv run ruff format .` and commit |
 | `lint` | `uv sync --locked` fails | `uv.lock` stale relative to `pyproject.toml` | update `uv.lock` and commit it; never edit it by hand |
-| `lint` | `uv.lock contains nvidia-* CUDA wheels` | torch resolved from plain PyPI | re-lock with the `pytorch-cpu` index configured in `pyproject.toml` |
+| `lint` | `CUDA wheels were installed by the cpu extra` or `check_lock_cuda_scope` violations | a torch source dropped or the payload leaked outside the `cuda` extra | restore the three torch sources in `pyproject.toml` and re-lock; edit `scripts/cuda_payload_allowlist.txt` only for a reviewed torch bump |
 | `lint` | actionlint error | invalid workflow YAML or expression | fix the workflow; `tests/test_ci_workflow.py` will also fail on posture regressions |
 | `typecheck` | errors CI reports but local pyright does not | local run used a system pyright, not the locked one | `uv run pyright` |
 | `test` | `tests/test_contract_export.py` red | response model or route metadata changed without a regen | `uv run python -m scripts.export_contract`, commit the three outputs, classify per `contract/GOVERNANCE.md` |

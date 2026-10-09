@@ -71,6 +71,8 @@ KEYS = {
     "promptguard_model",
     "sanitizer_revision",
     "contract_version",
+    "promptguard_device",
+    "promptguard_requested_device",
 }
 
 
@@ -80,7 +82,9 @@ def health(**updates: object) -> HttpResponse:
         "promptguard_loaded": True,
         "promptguard_model": DEFAULT_MODEL_ID,
         "sanitizer_revision": "a" * 64,
-        "contract_version": "1.4.0",
+        "contract_version": "1.5.0",
+        "promptguard_device": "cpu",
+        "promptguard_requested_device": "cpu",
     }
     body.update(updates)
     return HttpResponse(200, json.dumps(body))
@@ -304,7 +308,7 @@ def test_full_measurement_shape_and_multipart_fields(
     assert row["base_url"] == contract_smoke.DEFAULT_BASE_URL
     assert row["model_id"] == row["promptguard_model"] == DEFAULT_MODEL_ID
     assert row["promptguard_loaded"] is True
-    assert row["contract_version"] == "1.4.0"
+    assert row["contract_version"] == "1.5.0"
     assert row["sanitizer_revision"] == "a" * 64
     assert row["concurrency"] == 1
     assert row["runs"] == 20

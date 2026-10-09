@@ -110,6 +110,8 @@ instance is private-network-only and Forage is its only client.
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
 | `HF_TOKEN` | unset | Hugging Face access token for the **gated** repository of the selected model — `meta-llama/Llama-Prompt-Guard-2-86M` by default, `meta-llama/Llama-Prompt-Guard-2-22M` if `FORAGE_MODEL_ID` selects it. Meta grants access per repository: the token needs the grant for the model you actually run. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
+| `FORAGE_DEVICE` | `cpu` | Where the classifier runs: `cpu` or `cuda`, case-insensitive; blank is unset. Invalid values refuse boot with `DeviceConfigurationError`, never echoing the value. See [Device selection](#device-selection). |
+| `FORAGE_DEVICE_FALLBACK` | `cpu` | Failover policy when `FORAGE_DEVICE=cuda`: `cpu` or `refuse`. Ignored, with an INFO log, when the device is `cpu`. See [Device selection](#device-selection). |
 | `FORAGE_MODEL_ID` | `meta-llama/Llama-Prompt-Guard-2-86M` | Model selected at startup; surrounding whitespace is stripped and unset or blank uses the default. Unknown values refuse boot with `ModelConfigurationError` and WARNING `model_id_not_allowed`, never echoing the value. The allowlist is exactly two ids: `meta-llama/Llama-Prompt-Guard-2-86M` (the default since the 2026-10-06 owner ruling) and `meta-llama/Llama-Prompt-Guard-2-22M`, the smaller opt-out. Each needs its own Hugging Face gated-access grant (one does not cover the other). The 86M's measured resident delta in `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` is 405 MiB, which is why the Compose default `FORAGE_MEM_LIMIT` is `1536m`; the 22M fits `1024m` — see [Sizing the container](#sizing-the-container). Both Compose fragments pass this and `FORAGE_MODEL_REVISION` through as bare names. Restart to apply; `/health.promptguard_model` reports the configured id even while unloaded. |
 | `FORAGE_MODEL_REVISION` | the selected model's committed pin (a 40-character commit sha) | Uses the selected model's committed pin; a malformed value falls back to the pin with `model_revision_invalid`; a well-formed value that is not that pin refuses to verify (`weights_revision_unpinned`). Each pin lives at `weights_manifest.json` → `models[model_id].revision`; acquisition refuses before any cache lookup or fetch. |
 | `FORAGE_WEIGHTS_MIRROR` | `ghcr.io/washingbearlabs/forage-weights` | The OCI **repository** holding the vendored weights, used when Hugging Face cannot supply them. A repository, never a tag: the tag is always `FORAGE_MODEL_REVISION`, so redirecting the mirror cannot also redirect which revision it serves. Validated to a lower-case `<registry>/<owner>/<name>`, optionally prefixed `https://` — anything else (an `http://` scheme, embedded credentials, a tag or digest) is refused with an error and the mirror is treated as unconfigured. |
@@ -260,6 +262,122 @@ Consequences of memory mode, in one place:
 > epic's live checklist asserts `cache_backend == "valkey"` on the running container
 > rather than trusting the config. If you run more than one Forage replica, or want the
 > cache to survive a restart, set `VALKEY_URL`.
+
+### Device selection
+
+`FORAGE_DEVICE` and `FORAGE_DEVICE_FALLBACK` are read from the environment once, at
+startup. Values are case-insensitive and stripped, then normalised to lowercase. There is
+no `auto` value. With `cuda`, the GPU is probed (an allocation on `cuda:0`) before the app
+serves; the probe logs only the closed token `promptguard_device_probe result=ok|unavailable|oom`,
+at WARNING for `unavailable` and `oom` (so the image's stock uvicorn logging prints it) and at
+INFO for `ok`.
+
+| `FORAGE_DEVICE` | `FORAGE_DEVICE_FALLBACK` | No usable GPU at boot (probe) | CUDA failure while loading weights | GPU OOM at batch 1 mid-run |
+|---|---|---|---|---|
+| `cpu` (default) | ignored | n/a | n/a | n/a |
+| `cuda` | `cpu` (default) | model loads on CPU, **failed over** | model loads on CPU, **failed over** | switch to a CPU copy, **failed over** |
+| `cuda` | `refuse` | **startup refuses** (`DeviceConfigurationError`) | `load()` returns False, so degraded `promptguard_unavailable`; weight acquisition retries on its normal schedule | the request gets `unavailable_result` per its tier; latched `oom_refused` state until a later GPU classification succeeds |
+
+#### GPU out of memory mid-run
+
+An OOM during classification (`torch.cuda.OutOfMemoryError` only) first **halves the batch**
+(`promptguard_cuda_batch_size`, down to 1) and retries the remaining windows; concurrent requests
+hitting the same event halve it once. The reduction is **sticky**: it never grows back, so a crowded
+card does not repeat the OOM-and-halve cycle. It is visible as `effective_batch_size` in the device
+state (and through `/metrics` once that surface lands); **restart to recover** the configured size.
+
+If batch 1 still runs out of memory:
+
+- Under fallback `cpu`, the model is rebuilt on CPU from host-side tensors (never cloned on the GPU)
+  and swapped in once; in-flight requests finish on the GPU model they started with. The failover
+  needs host RAM for a second copy of the weights, about **1.1 GB for the 86M** (on top of the
+  `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` advisory in `pipeline/extraction_limits.py`, which
+  sizes the CPU-resident model only). If that copy cannot be built, the request takes the `refuse`
+  outcome (`promptguard_oom_refused reason=copy_failed`), the service is **not** marked failed
+  over, and a later OOM tries again.
+- Under `refuse`, the request gets `unavailable_result` for its tier and the model stays on the
+  GPU. `oom_refused` latches until a later GPU classification succeeds.
+
+**Security note for `refuse`.** A refused request on a fail-open tier (VERIFIED, or any tier when
+`promptguard_fail_closed` is false) is served `unavailable_allowed`, which is **unscanned**. Pair
+`refuse` deployments with `promptguard_fail_closed` and keep `max_promptguard_chunks` non-zero
+(default 64) so an attacker cannot cheaply craft pages that induce the OOM. An OOM-refused body is
+never written to the content cache.
+
+On `cuda` the model is loaded at full fp32 (`fp32_precision = "ieee"`, or `allow_tf32 = False`
+on older torch) and moved with `.to("cuda")`. A failed move is recovered to CPU before anything
+else; under `cpu` fallback the classifier then runs on CPU, marked failed over
+(`promptguard_device_failover reason=unavailable|oom|load_error`), and under `refuse` the load
+returns False (`promptguard_device_load_failed reason=...`), which is degraded
+`promptguard_unavailable`. Weight acquisition retries on its existing schedule, so a transient
+GPU fault self-heals under `refuse`. If the recovery itself fails, CUDA is latched unusable for
+the process: `refuse` keeps failing, `cpu` loads on CPU as `load_error` on the next attempt.
+
+#### Which device settings key what
+
+| Setting | Sanitizer-revision input | Content-cache key input |
+|---|---|---|
+| `FORAGE_DEVICE=cuda` | **Yes** — hashes `device@cuda` after the model identity (`cpu`, unset and invalid hash nothing, so a CPU install's revision is unchanged) | Through the revision |
+| The **active** device (`cpu` or `cuda`, or none without a loaded classifier) | No — a failover never changes `/health`'s `sanitizer_revision` | **Yes** — `cache_policy_fingerprint(active_device=...)`, independent of `classifier_loaded` |
+| `FORAGE_DEVICE_FALLBACK` | No | No (its effect arrives as the active device) |
+| `promptguard_cuda_batch_size` | No | No |
+
+A GPU-scored verdict and a CPU-scored verdict therefore never share a key, even after a failover. A
+request in flight when a failover lands is served scanned but not cached: the active device is re-read
+at the cache write, and a difference from the one used for the key skips it (conservative, and rare).
+Residual: batch size moves GPU scores only within parity tolerance, yet it is in neither key, so a
+changed `promptguard_cuda_batch_size` keeps serving cached entries scored under the old value.
+
+### Installing on a GPU host
+
+The same image tag serves both device classes; the GPU is a Compose overlay, not a second image.
+
+1. **Host requirements.** An NVIDIA driver **≥ 580** (the image's torch is built for CUDA 13.0,
+   `cu130`), the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+   configured for Docker, and Docker Compose **≥ 2.30**. amd64 only; arm64 images are CPU-only.
+2. **Start with the overlay**, from `compose/`:
+
+   ```bash
+   docker compose -f minimal.yml -f gpu.yml up -d     # or: -f full.yml -f gpu.yml
+   curl -s localhost:8020/health | jq '{status, degraded_reasons, promptguard_device, promptguard_requested_device}'
+   ```
+
+   `compose/gpu.yml` requests one `nvidia` GPU, sets `FORAGE_DEVICE=cuda` and
+   `FORAGE_DEVICE_FALLBACK` (from `compose/.env` or your shell; default `cpu`), and raises the
+   memory default. It pins no image and changes no port, so the loopback binding is unchanged.
+   Set `FORAGE_DEVICE_FALLBACK=refuse` to make the service refuse to start without a usable GPU
+   rather than run on CPU. See [Device selection](#device-selection) for the failover rules.
+3. **A missing Toolkit fails at `compose up`**, with Docker's "could not select device driver
+   `nvidia`" error, not as a degraded boot: the container is never created, so `/health` is not
+   there to say so. Fix the host, not Forage's configuration.
+
+What `/health` says (contract `1.5.0`):
+
+| Situation | `promptguard_requested_device` | `promptguard_device` | `degraded_reasons` |
+|---|---|---|---|
+| CPU install (default) | `cpu` | `cpu` | none from the device |
+| GPU in use | `cuda` | `cuda` | none from the device |
+| No usable GPU at boot or load, fallback `cpu` | `cuda` | `cpu` | `promptguard_device_failover` |
+| GPU out of memory at batch 1, fallback `cpu` | `cuda` | `cpu` | `promptguard_device_failover` |
+| GPU out of memory at batch 1, fallback `refuse` | `cuda` | `cuda` | `promptguard_device_oom` until a later GPU classification succeeds |
+| No usable GPU, fallback `refuse` | — | — | the service does not start (probe), or `promptguard_unavailable` (load failure) |
+
+**GPU memory is not reserved.** The device request gives the container access to the card; it
+does not set aside VRAM. The 86M model needs well under 1 GiB, but other processes can take the
+rest, and the failover above is what happens when they do. To coexist with Ollama or another GPU
+workload, leave headroom on the card (Ollama's `OLLAMA_KEEP_ALIVE` or a smaller loaded model
+frees VRAM when idle), expect `promptguard_cuda_batch_size` to halve under pressure, and watch
+`effective_batch_size` on `/metrics`.
+
+**The GPU is a shared, non-isolated resource.** Forage ships no authentication, and a card
+shared with other tenants offers no isolation between their workloads and this one. Do not run
+the overlay on a multi-tenant host, and keep the `127.0.0.1` binding.
+
+**Memory default is provisional.** The overlay sets `mem_limit: ${FORAGE_MEM_LIMIT:-3072m}`
+because the CUDA context and libraries add host RSS beyond the CPU deployment's `1536m`. The
+figure has not been measured on a GPU host yet; the GPU validation spec measures it and adjusts
+the default. Set `FORAGE_MEM_LIMIT` to override it. Under fallback `cpu`, an OOM failover needs
+about 1.1 GB more host RAM for a second copy of the weights (see below).
 
 ### Credential handling for `FORAGE_CACHE_HMAC_KEY`
 
@@ -807,6 +925,7 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 |-----|------|--------------|---------|---------|
 | `user_agents` | list of strings | `[]` | 5 desktop browser UAs | Pool rotated across outbound fetches. Empty means the fetcher's own built-in default is used. |
 | `promptguard_threads` | integer, 0–16 | `0` | `0` | `0` leaves torch's and the tokenizer's defaults (every visible core) untouched. Set a positive count to the CPU quota the container actually runs under — `FORAGE_CPUS`, a Kubernetes limit, a host-level cgroup or an orchestrator's cap — because torch reads the host's core count, not the quota. At model load, sets torch's intra-op threads and disables the tokenizer pool with `TOKENIZERS_PARALLELISM=false`, overriding the operator's environment value. Read at boot by `promptguard_threads_from_config`; invalid values (including booleans) refuse boot with `PromptGuardThreadsConfigurationError`. Apply failures warn `promptguard_threads_apply_failed` without disabling the model. This is not a sanitizer-revision input, but latency can exhaust `promptguard_wait_seconds` and make a fail-open request serve unscanned content. |
+| `promptguard_cuda_batch_size` | integer, 1–64 | `16` | `16` | Windows per forward pass when the classifier runs on `cuda`: a page's windows are tokenized in one call and scored in slices of this size. The CPU path ignores it and stays at one window per pass, byte-for-byte the previous scores. Read at boot by `promptguard_cuda_batch_size_from_config`; invalid values (including booleans) refuse boot with `PromptGuardCudaBatchSizeConfigurationError`. Set per classifier instance and reported as `effective_batch_size` in its device state. Not security-relevant and not a sanitizer-revision input; the chunk-budget refusal still fires before any inference. |
 | `news_domains` | list of strings | `[]` | 6 leading-dot wire/major outlets | Domains whose cached entries expire after **at most 1 hour**. Bare entries match only the apex; a leading dot covers the apex and every subdomain. **Upgrade note:** your bare entries stay exact; add the dot for subdomains. The six shipped entries now have it (`.bbc.co.uk` covers `www.bbc.co.uk`). |
 | `seed_blocklist` | list of strings | `[]` | `[]` | Deployment-wide denylist merged into both routes, `/retrieve` and `/search`, before caller `blocked_domains`; caller entries cannot evict it. **Upgrade note:** existing multi-label entries now cover subdomains; review apex entries before upgrading, because a multi-tenant apex removes every tenant. Single-label entries keep matching exactly as before. This list is policy, not a secret: observable through `/retrieve`'s refusal message and `/search`'s `blocked_url` counts. |
 | `promptguard_threshold` | float | `0.85` | `0.85` | Max-score rule only: a score strictly above this marks content as injected; the server-side contiguity rule can block independently. `/retrieve` and `/search` use this boot-validated default when the request omits the field or sends `null`, then apply `min(value, promptguard_threshold_ceiling)`; an explicit request value is capped too. Numeric strings remain accepted. Invalid values (including YAML booleans, non-finite or out-of-range numbers) warn once with `config_invalid_value` and fall back to `0.85`, never refusing boot for this validation; `promptguard_threshold_resolved` logs the validated default once at INFO. `/extract` instead retains its own per-request `float(raw_value)` conversion and range guard, outside the resolver and ceiling: invalid numeric strings/ranges still give its existing unsupported-format refusal, but YAML `true` becomes `1.0`, disabling max-score blocking on `/extract` only while the fetch routes warn and default to `0.85`. The WARNING explicitly says `/extract reads the raw value through its own guard`; closing that divergence is an open question. The raw configured value still feeds `sanitizer_revision`; the resolved active threshold feeds `cache_policy_fingerprint`. **Upgrade note (1.3.0):** raising this key above `0.85` to quiet `/extract` false positives now **loosens** max-score blocking on `/retrieve` and `/search` unless `promptguard_threshold_ceiling` bounds it; a value below `0.85` **tightens** both. The old per-route config knob is gone (caller overrides remain), and the content cache re-keys. |
@@ -1234,10 +1353,10 @@ What it shows:
 - **The 22M is about 2.2× faster** at every size.
 - **NUMA placement matters on multi-die CPUs.** Pinning to memory-bearing nodes with
   `cpuset` gained about 20% over a plain `--cpus` quota.
-- **GPU, for planning only (not supported by the image).** The same harness under CUDA
+- **GPU.** The same harness under CUDA
   PyTorch on the server's RTX 4070 Ti measured **15.4 ms per window for both models**,
   about 70× faster than the best CPU figure, so a 64-chunk page takes about 1 s. The shipped
-  image is CPU-only; GPU support is a separate epic.
+  image carries CUDA torch on amd64 but defaults to `FORAGE_DEVICE=cpu`.
 - This 2018 Zen+ part is about 3–4× slower per window than the Apple-silicon bare-host row
   below, partly because torch's MKL backend is weak on AMD. Newer x86 parts will land
   between the two.
@@ -1358,10 +1477,12 @@ curl -s localhost:8020/health | jq
 | Field | What it tells you |
 |-------|-------------------|
 | `status` | `healthy` or `degraded`. |
-| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable), `cache_unauthenticated` (Valkey signing is not enabled). Both cache reasons can coexist; memory mode reports neither. |
+| `degraded_reasons` | `promptguard_unavailable` (no weights — the ML scan is not running), `cache_unavailable` (a *configured* Valkey is unreachable or its URL is unusable), `cache_unauthenticated` (Valkey signing is not enabled), `promptguard_device_failover` (`cuda` requested, classifier running on `cpu`; contract `1.5.0`), `promptguard_device_oom` (a GPU out-of-memory refusal is latched under `FORAGE_DEVICE_FALLBACK=refuse`; contract `1.5.0`). Both cache reasons can coexist; memory mode reports neither. |
 | `capabilities.cache_hmac_key` | Present as `1` only when a usable `FORAGE_CACHE_HMAC_KEY` was resolved at boot and the backend is Valkey. Independent of connectivity and the break-glass override; absent in memory mode. |
 | `promptguard_loaded` | Always honest, even with the break-glass override set. |
 | `promptguard_model` | The startup-selected model id, even when unloaded; a configuration echo, not readiness. |
+| `promptguard_device` | The device the classifier runs on now (`cpu` or `cuda`); `null` until it is loaded, and `null` for a loaded classifier that reports no device state. Added in contract `1.5.0`. |
+| `promptguard_requested_device` | The `FORAGE_DEVICE` this start resolved (`cpu` or `cuda`), always present. After a failover it is `cuda` while `promptguard_device` is `cpu`. Added in contract `1.5.0`. |
 | `cache_connected` | "The selected backend is operational." A live ping in Valkey mode, subject to reconnect backoff; always `true` in memory mode, where there is no connection to lose. It is **not** a statement that Valkey is present — read `cache_backend` for that. |
 | `cache_backend` | `valkey` or `memory` — which storage the content cache selected at start, decided once from `VALKEY_URL` and fixed for the life of the process. Added in contract `1.1.0`. This is the field that separates "healthily in memory mode" from "silently lost its Valkey"; `cache_connected` alone reports `true` for both. |
 | `search_providers` | The resolved search-provider chain's names, in traversal order, after key-gated skips — e.g. `["searxng"]` or `["searxng", "brave"]`. Configuration echo fixed for the life of the process, not a liveness probe. Added in contract `1.2.0`. |

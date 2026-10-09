@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from models import Stage3Verdict, TrustTier
+from promptguard.classifier import PromptGuardUnavailableError
 
 if TYPE_CHECKING:
     from promptguard.classifier import PromptGuardClassifier
@@ -225,10 +226,16 @@ async def run_promptguard(
 
     # Run synchronous PyTorch inference in a thread to avoid blocking
     # the event loop.
-    async with completed_thread(
-        asyncio.to_thread(classifier.classify_windows, text, max_chunks=max_chunks)
-    ) as inference:
-        scores, chunks = inference.result()
+    try:
+        async with completed_thread(
+            asyncio.to_thread(classifier.classify_windows, text, max_chunks=max_chunks)
+        ) as inference:
+            scores, chunks = inference.result()
+    except PromptGuardUnavailableError:
+        # The GPU ran out of memory and policy refuses a CPU fallback: the
+        # same per-tier outcome as an absent classifier, never empty scores.
+        logger.warning("promptguard_oom_refused tier=%s", tier_value)
+        return unavailable_result(tier_value, fail_closed=fail_closed)
 
     score = max(scores, default=0.0)
     max_fired = score > threshold

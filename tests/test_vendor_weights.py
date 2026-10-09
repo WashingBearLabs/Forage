@@ -288,6 +288,10 @@ class TestSingleSourceOfTruth:
     def test_the_script_is_not_shipped_in_the_image(self) -> None:
         dockerfile = (_REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
+        # The two build-time content-check files are the only sanctioned
+        # exception (unified-image US-004): COPYed, run and removed in-build.
+        for name in ("image_content_check.py", "cuda_payload_allowlist.txt"):
+            dockerfile = dockerfile.replace(f"scripts/{name}", "")
         assert "scripts" not in dockerfile, (
             "the Dockerfile COPY list is filename-enumerated and vendoring is "
             "an operator task, not a runtime one — nothing under scripts/ "

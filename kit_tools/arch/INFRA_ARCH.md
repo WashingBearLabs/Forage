@@ -93,7 +93,7 @@ final stage, so a multi-stage build would narrow what CI's `secret-grep` gate ca
 | Build arguments | **None.** Zero `ARG` instructions of any kind, not even `TARGETARCH` — `CLAUDE.md` invariant 2, asserted by `tests/test_dockerfile.py::test_the_build_takes_no_arguments_at_all` |
 | System packages | `curl` only (`--no-install-recommends`); apt lists and logs removed in the same layer for reproducibility, not size |
 | `uv` | `COPY --from=ghcr.io/astral-sh/uv:0.9.28@sha256:59240a65d6b57e6c507429b45f01b8f2c7c0bbeee0fb697c41a39c6a8e3a4cfb` — same version CI pins |
-| Dependency install | `uv sync --locked --no-dev --no-install-project` into `/app/.venv` with `UV_PYTHON_DOWNLOADS=never`; `uv.lock` pins CPU-only torch (`torch==2.14.0+cpu` from the `pytorch-cpu` index, no `nvidia-*` wheels) |
+| Dependency install | `uv sync --locked --no-dev --no-install-project` into `/app/.venv` with `UV_PYTHON_DOWNLOADS=never`; `uv.lock` pins torch per architecture through three sources: `torch==2.14.0+cu130` on amd64 (the `cuda` extra, `pytorch-cu130` index) and `torch==2.14.0+cpu` on arm64 (`pytorch-cpu` index); the CUDA payload is allowed only inside the `cuda` extra on x86_64 Linux (`scripts/check_lock_cuda_scope.py`) |
 | `oras` | 1.3.4 downloaded from GitHub releases over https; sha256 pinned per architecture; arch chosen by `dpkg --print-architecture` inside the `RUN` (works under buildx and the legacy builder); unknown arch exits 1 |
 | User | `useradd -r -s /bin/false poppy`; `USER poppy` (the name is a legacy leftover and still the literal in the file) |
 | Runtime env set by image | `PATH=/app/.venv/bin:...` and `HF_HOME=/app/model-cache` — nothing else |
@@ -102,7 +102,7 @@ final stage, so a multi-stage build would narrow what CI's `secret-grep` gate ca
 | Build-time check | `RUN PYTHONDONTWRITEBYTECODE=1 python -c "import retrieval_app"` — fails the build on an import error without writing `.pyc` into the layer |
 | Port / process | `EXPOSE 8020`; `ENTRYPOINT ["/app/docker-entrypoint.sh"]` (`exec "$@"`, prints nothing); `CMD uvicorn retrieval_app:app --host 0.0.0.0 --port 8020`, one worker |
 | Healthcheck | **No image-level `HEALTHCHECK` instruction; both compose fragments declare a status-only liveness probe.** |
-| Size | ~348 MB, 16-19 layers (recorded at `forage-ci-and-image` US-003; not re-measured here) |
+| Size | arm64 (CPU torch): ~348 MB, 16-19 layers (recorded at `forage-ci-and-image` US-003 before CUDA torch; not re-measured here). amd64 (CUDA torch): ~3.14 GB compressed layers, ~5.96 GB uncompressed (CI run 37962323278) |
 
 The flat module layout is load-bearing for the `COPY` lines above (`CLAUDE.md` invariant
 3). The in-image contract can be read back with
@@ -267,8 +267,8 @@ The reference envelope (1 vCPU / 1 GB) is configurable via `FORAGE_CPUS` / `FORA
 see [`docs/configuration.md` § Sizing the container](../../docs/configuration.md#sizing-the-container).
 Add the ~1.1 GiB volume (86M default); these are the
 figures the measurements in `docs/configuration.md` were taken on, not a tested floor or
-ceiling. Torch is CPU-only by construction (no CUDA wheels in the lock), so no GPU is ever
-used.
+ceiling. The amd64 image carries CUDA torch, but the device defaults to `cpu`
+(`FORAGE_DEVICE`), so a GPU is used only when an install opts in.
 
 | Budget | Value | Source |
 |--------|-------|--------|
@@ -280,7 +280,7 @@ used.
 | Extraction admission | extraction concurrency 1, queue depth 1 (0–4), 50 MiB input, 500 pages, 20 s CPU, 90 s wall; `classification_concurrency` 1–8 under the memory rule | `config.yaml` (see `kit_tools/docs/ENV_REFERENCE.md`) |
 | Weights boot to classifier loaded | 19 s cold / 9 s warm on the reference host (measured with the 22M); `/health` serves during acquisition, not a classify-latency figure | `docs/configuration.md` § Sizing the container |
 | CI smoke budget | 120 s to first `/health` 200 | `SMOKE_TIMEOUT_SECONDS` in `ci.yml` |
-| Disk | ~1.1 GiB volume (86M; ~270 MiB for the 22M); ~348 MB image (recorded, not re-measured); ~1 GB free recommended for vendoring | `docs/weights.md` |
+| Disk | ~1.1 GiB volume (86M; ~270 MiB for the 22M); image ~348 MB on arm64 (CPU torch, recorded) and ~3.14 GB compressed (~5.96 GB on disk) on amd64 (CUDA torch, CI-measured); ~1 GB free recommended for vendoring | `docs/weights.md` |
 
 Live memory pressure is readable from `/metrics` `extraction.cgroup_memory_current_bytes`,
 `cgroup_memory_max_bytes`, and `oom_proximity_ratio` (cgroup v2 only; `null` on macOS).

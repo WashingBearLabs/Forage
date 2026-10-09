@@ -151,6 +151,11 @@ STATUS_DEGRADED: ExpectStatus = "degraded"
 STATUS_HEALTHY: ExpectStatus = "healthy"
 EXPECT_STATUS_CHOICES: tuple[ExpectStatus, ...] = (STATUS_HEALTHY, STATUS_DEGRADED)
 
+# What `--expect-device` / `--expect-requested-device` accept. `null` is the
+# CLI spelling of JSON null: a requested GPU that never became the active device.
+DEVICE_NULL = "null"
+DEVICE_CHOICES: tuple[str, ...] = ("cpu", "cuda", DEVICE_NULL)
+
 # A weights-free image must report this and only this — the default mode, and
 # the one CI's smoke job runs.
 EXPECTED_STATUS: ExpectStatus = STATUS_DEGRADED
@@ -321,7 +326,11 @@ def _json_object(
 
 
 def evaluate_health(
-    response: HttpResponse, *, expect_status: ExpectStatus = EXPECTED_STATUS
+    response: HttpResponse,
+    *,
+    expect_status: ExpectStatus = EXPECTED_STATUS,
+    expect_requested_device: str | None = None,
+    expect_device: str | None = None,
 ) -> list[str]:
     """Return every way *response* violates the ``/health`` contract.
 
@@ -330,6 +339,9 @@ def evaluate_health(
     every other check is identical. An empty list is a pass. Every check runs
     that can run, so one failing run reports the whole picture instead of the
     first thing that broke.
+
+    *expect_requested_device* and *expect_device* are ``None`` when not asserted;
+    ``"null"`` asserts that ``promptguard_device`` is JSON null.
     """
     failures: list[str] = []
     excerpt = response.body[:_BODY_EXCERPT_CHARS]
@@ -415,6 +427,22 @@ def evaluate_health(
             f"capabilities {health.capabilities!r} while PromptGuard is "
             "unavailable — a consumer would send it unscannable work"
         )
+    if (
+        expect_requested_device is not None
+        and health.promptguard_requested_device != expect_requested_device
+    ):
+        failures.append(
+            "/health promptguard_requested_device is "
+            f"{health.promptguard_requested_device!r}, expected "
+            f"{expect_requested_device!r} (--expect-requested-device)"
+        )
+    if expect_device is not None:
+        wanted = None if expect_device == DEVICE_NULL else expect_device
+        if health.promptguard_device != wanted:
+            failures.append(
+                f"/health promptguard_device is {health.promptguard_device!r}, "
+                f"expected {wanted!r} (--expect-device)"
+            )
     if health.contract_version != CONTRACT_VERSION:
         failures.append(
             f"/health contract_version is {health.contract_version!r}, but this "
@@ -600,6 +628,8 @@ def run_smoke(
     base_url: str,
     *,
     expect_status: ExpectStatus = EXPECTED_STATUS,
+    expect_requested_device: str | None = None,
+    expect_device: str | None = None,
     anchor_path: Path = ANCHOR_PATH,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
@@ -631,7 +661,12 @@ def run_smoke(
     log(f"--- GET /health -> {health.status} ---")
     log(health.body[:_BODY_EXCERPT_CHARS])
 
-    failures = evaluate_health(health, expect_status=expect_status)
+    failures = evaluate_health(
+        health,
+        expect_status=expect_status,
+        expect_requested_device=expect_requested_device,
+        expect_device=expect_device,
+    )
 
     metrics = fetch(f"{base_url.rstrip('/')}/metrics")
     log(f"--- GET /metrics -> {metrics.status} ---")
@@ -717,6 +752,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--expect-requested-device",
+        choices=("cpu", "cuda"),
+        default=None,
+        help="Assert /health promptguard_requested_device (default: not asserted).",
+    )
+    parser.add_argument(
+        "--expect-device",
+        choices=DEVICE_CHOICES,
+        default=None,
+        help=(
+            "Assert /health promptguard_device; 'null' asserts JSON null, the "
+            "state of a requested GPU that was never usable (default: not asserted)."
+        ),
+    )
+    parser.add_argument(
         "--anchor",
         type=Path,
         default=ANCHOR_PATH,
@@ -736,11 +786,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     poll_interval_seconds: float = args.poll_interval_seconds
     image: str | None = args.image
     expect_status: ExpectStatus = args.expect_status
+    expect_requested_device: str | None = args.expect_requested_device
+    expect_device: str | None = args.expect_device
     anchor_path: Path = args.anchor
 
     failures = run_smoke(
         base_url,
         expect_status=expect_status,
+        expect_requested_device=expect_requested_device,
+        expect_device=expect_device,
         anchor_path=anchor_path,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,

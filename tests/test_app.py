@@ -75,6 +75,7 @@ from pipeline.retrieve_limits import (
     RetrieveSettings,
     retrieve_settings_from_config,
 )
+from pipeline.sanitizer_revision import derive_sanitizer_revision
 from pipeline.search_providers import SearchProviderConfigurationError
 from pipeline.search_providers.base import (
     ProviderFailure,
@@ -104,9 +105,11 @@ from promptguard.classifier import (
     DEFAULT_MODEL_ID,
     MAX_SEQ_LEN,
     PROMPT_GUARD_22M_ID,
+    DeviceState,
     PromptGuardClassifier,
     PromptGuardThreadsConfigurationError,
 )
+from promptguard.device import DeviceSettings
 from retrieval_app import (
     _MAX_DOCUMENT_BYTES,
     CACHE_HMAC_KEY_ENV_VAR,
@@ -283,6 +286,228 @@ async def test_health_degraded_reports_promptguard_unavailable(
     assert data["status"] == "degraded"
     assert "promptguard_unavailable" in data["degraded_reasons"]
     assert data["contract_version"] == CONTRACT_VERSION
+
+
+def _stub_device_classifier(
+    *, loaded: bool = True, state: DeviceState | None
+) -> MagicMock:
+    classifier = MagicMock(spec=PromptGuardClassifier)
+    classifier.loaded = loaded
+    classifier.device_state.return_value = state
+    return classifier
+
+
+def _device_state(
+    device: str,
+    *,
+    requested: str = "cuda",
+    failed_over: bool = False,
+    oom_refused: bool = False,
+) -> DeviceState:
+    return DeviceState(
+        device=device,
+        requested_device=requested,
+        failed_over=failed_over,
+        failover_reason="oom" if failed_over else None,
+        oom_refused=oom_refused,
+        fp32_precision=None,
+        effective_batch_size=1,
+    )
+
+
+# (loaded, requested, snapshot, expected device, expected reasons, expected status)
+_HEALTH_DEVICE_ROWS: dict[
+    str, tuple[bool, str, DeviceState | None, str | None, list[str]]
+] = {
+    "unloaded": (False, "cuda", None, None, ["promptguard_unavailable"]),
+    "cpu_requested_cpu_active": (
+        True,
+        "cpu",
+        _device_state("cpu", requested="cpu"),
+        "cpu",
+        [],
+    ),
+    "cuda_active": (True, "cuda", _device_state("cuda"), "cuda", []),
+    "failed_over": (
+        True,
+        "cuda",
+        _device_state("cpu", failed_over=True),
+        "cpu",
+        ["promptguard_device_failover"],
+    ),
+    "oom_refused": (
+        True,
+        "cuda",
+        _device_state("cuda", oom_refused=True),
+        "cuda",
+        ["promptguard_device_oom"],
+    ),
+    # Loaded with no snapshot: stub, mock and replay classifiers.
+    "loaded_without_snapshot": (True, "cuda", None, None, []),
+}
+
+
+@pytest.mark.parametrize("row", list(_HEALTH_DEVICE_ROWS))
+async def test_health_device_fields_follow_the_state_table(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, row: str
+) -> None:
+    loaded, requested, snapshot, device, reasons = _HEALTH_DEVICE_ROWS[row]
+    monkeypatch.setattr(
+        app.state,
+        "classifier",
+        _stub_device_classifier(loaded=loaded, state=snapshot),
+    )
+    monkeypatch.setattr(
+        app.state, "promptguard_requested_device", requested, raising=False
+    )
+    app.state.cache.connected = True
+
+    data = (await client.get("/health")).json()
+
+    assert data["promptguard_device"] == device
+    assert data["promptguard_requested_device"] == requested
+    assert data["degraded_reasons"] == reasons
+    assert data["status"] == ("degraded" if reasons else "healthy")
+
+
+async def test_health_failover_reason_never_accompanies_unavailable(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unloaded classifier with a failed-over snapshot lists only unavailable."""
+    stub = _stub_device_classifier(
+        loaded=False, state=_device_state("cpu", failed_over=True)
+    )
+    monkeypatch.setattr(app.state, "classifier", stub)
+    app.state.cache.connected = True
+
+    data = (await client.get("/health")).json()
+
+    assert data["degraded_reasons"] == ["promptguard_unavailable"]
+    assert data["promptguard_device"] is None
+
+
+async def test_health_ignores_a_latched_oom_flag_on_an_active_cpu(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _stub_device_classifier(
+        state=_device_state("cpu", requested="cpu", oom_refused=True)
+    )
+    monkeypatch.setattr(app.state, "classifier", stub)
+    app.state.cache.connected = True
+
+    data = (await client.get("/health")).json()
+
+    assert data["promptguard_device"] == "cpu"
+    assert data["degraded_reasons"] == []
+
+
+async def test_a_bare_mock_classifier_has_no_device_snapshot() -> None:
+    bare = MagicMock()
+    bare.loaded = True
+    assert retrieval_app._device_snapshot(bare) is None
+    spec = MagicMock(spec=PromptGuardClassifier)
+    spec.loaded = True
+    assert retrieval_app._device_snapshot(spec) is None
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [(None, "cpu"), ("cuda", "cuda"), ("cpu", "cpu"), ("tpu", "cpu")],
+)
+async def test_lifespan_free_health_reads_the_requested_device_from_the_env(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    env: str | None,
+    expected: str,
+) -> None:
+    monkeypatch.delattr(app.state, "promptguard_requested_device", raising=False)
+    if env is None:
+        monkeypatch.delenv("FORAGE_DEVICE", raising=False)
+    else:
+        monkeypatch.setenv("FORAGE_DEVICE", env)
+
+    data = (await client.get("/health")).json()
+
+    assert data["promptguard_requested_device"] == expected
+
+
+# -- `device@cuda` in the revision, at every call site (inference-surface US-003) --
+
+
+def _set_device_env(monkeypatch: pytest.MonkeyPatch, env: str | None) -> None:
+    if env is None:
+        monkeypatch.delenv("FORAGE_DEVICE", raising=False)
+    else:
+        monkeypatch.setenv("FORAGE_DEVICE", env)
+
+
+async def _revisions_from_every_site(running: httpx.AsyncClient) -> dict[str, str]:
+    limit = app.state.extraction_settings.max_extracted_characters
+    ok = await running.post(
+        "/extract",
+        files={"file": ("a.txt", b"Hello world", "text/plain")},
+        data={"filename": "a.txt"},
+    )
+    refused = await running.post(
+        "/extract",
+        files={"file": ("big.txt", b"a" * (limit + 1), "text/plain")},
+        data={"filename": "big.txt"},
+    )
+    assert ok.status_code == 200
+    assert refused.status_code == 422
+    return {
+        "health": (await running.get("/health")).json()["sanitizer_revision"],
+        "extract_200": ok.json()["sanitizer_revision"],
+        "extract_422": refused.json()["sanitizer_revision"],
+    }
+
+
+@pytest.mark.parametrize("env", [None, "cpu", "cuda"])
+async def test_lifespan_app_health_and_both_extract_bodies_share_one_revision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: str | None
+) -> None:
+    config = {"extract_route_enabled": True}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    monkeypatch.setattr(retrieval_app, "spool_dir", lambda: tmp_path)
+    monkeypatch.setattr(model_fetcher.WeightAcquisition, "run", AsyncMock())
+    _set_device_env(monkeypatch, env)
+    async with _running_app() as running:
+        expected = derive_sanitizer_revision(config)
+        seen = await _revisions_from_every_site(running)
+        seen["lifespan"] = app.state.sanitizer_revision
+    assert set(seen.values()) == {expected}
+
+
+@pytest.mark.parametrize("env", [None, "cpu", "cuda"])
+async def test_lifespan_free_health_and_both_extract_bodies_share_one_revision(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, env: str | None
+) -> None:
+    _set_device_env(monkeypatch, env)
+    monkeypatch.delattr(app.state, "sanitizer_revision", raising=False)
+    seen = await _revisions_from_every_site(client)
+    assert set(seen.values()) == {derive_sanitizer_revision(app.state.config)}
+
+
+async def test_a_failover_changes_health_but_not_the_revision(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FORAGE_DEVICE", "cuda")
+    monkeypatch.delattr(app.state, "sanitizer_revision", raising=False)
+    classifier = PromptGuardClassifier()
+    target = cast(Any, classifier)
+    target._loaded = True
+    target._active = (object(), "cuda")
+    classifier.configure_device(DeviceSettings("cuda", "cpu"), False)
+    app.state.classifier = classifier
+    before = (await client.get("/health")).json()
+    target._active = (object(), "cpu")
+    target._mark_failed_over("oom")
+    after = (await client.get("/health")).json()
+    assert (before["promptguard_device"], after["promptguard_device"]) == (
+        "cuda",
+        "cpu",
+    )
+    assert after["sanitizer_revision"] == before["sanitizer_revision"]
 
 
 # Both break-glass names: the current one and the pre-extraction alias. Every
@@ -724,6 +949,10 @@ async def test_metrics_exposes_the_model_acquisition_counters(
         "quarantines": 0,
         "fetch_in_progress": False,
         "retries_scheduled": 0,
+        "device_failovers": 0,
+        "oom_batch_reductions": 0,
+        "oom_refusals": 0,
+        "effective_batch_size": None,
     }
 
 
@@ -746,6 +975,10 @@ async def test_metrics_model_counters_reflect_the_live_metrics_object(
         "quarantines": 1,
         "fetch_in_progress": True,
         "retries_scheduled": 1,
+        "device_failovers": 0,
+        "oom_batch_reductions": 0,
+        "oom_refusals": 0,
+        "effective_batch_size": None,
     }
 
 
@@ -1646,6 +1879,10 @@ async def test_a_credential_less_boot_stays_degraded_and_says_so_once(
                 "quarantines": 0,
                 "fetch_in_progress": False,
                 "retries_scheduled": 1,
+                "device_failovers": 0,
+                "oom_batch_reductions": 0,
+                "oom_refusals": 0,
+                "effective_batch_size": None,
             }
 
     errors = [

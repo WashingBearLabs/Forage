@@ -117,13 +117,13 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
    same two files. The anchor at `HEAD` is
-   `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`.
+   `9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
    semvers — image `1.3.0` serves contract `1.4.0`. Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
    **do not deploy** (the consumer is expected to refuse activation, `CLAUDE.md`
    invariant 4). Compare contracts, never `sanitizer_revision`, which has deliberately
-   diverged from Poppy's fifty-nine times (`docs/bootstrap-notes.md` keeps the record).
+   diverged from Poppy's sixty-one times (`docs/bootstrap-notes.md` keeps the record).
 5. **Confirm the weights source is reachable** from the host: an `HF_TOKEN` with gated-repo
    access, or mirror credentials. Weights are fetched at runtime, so a wrong token is a
    `degraded` boot, not a failed one.
@@ -194,6 +194,25 @@ curl -s http://127.0.0.1:8020/health | jq
 
 `docker compose down -v` deletes the weights volume; use `down` without `-v` for a routine
 stop.
+
+#### GPU host (overlay)
+
+`compose/gpu.yml` is an overlay, not a third fragment: it has no image and no ports and is merged
+onto either base. Prerequisites: amd64, NVIDIA driver ≥ 580 (cu130), the NVIDIA Container Toolkit,
+Docker Compose ≥ 2.30. A missing Toolkit fails at `compose up`, not as a degraded boot.
+
+```bash
+cd /path/to/Forage/compose
+docker compose -f minimal.yml -f gpu.yml up -d     # or: -f full.yml -f gpu.yml
+curl -s http://127.0.0.1:8020/health | jq '{degraded_reasons, promptguard_device, promptguard_requested_device}'
+```
+
+It requests one `nvidia` GPU, sets `FORAGE_DEVICE=cuda` and `FORAGE_DEVICE_FALLBACK`
+(`${FORAGE_DEVICE_FALLBACK:-cpu}`; `refuse` makes the service refuse to start without a usable GPU),
+and sets `mem_limit: ${FORAGE_MEM_LIMIT:-3072m}`, which is **provisional** until measured on a GPU
+host. GPU memory is not reserved and the GPU is shared and non-isolated: no multi-tenant hosts, keep
+the loopback binding. Full guide: [`docs/configuration.md` § Installing on a GPU
+host](../../docs/configuration.md#installing-on-a-gpu-host).
 
 ### Plain `docker run` path
 
@@ -403,7 +422,7 @@ guarantee under your traffic.
 | Host | Reference envelope (1 vCPU / 1 GB), configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT`; 19 s cold weights boot, 9 s warm, not classify latency | `docs/configuration.md` § Sizing the container |
 | Container memory | `mem_limit: ${FORAGE_MEM_LIMIT:-1536m}` (default `1536m`): 512 MiB parent + 405 MiB 86M resident delta + 384 MiB pypdf child + 32 MiB cache + 64 MiB provisional classifier working set = 1397 MiB, 139 MiB margin at reference defaults (the 22M opt-out is 992 MiB and fits `1024m`) | `compose/*.yml`; `docs/configuration.md` § Sizing the container |
 | Weights volume | ~1.1 GiB for the default 86M (`model.safetensors` is 1,115,268,200 bytes); ~270 MiB for the 22M (283,347,432 bytes); a mirror pull needs roughly 2.2x the manifest bytes free during the fetch | `docs/weights.md` |
-| Image | ~348 MB, single stage, CPU-only torch | `Dockerfile`, CI notes |
+| Image | single stage; arm64 ~348 MB with CPU torch (recorded), amd64 ~3.14 GB compressed, ~5.96 GB on disk with CUDA torch (CI-measured) | `Dockerfile`, CI notes |
 | Concurrency | one uvicorn worker; `/extract` concurrency pinned at 1 with queue depth 1 (excess is a 429 `busy`); `/retrieve` fetches time out at 30 s and cap bodies at 10 MiB | `config.yaml`, `pipeline/stage5_url_audit.py` |
 
 Counters in `/metrics` are in-process and per container; if you run more than one

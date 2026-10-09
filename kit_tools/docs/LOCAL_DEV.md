@@ -41,13 +41,17 @@ the container path, which is the documented way to *run* the service.
 
 ### macOS vs Linux
 
-- **Where torch comes from.** `[tool.uv.sources]` in `pyproject.toml` routes `torch`
-  through the explicit `pytorch-cpu` index (`https://download.pytorch.org/whl/cpu`) with
-  `marker = "sys_platform == 'linux'"`. Linux therefore resolves `torch 2.14.0+cpu`; macOS
-  resolves the default PyPI `torch 2.14.0`, which is already CPU-only. Either way
-  `grep nvidia- uv.lock` must come back empty (see Troubleshooting).
+- **Where torch comes from.** Torch lives only in the `cpu` / `cuda` extras, so a bare
+  `uv sync` installs none and the test session stops with an install hint.
+  `[tool.uv.sources]` in `pyproject.toml` declares three Linux sources: the `cpu` extra
+  through the explicit `pytorch-cpu` index (`torch 2.14.0+cpu`), the `cuda` extra through
+  `pytorch-cu130` on x86_64 (`torch 2.14.0+cu130`) and through `pytorch-cpu` elsewhere.
+  macOS resolves the default PyPI `torch 2.14.0` for either extra. The development profile
+  must stay CUDA-free:
+  `uv export --frozen --extra dev --extra cpu | grep -E '^(nvidia-|cuda-|triton==)'` must
+  come back empty (see Troubleshooting).
 - **Cold sync cost.** `kit_tools/worktree.yaml` budgets "~5 minutes" for a cold
-  `uv sync --extra dev` on Linux (the torch CPU wheel is ~152 MiB on aarch64). The macOS
+  `uv sync --extra dev --extra cpu` on Linux (the torch CPU wheel is ~152 MiB on aarch64). The macOS
   figure was not measured.
 - **Runtime differences on macOS.** `pipeline/pdf_subprocess.py` applies `RLIMIT_AS` to
   the PDF worker only on Linux; the `/metrics` cgroup fields
@@ -65,7 +69,7 @@ git clone https://github.com/WashingBearLabs/Forage.git
 cd Forage
 
 # 2. Environment: creates .venv with runtime + dev extras (~5 min cold on Linux)
-uv sync --extra dev
+uv sync --extra dev --extra cpu
 
 # 3. The four blocking CI gates -- all must be green before you push
 uv run pytest
@@ -94,7 +98,7 @@ After step 4 the service is at `http://127.0.0.1:8020`. `/health` returns HTTP 2
 ### 1. Environment: `uv sync`, and why everything goes through `uv run`
 
 ```bash
-uv sync --extra dev    # once per checkout or worktree; CI runs the same with --locked
+uv sync --extra dev --extra cpu    # once per checkout or worktree; CI runs the same with --locked
 ```
 
 `uv.lock` pins the whole toolchain — ruff 0.16.6, pyright 1.1.411, pytest 9.1.1 — and
@@ -106,7 +110,7 @@ The only supported invocations are `uv run …` locally and the CI jobs.
 
 [`kit_tools/worktree.yaml`](../worktree.yaml) is the environment contract for
 orchestrator worktrees: `/kit-tools:execute-epic` runs in a fresh git worktree that does
-not share the gitignored `.venv`, and the file tells it `env_bootstrap: uv sync --extra dev`,
+not share the gitignored `.venv`, and the file tells it `env_bootstrap: uv sync --extra dev --extra cpu`,
 `run_prefix: uv run`, `env_link: []`, `path_links: []` (there is no repo-local env file to
 link). Keep it accurate — without `run_prefix` the detached orchestrator runs system
 Python and reports pytest collection crashes as false regressions.
@@ -380,15 +384,16 @@ curl -s localhost:8020/metrics | jq .model    # fetch_in_progress, retries_sched
 
 ---
 
-### `uv sync` is slow, huge, or `nvidia-*` packages appear in `uv.lock`
+### `uv sync` is slow, huge, or `nvidia-*` packages appear in the `cpu` environment
 
 **Symptom:** a multi-gigabyte sync on Linux, or `tests/test_dependency_lock.py` fails.
 
-**Cause:** the lock was re-resolved without the `pytorch-cpu` index, so plain PyPI dragged in the CUDA wheels (~2.7 GB).
+**Cause:** the `cpu` extra was re-resolved without the `pytorch-cpu` source, so plain PyPI dragged in the CUDA wheels (~2.7 GB). (The lock itself now legitimately carries `nvidia-*` entries for the `cuda` extra; only the `cpu` selection must be clean.)
 
 **Fix:** restore the `[[tool.uv.index]]` / `[tool.uv.sources]` block in `pyproject.toml`, re-lock, and confirm:
 ```bash
-grep nvidia- uv.lock    # must print nothing
+uv export --frozen --extra dev --extra cpu | grep -E '^(nvidia-|cuda-|triton==)'    # must print nothing
+uv run python -m scripts.check_lock_cuda_scope                                        # must report no violations
 ```
 
 ---

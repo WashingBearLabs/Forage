@@ -14,6 +14,13 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 
 Not yet tagged; the version number is decided at the release gate.
 
+- `inference-device` US-004: GPU out-of-memory handling (sticky batch halving, CPU failover or
+  refusal per `FORAGE_DEVICE_FALLBACK`). `sanitizer_revision` rotates a sixtieth time,
+  `2c6d0382…` → `6a0fcaad…`; no effect at the default `FORAGE_DEVICE=cpu` beyond the cache-key change.
+- `inference-surface` US-001: `/health` gains `promptguard_device` and `promptguard_requested_device`
+  and the degraded reasons `promptguard_device_failover` and `promptguard_device_oom` (contract
+  `1.5.0`, a MINOR). `sanitizer_revision` rotates a sixty-first time, `6a0fcaad…` → `396ea4bf…`.
+
 ## Released versions
 
 Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index digest:` and

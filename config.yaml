@@ -21,6 +21,8 @@ promptguard_contiguity_threshold: 0.5
 # match the actual CPU quota: FORAGE_CPUS, Kubernetes, host cgroup or orchestrator.
 # Torch sees the host core count, not that quota; the tokenizer pool is disabled.
 promptguard_threads: 0
+# Windows per forward pass on CUDA only (1-64); the CPU path stays at one.
+promptguard_cuda_batch_size: 16
 # Raw UTF-8 bytes per caller domain list, including newline separators.
 # Allowlists truncate; an over-budget denylist is refused whole.
 policy_domain_entries_max_bytes: 65536

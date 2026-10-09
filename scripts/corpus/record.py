@@ -36,13 +36,13 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Final
 
-import model_fetcher
 from pipeline.sanitizer_revision import derive_sanitizer_revision
 from promptguard.classifier import (
     PromptGuardBudgetExceededError,
     PromptGuardClassifier,
 )
 from scripts.corpus.drivers import drive_all
+from scripts.corpus.live import Refusal, resolve_and_load
 from scripts.corpus.outcomes import RouteResult, RuleConfig
 from scripts.corpus.records import load_corpus
 from scripts.corpus.replay import (
@@ -63,10 +63,6 @@ _UNSCANNED_STATES: Final[frozenset[str]] = frozenset(
 )
 _UNSCANNED_OMISSION: Final = "promptguard_unavailable"
 
-_MODEL_ENV: Final[tuple[str, ...]] = (
-    model_fetcher.MODEL_ID_ENV_VAR,
-    model_fetcher.MODEL_REVISION_ENV_VAR,
-)
 _ALL_CONFIGS: Final[tuple[RuleConfig, ...]] = ("default", "contiguity")
 
 
@@ -219,22 +215,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     out_dir: Path = args.out
     configs: list[RuleConfig] = args.configs
 
-    if any(name in os.environ for name in _MODEL_ENV):
-        return _refuse("model_env_set")
-    if model_id not in model_fetcher.ALLOWED_MODEL_IDS:
-        return _refuse("model_id_not_allowed")
-    pin = model_fetcher.read_manifest_pin(model_id=model_id)
-    if pin is None:
-        return _refuse("not_pinned")
-    revision = pin.revision
-
-    classifier = PromptGuardClassifier()
-    # Before `drive_all`, which patches `acquire_and_load` inside `corpus_app`.
-    model_fetcher.acquire_and_load(classifier, model_id=model_id, revision=revision)
-    # The revision guard: the loader refuses any revision but the manifest's,
-    # so `loaded` means exactly `(model_id, revision)` is resident.
-    if not classifier.loaded:
-        return _refuse("not_loaded")
+    loaded = resolve_and_load(model_id)
+    if isinstance(loaded, Refusal):
+        return _refuse(loaded.reason)
+    classifier = loaded.classifier
+    revision = loaded.revision
 
     records = load_corpus()
     recorder = RecordingClassifier(classifier, model_id=model_id, revision=revision)

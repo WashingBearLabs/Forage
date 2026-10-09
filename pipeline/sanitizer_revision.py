@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 import idna
 
 from model_fetcher import resolve_model_id, resolve_revision
+from promptguard.device import requested_device_token
 
 _REVISION_SOURCES = (
     "contract.py",
@@ -73,6 +75,17 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
     ``unicodedata@<version>`` beside ``idna@<version>``, for the same reason:
     the fold forms apply NFKC (decided by Python's Unicode database) and then
     the generated tables, so either moving changes what stage 2 sees.
+
+    ``device@cuda`` is hashed after the model identity when ``FORAGE_DEVICE``
+    requests ``cuda`` (``inference-surface`` US-003), read from the same
+    environment at every call site so the lifespan value, ``/health`` and both
+    ``/extract`` bodies agree. ``cpu``, unset and invalid hash nothing, so the
+    default revision is unchanged by this input (the lifespan refuses an
+    invalid value before any request is served). It is the *requested* device:
+    a failover changes the content-cache fingerprint
+    (``cache_policy_fingerprint(active_device=...)``), never this revision.
+    ``FORAGE_PROMPTGUARD_CUDA_BATCH_SIZE`` / ``promptguard_cuda_batch_size`` is
+    in neither.
     """
     digest = hashlib.sha256()
     pipeline_dir = Path(__file__).parent
@@ -82,6 +95,8 @@ def derive_sanitizer_revision(config: dict[str, Any]) -> str:
         digest.update((pipeline_dir.parent / root_source_name).read_bytes())
     model_id = resolve_model_id()[0]
     digest.update(f"{model_id}@{resolve_revision(model_id)}".encode())
+    if requested_device_token(os.environ) == "cuda":
+        digest.update(b"device@cuda")
     digest.update(f"idna@{idna.__version__}".encode())
     digest.update(f"unicodedata@{unicodedata.unidata_version}".encode())
     digest.update(

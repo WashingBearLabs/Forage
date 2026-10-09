@@ -521,7 +521,7 @@ comment, `tests/test_pyright_policy.py`, `typings/README.md` (commit `f673fab`, 
 
 ### 2026-09-07: Torch resolves from the CPU index on Linux via `uv.lock`; CI greps the lock for CUDA wheels
 
-**Status:** Accepted
+**Status:** Superseded by 2026-10-09 (one image, cu130 on amd64, three torch sources)
 
 **Context:**
 Resolving torch from plain PyPI drags in fifteen `nvidia-*` CUDA packages (about 2.7 GB) that no
@@ -548,6 +548,45 @@ Re-locking without the index configuration silently reintroduces the payload; a 
 **Source:** `pyproject.toml` index comment (commit `d2b62bb`, 2026-09-07);
 `tests/test_dependency_lock.py` and `.github/workflows/ci.yml` (commit `8c652ad`, 2026-09-07);
 `kit_tools/docs/GOTCHAS.md` "`uv.lock` must stay CPU-pinned".
+
+---
+
+### 2026-10-09: One image — CUDA torch on amd64, CPU torch on arm64, three torch sources (supersedes 2026-09-07)
+
+**Status:** Accepted
+
+**Context:**
+The 2026-09-07 decision kept the lock CPU-only because the image never needed a GPU. Measured
+2026-10-07/08 on thelab: CPU PromptGuard costs about 1 s per 512-token window and stops scaling
+near 8 CPUs, while CUDA torch on an RTX 4070 Ti costs about 15 ms. A CUDA-built wheel runs CPU
+inference at parity with the CPU wheel, so one image costs CPU installs nothing in speed, only
+size.
+
+**Options Considered:**
+Two image variants (`forage` and `forage-cuda`) were rejected: the adversarial lab and
+production could drift between them.
+
+**Decision:**
+Ship one `forage` image from one Dockerfile and one lock, with no build arguments: `cu130` torch
+on amd64, CPU torch on arm64. Torch lives only in the `cpu` / `cuda` extras, and
+`pyproject.toml` declares three sources: the `cpu` extra to `pytorch-cpu` on Linux, the `cuda`
+extra to `pytorch-cu130` on x86_64 Linux, and the `cuda` extra to `pytorch-cpu` on other Linux
+architectures (without the third, arm64 would pull PyPI's CUDA torch). `grep nvidia- uv.lock` is
+no longer an invariant; `scripts/check_lock_cuda_scope.py` replaces it, requiring the
+`nvidia-*` / `cuda-*` / `triton` payload to be active only in the `cuda` extra on x86_64 Linux
+and to equal an exact-set allowlist. The device is chosen at install time (`FORAGE_DEVICE`,
+default `cpu`).
+
+**Consequences:**
+The amd64 image grows from about 350 MB to about 3.14 GB compressed, 5.96 GB on disk (measured in CI, run 37962323278; see the CI size
+budgets); arm64 is unchanged. Development and CI keep syncing `--extra dev --extra cpu`, which
+stays CUDA-free. A torch bump that adds or drops a payload package needs a reviewed allowlist
+edit. The CPU-only claims in the Dockerfile header and the docs were corrected in
+`feature-unified-image` US-003, including the GOTCHAS claim that the image never reads the lock,
+which had been false since `forage-ci-and-image` US-003.
+
+**Source:** `kit_tools/specs/feature-unified-image.md`; `kit_tools/specs/epic-forage-inference-backends.md`
+(measured basis); `pyproject.toml` `[tool.uv.sources]`; `scripts/check_lock_cuda_scope.py`.
 
 ---
 
@@ -1154,7 +1193,7 @@ attackers defeat row-shaped fixes (arXiv 2510.09023).
 
 **Consequences:** Nine `sanitizer_revision` rotations (forty-fourth to fifty-second) end at
 `46b8d1bb…`; they ship as one cache-invalidating window (the v1.3.0 `release-resource-bounds` US-001 adds a
-fifty-third, `0ace27ca…`, with byte-identical output, US-006 a fifty-fourth, `54aa9649…`, US-007 a fifty-fifth, `ff18b0bf…`, US-008 a fifty-sixth, `d582f8da…`, and `release-padding-gate` US-001 a fifty-seventh, `23444fe4…`, which makes a refused look-alike fold a BLOCK, and `release-1-3-0` US-003 a fifty-eighth, `91455b21…`, text only, and the validation fix a fifty-ninth, `2c6d0382…`, text only). Stage 2 remains an evidence signal, not a
+fifty-third, `0ace27ca…`, with byte-identical output, US-006 a fifty-fourth, `54aa9649…`, US-007 a fifty-fifth, `ff18b0bf…`, US-008 a fifty-sixth, `d582f8da…`, and `release-padding-gate` US-001 a fifty-seventh, `23444fe4…`, which makes a refused look-alike fold a BLOCK, and `release-1-3-0` US-003 a fifty-eighth, `91455b21…`, text only, and the validation fix a fifty-ninth, `2c6d0382…`, text only, and `inference-device` US-004 a sixtieth, `6a0fcaad…`, and `inference-surface` US-001 a sixty-first, `396ea4bf…`, contract `1.5.0`). Stage 2 remains an evidence signal, not a
 boundary: the unmitigated technique classes are listed in `kit_tools/arch/SECURITY.md` ("Stage 2
 scan forms"). Feeding normalised text to stage 3 is a later epic with an owner recording gate.
 

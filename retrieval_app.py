@@ -52,6 +52,8 @@ from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAUTHENTICATED,
     DEGRADED_CACHE_UNAVAILABLE,
+    DEGRADED_PROMPTGUARD_DEVICE_FAILOVER,
+    DEGRADED_PROMPTGUARD_DEVICE_OOM,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
     POLICY_DOMAIN_LIST_TOO_LARGE,
     POLICY_EXCLUDED_ALL_PROVIDERS,
@@ -113,10 +115,15 @@ from pipeline.stage3_promptguard import (
 )
 from pipeline.stage5_url_audit import DEFAULT_MAX_CONTENT_BYTES
 from pipeline.worker_launch import make_process_non_dumpable, sweep_stale_spool
+from promptguard import device as promptguard_device
 from promptguard.classifier import (
     DEFAULT_MODEL_ID,
     PromptGuardClassifier,
+    promptguard_cuda_batch_size_from_config,
     promptguard_threads_from_config,
+)
+from promptguard.classifier import (
+    device_snapshot as _device_snapshot,
 )
 from url_validator import domain_list_bytes, normalize_domain_entries
 
@@ -385,6 +392,18 @@ def _resolved_promptguard_model(state: State) -> str:
     return model_id
 
 
+def _resolved_requested_device(state: State) -> Literal["cpu", "cuda"]:
+    """Read the boot-resolved requested device; lifespan-free apps read the env.
+
+    ``"invalid"`` cannot reach a serving process (the lifespan refuses it), so
+    it maps to ``cpu`` here rather than leaking into the response.
+    """
+    requested: str | None = getattr(state, "promptguard_requested_device", None)
+    if requested is None:
+        requested = promptguard_device.requested_device_token(os.environ)
+    return "cuda" if requested == "cuda" else "cpu"
+
+
 def _resolved_search_providers(state: State) -> list[SearchProvider]:
     """Return the chain this app resolved at start, or the default chain.
 
@@ -430,6 +449,7 @@ KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "promptguard_contiguity_windows",
         "promptguard_contiguity_threshold",
         "promptguard_threads",
+        "promptguard_cuda_batch_size",
         "promptguard_fail_closed_floor",
         "promptguard_threshold_ceiling",
         "promptguard_wait_seconds",
@@ -533,6 +553,22 @@ class HealthResponse(BaseModel):
             "contract-relevant and inferable from behaviour; contiguity settings "
             "are tuning an attacker would otherwise have to guess and are not "
             "published here."
+        )
+    )
+    promptguard_device: Literal["cpu", "cuda"] | None = Field(
+        description=(
+            "The device the classifier is running on right now: 'cpu' or "
+            "'cuda'. Null until the classifier is loaded, and null when a "
+            "loaded classifier reports no device state. After a failover this "
+            "is 'cpu' while promptguard_requested_device is 'cuda'. Added in "
+            "contract 1.5.0."
+        )
+    )
+    promptguard_requested_device: Literal["cpu", "cuda"] = Field(
+        description=(
+            "The device this start resolved from FORAGE_DEVICE, always "
+            "present, whether or not the classifier is loaded or got that "
+            "device. Added in contract 1.5.0."
         )
     )
     cache_connected: bool = Field(
@@ -965,6 +1001,21 @@ class ModelMetricsResponse(BaseModel):
         description=(
             "Retries armed after a failed acquisition. Non-zero with "
             "fetch_in_progress false is the 'waiting to try again' state."
+        )
+    )
+    device_failovers: int = Field(
+        description="Times the classifier moved from the GPU to the CPU."
+    )
+    oom_batch_reductions: int = Field(
+        description="Times a GPU out-of-memory error halved the batch size."
+    )
+    oom_refusals: int = Field(
+        description="Classifications refused after GPU out-of-memory."
+    )
+    effective_batch_size: int | None = Field(
+        description=(
+            "Windows per GPU forward pass right now; null on the CPU or "
+            "when no classifier snapshot exists."
         )
     )
 
@@ -1676,6 +1727,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if not model_allowed:
         raise model_fetcher.ModelConfigurationError("model_id_not_allowed")
     app.state.promptguard_model = model_id
+    # Device selection is resolved, and the GPU probed, before the classifier
+    # exists or any weight acquisition starts: a bad setting, or no GPU under
+    # `refuse`, stops the service here rather than serving degraded. With `cpu`
+    # the probe is never called and torch is not imported early.
+    device_settings = promptguard_device.resolve_device_settings(os.environ)
+    app.state.device_settings = device_settings
+    app.state.promptguard_requested_device = device_settings.device
+    app.state.boot_probe_failed = False
+    if device_settings.device == "cuda":
+        probe = await asyncio.to_thread(promptguard_device.probe_cuda)
+        if probe != "ok":
+            if device_settings.fallback == "refuse":
+                raise promptguard_device.DeviceConfigurationError(
+                    "FORAGE_DEVICE=cuda with FORAGE_DEVICE_FALLBACK=refuse "
+                    "requires a usable GPU"
+                )
+            app.state.boot_probe_failed = True
+    elif os.environ.get(promptguard_device.DEVICE_FALLBACK_ENV_VAR, "").strip():
+        logger.info("device_fallback_ignored_on_cpu")
     # Load config
     config = _load_config()
     _warn_unknown_config_keys(config)
@@ -1893,6 +1963,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # rather than starting a second ~270 MiB download alongside this one.
     classifier = PromptGuardClassifier()
     classifier.configure_threads(promptguard_threads_from_config(config))
+    classifier.configure_batch_size(promptguard_cuda_batch_size_from_config(config))
+    classifier.configure_device(device_settings, app.state.boot_probe_failed)
     app.state.classifier = classifier
     acquisition = model_fetcher.WeightAcquisition(
         classifier,
@@ -2114,6 +2186,12 @@ async def health(request: Request) -> HealthResponse:
     sanitizer_revision = _resolved_sanitizer_revision(request.app.state)
 
     classifier_loaded = request.app.state.classifier.loaded
+    device_snapshot = _device_snapshot(request.app.state.classifier)
+    active_device: Literal["cpu", "cuda"] | None = (
+        None
+        if device_snapshot is None
+        else ("cuda" if device_snapshot.device == "cuda" else "cpu")
+    )
     degraded_reasons: list[DegradedReason] = []
     if not classifier_loaded:
         degraded_reasons.append(DEGRADED_PROMPTGUARD_UNAVAILABLE)
@@ -2121,6 +2199,13 @@ async def health(request: Request) -> HealthResponse:
         degraded_reasons.append(DEGRADED_CACHE_UNAVAILABLE)
     if cache_backend == "valkey" and not cache_signing_active:
         degraded_reasons.append(DEGRADED_CACHE_UNAUTHENTICATED)
+    if device_snapshot is not None and classifier_loaded:
+        if device_snapshot.failed_over and active_device == "cpu":
+            degraded_reasons.append(DEGRADED_PROMPTGUARD_DEVICE_FAILOVER)
+        # oom_refused only latches under `refuse` with active cuda; it is
+        # ignored with active cpu.
+        if device_snapshot.oom_refused and active_device == "cuda":
+            degraded_reasons.append(DEGRADED_PROMPTGUARD_DEVICE_OOM)
     capabilities = (
         {CAPABILITY_SEARCH_SANITIZATION: 1}
         if classifier_loaded or _break_glass_advertisement_enabled()
@@ -2138,6 +2223,8 @@ async def health(request: Request) -> HealthResponse:
         status="degraded" if degraded_reasons else "healthy",
         promptguard_loaded=classifier_loaded,
         promptguard_model=_resolved_promptguard_model(request.app.state),
+        promptguard_device=active_device,
+        promptguard_requested_device=_resolved_requested_device(request.app.state),
         cache_connected=cache_connected,
         capabilities=capabilities,
         sanitizer_revision=sanitizer_revision,
@@ -2165,6 +2252,7 @@ async def metrics(request: Request) -> dict[str, Any]:
     retrieve_metrics: RetrieveMetrics = request.app.state.retrieve_metrics
     cache_metrics: CacheMetrics = request.app.state.cache_metrics
     model_metrics: ModelMetrics = request.app.state.model_metrics
+    device = _device_snapshot(getattr(request.app.state, "classifier", None))
     return {
         "contract_version": CONTRACT_VERSION,
         "extraction": {
@@ -2253,6 +2341,16 @@ async def metrics(request: Request) -> dict[str, Any]:
             "quarantines": model_metrics.quarantines,
             "fetch_in_progress": model_metrics.fetch_in_progress,
             "retries_scheduled": model_metrics.retries_scheduled,
+            # Device state, not acquisition: read from the classifier's
+            # snapshot, zeros and null when there is none.
+            "device_failovers": device.device_failovers if device else 0,
+            "oom_batch_reductions": device.oom_batch_reductions if device else 0,
+            "oom_refusals": device.oom_refusals if device else 0,
+            "effective_batch_size": (
+                device.effective_batch_size
+                if device and device.device != "cpu"
+                else None
+            ),
         },
     }
 

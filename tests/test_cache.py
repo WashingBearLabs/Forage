@@ -79,6 +79,7 @@ def test_policy_fingerprint_preserves_the_wildcard_marker() -> None:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            active_device="cpu",
             sanitizer_revision="revision",
         )
 
@@ -105,6 +106,7 @@ def _fingerprint_at_revision(sanitizer_revision: str) -> str:
         promptguard_threshold=0.85,
         promptguard_fail_closed=True,
         classifier_loaded=True,
+        active_device="cpu",
         sanitizer_revision=sanitizer_revision,
     )
 
@@ -274,6 +276,7 @@ class TestCacheKey:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            active_device="cpu",
             sanitizer_revision=_SAMPLE_REVISION,
         )
         trusted = cache_policy_fingerprint(
@@ -283,6 +286,7 @@ class TestCacheKey:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            active_device="cpu",
             sanitizer_revision=_SAMPLE_REVISION,
         )
         assert cache_key(url, policy_fingerprint=standard) != cache_key(
@@ -300,6 +304,7 @@ class TestCacheKey:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=False,
+            active_device="cpu",
             sanitizer_revision=_SAMPLE_REVISION,
         )
         model_loaded = cache_policy_fingerprint(
@@ -309,6 +314,7 @@ class TestCacheKey:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            active_device="cpu",
             sanitizer_revision=_SAMPLE_REVISION,
         )
         assert cache_key(url, policy_fingerprint=model_absent) != cache_key(
@@ -1695,6 +1701,7 @@ class TestPolicyParityAcrossStorages:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=False,
+            active_device="cpu",
             sanitizer_revision=_SAMPLE_REVISION,
         )
         model_loaded = cache_policy_fingerprint(
@@ -1704,6 +1711,7 @@ class TestPolicyParityAcrossStorages:
             promptguard_threshold=0.85,
             promptguard_fail_closed=True,
             classifier_loaded=True,
+            active_device="cpu",
             sanitizer_revision=_SAMPLE_REVISION,
         )
         await harness.cache.put(
