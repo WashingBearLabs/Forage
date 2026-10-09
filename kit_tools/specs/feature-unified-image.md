@@ -290,18 +290,18 @@ are unchanged on amd64. Then I install once and pick the device at install time.
   owner; do not drop CUDA.
 
 **Acceptance Criteria:**
-- [ ] The Dockerfile selects the extra inside `RUN`, with no `ARG`. `tests/test_dockerfile.py` pins
+- [x] The Dockerfile selects the extra inside `RUN`, with no `ARG`. `tests/test_dockerfile.py` pins
       the mapping and the build-time checks, and its existing assertions pass.
-- [ ] The build-time checks assert the torch suffix and the payload set per architecture, and fail
+- [x] The build-time checks assert the torch suffix and the payload set per architecture, and fail
       on mismatch.
-- [ ] The CI CPU-parity step compares the amd64 candidate with the CI `+cpu` environment and passes
+- [x] The CI CPU-parity step compares the amd64 candidate with the CI `+cpu` environment and passes
       on `==`, or the mismatch is recorded with an owner decision.
-- [ ] The gzip-sum size, uncompressed size and largest layer are recorded in Implementation Notes and
+- [x] The gzip-sum size, uncompressed size and largest layer are recorded in Implementation Notes and
       CI_CD.md, with gzip-sum ≤ 5 GB.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-005: CI disk, timeout and cache budgets for the larger image
 
