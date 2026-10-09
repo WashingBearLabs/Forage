@@ -706,6 +706,55 @@ jobs:
             --timeout-seconds "${SMOKE_TIMEOUT_SECONDS}" \
             --image "${IMAGE_REF}"
 
+      - name: CPU parity - image scores equal the CI +cpu environment
+        # The same weights-free model, seeded, scored twice: in the amd64
+        # candidate (CUDA-built torch, no GPU visible) and in this job's `+cpu`
+        # environment. Each prints one `float.hex()` per line, so `diff` is an
+        # exact equality check; a difference is an owner decision (1e-6
+        # tolerance and the epic's "byte-identical" wording), never a retry.
+        # The image's interpreter is /app/.venv/bin/python (Dockerfile
+        # UV_PROJECT_ENVIRONMENT); scripts/ is not in the image, so it is
+        # mounted read-only.
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /app/.venv/bin/python \
+            -e CUDA_VISIBLE_DEVICES= \
+            -v "${PWD}/scripts:/work/scripts:ro" -w /work \
+            "${IMAGE_REF}" scripts/promptguard_tiny_model.py > image.txt
+          uv run python scripts/promptguard_tiny_model.py > ci.txt
+          test -s image.txt
+          diff image.txt ci.txt
+          echo "CPU parity: $(wc -l < image.txt) scores identical"
+
+      - name: Image size budget (gzip layer sum <= 5 GB)
+        # Registry cost is the compressed layers, so the gate is the sum of
+        # each layer tar gzipped on its own. The uncompressed total and the
+        # largest layer are reported beside it. Over budget is an owner
+        # decision; CUDA is not dropped to get under it.
+        env:
+          GZIP_BUDGET_BYTES: "5000000000"
+        run: |
+          set -euo pipefail
+          dir="$(mktemp -d)"
+          docker save "${IMAGE_REF}" | tar -x -C "${dir}"
+          gz_total=0; raw_total=0; largest=0
+          while read -r layer; do
+            raw="$(stat -c %s "${dir}/${layer}")"
+            gz="$(gzip -c -6 "${dir}/${layer}" | wc -c)"
+            gz_total=$((gz_total + gz)); raw_total=$((raw_total + raw))
+            if [ "${raw}" -gt "${largest}" ]; then largest="${raw}"; fi
+          done < <(jq -r '.[0].Layers[]' "${dir}/manifest.json")
+          {
+            echo "gzip layer sum: ${gz_total} bytes"
+            echo "uncompressed layers: ${raw_total} bytes"
+            echo "largest layer (uncompressed): ${largest} bytes"
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+          if [ "${gz_total}" -gt "${GZIP_BUDGET_BYTES}" ]; then
+            echo "::error::gzip layer sum ${gz_total} exceeds ${GZIP_BUDGET_BYTES} - owner decision required"
+            exit 1
+          fi
+          rm -rf "${dir}"
+
       - name: Dump the container log
         # Runs on any failure above — a contract violation, a container that
         # never came up, even a bad `docker load`. Without it, "the smoke went

@@ -539,6 +539,32 @@ binding are unchanged, and the base fragments are byte-unchanged.
   delivers.
 - No hashed source moved, so there is no rotation.
 
+### US-004 (attempt 1, 2026-10-09)
+
+- **Dockerfile.** The sync RUN maps `dpkg --print-architecture` amd64 -> `cuda`, arm64 -> `cpu`,
+  anything else exits 1 ("unsupported architecture"), then `uv sync --locked --no-dev
+  --no-install-project --extra "${extra}"`. No ARG. The content check is
+  `scripts/image_content_check.py` (torch suffix `+cu130`/`+cpu` per arch; installed
+  `nvidia-*`/`cuda-*`/`triton` distributions, PEP 503-normalised, equal the allowlist on amd64
+  and are empty on arm64), COPYed with `scripts/cuda_payload_allowlist.txt` to
+  `/tmp/image-check/`, run, and removed in one RUN. `.dockerignore` re-includes those two files
+  (`scripts/` stays excluded). `tests/test_vendor_weights.py`'s "no scripts in Dockerfile" guard
+  now permits exactly those two names.
+- **Local builds (Apple Silicon, docker).** Native arm64: `arm64 ok, torch 2.14.0+cpu`.
+  `--platform linux/amd64` (emulated): `amd64 ok, torch 2.14.0+cu130`. So both legs of the check
+  passed for real, not just statically.
+- **Image venv path:** `/app/.venv/bin/python` (`UV_PROJECT_ENVIRONMENT=/app/.venv`).
+- **Size (amd64, measured locally on the emulated build, gzip -6 per layer):** gzip sum
+  3,153,366,807 B (~3.15 GB, under the 5 GB gate); uncompressed layers 3,166,057,432 B; largest
+  layer 3,087,698,222 B (the dependency layer). CUDA libs barely compress. CI's own numbers land
+  in the job summary of the `smoke` job and should replace these on the first run.
+- **CPU parity.** CI steps added to `smoke` (parity + size). Locally, the emulated amd64 image
+  and this Mac's arm64 `+cpu` venv printed identical `float.hex()` lines (7 scores), but that is
+  *not* the CI comparison (x86 image vs x86 `+cpu` env); the real verdict is the first CI run.
+  If CI diffs, record the max difference and stop for the owner.
+- **Split recorded** in CI_CD.md: arm64 build-time checks run in the publish multi-arch build;
+  PR-time arm64 guarantee is the checker's rule 2.
+
 ## Refinement Notes
 
 ### Research Findings

@@ -254,6 +254,21 @@ and a guard test ties the number to the script's own default. On failure the job
 container log; the container is removed either way. `kit_tools/docs/MONITORING.md` covers
 running the same probe against a deployment.
 
+After the contract smoke, two more steps run in the same job. **CPU parity** runs
+`scripts/promptguard_tiny_model.py` (seeded, weights-free; one `float.hex()` score per line)
+in the candidate (`--entrypoint /app/.venv/bin/python`, `CUDA_VISIBLE_DEVICES=` empty,
+`scripts/` mounted read-only) and in the job's `+cpu` environment, and `diff`s the two — exact
+equality is expected; a difference is an owner decision, not a retry. **Size budget** sums each
+layer's gzip size from `docker save` and fails above 5 GB, reporting the uncompressed total and
+the largest layer.
+
+**Where the image's content checks run.** The Dockerfile's `scripts/image_content_check.py`
+step (torch suffix `+cu130`/`+cpu`; payload equals `scripts/cuda_payload_allowlist.txt` on
+amd64, empty on arm64) runs at build time on whatever architecture is being built. PR CI builds
+amd64 only, so the arm64 assertions run in the `publish` lane's multi-arch build, where a
+failure aborts before any push. The PR-time arm64 guarantee is static: the lock checker's rule 2
+(linux/aarch64 resolves `+cpu`, no payload). No qemu build is added to PR CI.
+
 CI passes neither `--expect-status` nor `--anchor` and relies on their defaults:
 `--expect-status degraded` (the weights-free contract above; `/health` is polled until it
 answers 200 *and* reports that status) and `--anchor` pointing at the committed
