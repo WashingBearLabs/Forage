@@ -179,22 +179,22 @@ disproven, mechanically.
   zero drift) and how to read batch 16 against batch 1.
 
 **Acceptance Criteria:**
-- [ ] The live and replay drives, the tuple comparison, post-hoc `max_chunks` and miss handling are
+- [x] The live and replay drives, the tuple comparison, post-hoc `max_chunks` and miss handling are
       implemented. Tests cover an offset, a boundary flip, a count mismatch and an unrecorded sha.
-- [ ] A cassette with an unrecorded sha still completes the replay drive over the remaining records,
+- [x] A cassette with an unrecorded sha still completes the replay drive over the remaining records,
       reports the excluded ids, and exits 1. A never-produced sha alone exits 0 (tests).
-- [ ] `--batch-size` defaults to 1. `--device cpu --batch-size 16` exits 2 (test).
-- [ ] Runs with `failed_over`, OOM reductions, a batch mismatch or a device mismatch exit 1 (tests).
-- [ ] The long-text check is reported, and its synthetic text contains no corpus text. A fake that
+- [x] `--batch-size` defaults to 1. `--device cpu --batch-size 16` exits 2 (test).
+- [x] Runs with `failed_over`, OOM reductions, a batch mismatch or a device mismatch exit 1 (tests).
+- [x] The long-text check is reported, and its synthetic text contains no corpus text. A fake that
       returns the wrong window count, or crosses the threshold between batch 1 and the requested
       batch, exits 1 (tests).
-- [ ] No output contains corpus text (test scanning stdout, stderr and the JSON file against a
+- [x] No output contains corpus text (test scanning stdout, stderr and the JSON file against a
       record's text). Exit codes are 0/1/2 as specified.
-- [ ] `docs/corpus.md` documents the procedure, the control run and the batch pairing.
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] `docs/corpus.md` documents the procedure, the control run and the batch pairing.
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ## Edge Cases
 
