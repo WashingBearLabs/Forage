@@ -131,22 +131,22 @@ commit leaves CI, the orchestrator worktree or a developer without torch, or red
   source and the `conflicts` table.
 
 **Acceptance Criteria:**
-- [ ] torch is only in the `cpu` and `cuda` extras (`==2.14.0`), with the conflicts table and three
+- [x] torch is only in the `cpu` and `cuda` extras (`==2.14.0`), with the conflicts table and three
       sources. `uv lock --check` passes, and the stale comment is replaced.
-- [ ] The post-change `--extra dev --extra cpu` export is identical to the pre-change `--extra dev`
+- [x] The post-change `--extra dev --extra cpu` export is identical to the pre-change `--extra dev`
       export, with the diff command recorded. `--extra cuda` gives `+cu130` under the x86_64 Linux
       marker and `+cpu` under the aarch64 Linux marker (recorded outputs).
-- [ ] Every listed sync site uses the `cpu` extra in this commit. `tests/test_ci_workflow.py` pins
+- [x] Every listed sync site uses the `cpu` extra in this commit. `tests/test_ci_workflow.py` pins
       the new strings, and `kit_tools/worktree.yaml` `env_bootstrap` is
       `uv sync --extra dev --extra cpu`. A repo grep (excluding archives) finds no extra-less
       `uv sync`; the grep is recorded.
-- [ ] The old lock-grep test and CI grep step are gone, the temporary export-based assertion passes,
+- [x] The old lock-grep test and CI grep step are gone, the temporary export-based assertion passes,
       and the widened CI environment pattern is pinned.
-- [ ] A missing torch fails the session with the install hint (test).
-- [ ] Tests written/updated for new functionality
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
-- [ ] `uv run pyright` passes with zero errors
+- [x] A missing torch fails the session with the install hint (test).
+- [x] Tests written/updated for new functionality
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] `uv run pyright` passes with zero errors
 
 ### US-002: A behavioural CUDA-scope checker with per-class provenance
 
@@ -462,6 +462,36 @@ binding are unchanged, and the base fragments are byte-unchanged.
   [DECISIONS.md](../arch/DECISIONS.md) :522, `compose/`
 
 ## Implementation Notes
+
+### US-001 (landed by the supervisor, 2026-10-09)
+
+- **Commit:** `bddc120`, implemented in attempt 1. Its verifier session, and attempts 2 and 3,
+  were killed by session timeouts while the host was asleep overnight (`pmset` shows Deep Idle
+  sleep from ~19:14 PDT). It was not a defect in the change. The supervisor verified the commit
+  independently in a separate worktree with its own environment, then fast-forwarded the epic
+  branch to it.
+- **Lock:** `uv lock --check` passes (uv 0.9.28, 98 packages).
+- **Install-set proof:** the pre-change `uv export --frozen --no-hashes --extra dev
+  --format requirements-txt --no-emit-project` (from `6e6fb72`) and the post-change export with
+  `--extra dev --extra cpu` were stripped of comments and blank lines, sorted, and compared with
+  `diff`. They are **identical** (77 lines each).
+- **Per-architecture torch** (`uv export --frozen --no-hashes --extra cuda`):
+  `torch==2.14.0+cu130 ; platform_machine == 'x86_64' and sys_platform == 'linux'`,
+  `torch==2.14.0+cpu ; platform_machine != 'x86_64' and sys_platform == 'linux'`,
+  `torch==2.14.0 ; sys_platform != 'linux'`.
+- **Payload scope:** `--extra dev --extra cpu` exports 0 lines matching
+  `^(nvidia-|cuda-|triton==)`. `--extra cuda` exports 19, every one under a
+  `platform_machine == 'x86_64' and sys_platform == 'linux'` marker.
+- **Sync-site grep:** `git grep -nE 'uv sync'` (excluding spec archives, specs, `SESSION_LOG.md`
+  and `bootstrap-notes.md`), filtered for lines without `--extra cpu|cuda`. Every CI sync site
+  (`ci.yml` lines 152, 265, 302, 634 and 1466) reads `uv sync --extra dev --extra cpu --locked`.
+  The remaining hits are:
+  - the Dockerfile's `uv sync --locked --no-dev`, which installs no torch until **US-004**
+    selects the extra per architecture;
+  - prose in `kit_tools/arch/*`, `CI_CD.md`, `GOTCHAS.md` and `LOCAL_DEV.md`, left for
+    **US-003**'s claims sweep.
+- **Gates:** `ruff check`, `ruff format --check` and `pyright` (0 errors) are clean. The full suite
+  gives 5664 passed and 6 skipped (5670 collected) in 377 s.
 
 ## Refinement Notes
 
