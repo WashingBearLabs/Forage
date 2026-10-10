@@ -225,8 +225,8 @@ budget and wait for a GPU host.
 - If US-001 is not recorded, this story is blocked.
 
 **Acceptance Criteria:**
-- [ ] The GPU rows (both models: marginal per-window, 1w and budget p50/p95, VRAM) are present.
-- [ ] The envelope shows the formula and the resulting budget. The defaults are unchanged.
+- [x] The GPU rows (both models: marginal per-window, 1w and budget p50/p95, VRAM) are present.
+- [x] The envelope shows the formula and the resulting budget. The defaults are unchanged.
 
 ### US-005: v1.4.0 release prep
 
@@ -443,6 +443,30 @@ the pins prepared, so that tagging is the only step left.
   23 containers, `5f7ae386…`. **Equal.** VRAM is back to the 7,376 MiB baseline.
 - **Scratch area:** kept until US-004 and US-005 are done (the owner deletes it, or asks for deletion,
   afterwards).
+
+### US-004 — GPU sizing docs (2026-10-10)
+
+- `docs/configuration.md` "Measured per-window cost" gained a **GPU, measured end to end** table
+  with US-001's figures for both models:
+  - 1-window and budget p50/p95, and the budget document's window count;
+  - `m50`, `p` and the projected 64-window p95;
+  - VRAM peak.
+
+  It also covers host memory, the allocator setting and parity.
+- The old weights-free GPU bullet (15.4 ms, harness-only) now points at that table.
+- The permit-hold table gained GPU rows: 86M at 64 is 1.1 s, 22M at 64 is 0.6 s, and 86M at 1,024 is
+  16.9 s.
+- **GPU envelope.** The formula is `min(1024, floor(0.5 × 90 / p))`, with the arithmetic shown:
+  - 86M: `floor(45 / 0.0165)` = 2,727, so **1024** and a 16.9 s hold;
+  - 22M: `floor(45 / 0.0092)` = 4,891, so **1024** and a 9.4 s hold.
+
+  The page character ceiling scales with the budget (1,792 characters per chunk: 114,688 at 64,
+  1,835,008 at 1,024, checked with `max_extracted_characters`). **The defaults stay `64` and
+  `90.0`.**
+- The "GPU … planned as a separate epic" line in the known-risk paragraph now points at
+  `FORAGE_DEVICE=cuda`.
+- `docs/weights.md` "Benchmarking the classifier": the report is device-aware. It records the GPU
+  candidate's flags and says a GPU run must show `"cuda"` for both device fields.
 
 ## Refinement Notes
 

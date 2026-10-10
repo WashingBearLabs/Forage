@@ -1353,13 +1353,36 @@ What it shows:
 - **The 22M is about 2.2× faster** at every size.
 - **NUMA placement matters on multi-die CPUs.** Pinning to memory-bearing nodes with
   `cpuset` gained about 20% over a plain `--cpus` quota.
-- **GPU.** The same harness under CUDA
-  PyTorch on the server's RTX 4070 Ti measured **15.4 ms per window for both models**,
-  about 70× faster than the best CPU figure, so a 64-chunk page takes about 1 s. The shipped
-  image carries CUDA torch on amd64 but defaults to `FORAGE_DEVICE=cpu`.
+- **GPU.** See the measured service figures below. The shipped image carries CUDA torch on
+  amd64 but defaults to `FORAGE_DEVICE=cpu`.
 - This 2018 Zen+ part is about 3–4× slower per window than the Apple-silicon bare-host row
   below, partly because torch's MKL backend is weak on AMD. Newer x86 parts will land
   between the two.
+
+**GPU, measured end to end (the reference for GPU sizing).** Measured 2026-10-09
+(`gpu-validation` US-001) on the same server's RTX 4070 Ti (12 GB, driver 590), through the
+running service with `scripts/bench_promptguard.py`: image `main@2c9b28f`, `FORAGE_DEVICE=cuda`,
+batch 16, `--cpus 8`, warm, 20 runs per input, fresh container per input. Unlike the
+weights-free CPU rows above, these are whole `/extract` requests, so they include extraction and
+HTTP. The per-window costs are derived from the 1-window and budget-document runs:
+`m50 = (p50 budget − p50 1w) / (windows − 1)` and `p = (p95 budget − p50 1w) / (windows − 1)`.
+
+| Model | 1-window p50 / p95 | Budget document (windows) p50 / p95 | m50 per window | p (p95) per window | Projected 64-window p95 | VRAM peak |
+|---|---|---|---|---|---|---|
+| 86M | 61 / 83 ms | (55) 927 / 951 ms | 16.0 ms | 16.5 ms | 1.10 s | 2,879 MiB |
+| 22M | 61 / 79 ms | (40) 404 / 420 ms | 8.8 ms | 9.2 ms | 0.64 s | 1,311 MiB |
+
+- **About 65× the best CPU figure.** About 60 ms of each request is fixed overhead: fetch,
+  extraction and HTTP, not inference.
+- **VRAM.** The model holds about 1.1 GiB loaded (86M) and peaks near 2.9 GiB at batch 16. That
+  figure holds only with the image's `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,…`.
+  Without it, a varied workload grew the 86M's reservation past 4.2 GiB (`gpu-validation`
+  US-002), so keep the image's value if you override the environment.
+- **Host memory** stayed under 2.2 GiB of cgroup memory, so the GPU overlay's `3072m` default
+  holds.
+- **Accuracy.** Parity against the CPU cassettes found 0 verdict changes for both models at
+  batch 16 and batch 1. The maximum window drift was 2.8e-5 (86M); see `docs/corpus.md`
+  "Backend parity".
 
 **Apple-silicon reference (development machine).**
 
@@ -1390,6 +1413,9 @@ the wait ÷ k.
 | 64 | 22M, 4 CPUs | 41 s | 81 s |
 | 64 | 22M, 8 CPUs | 32 s | 63 s |
 | 64 | 86M, Docker Desktop container, 4 CPUs | 44 s | 89 s |
+| 64 | 86M, GPU (RTX 4070 Ti, batch 16) | 1.1 s | 2.1 s |
+| 64 | 22M, GPU (RTX 4070 Ti, batch 16) | 0.6 s | 1.2 s |
+| 1,024 | 86M, GPU (RTX 4070 Ti, batch 16) | 16.9 s | 33.8 s |
 
 **Recommended envelope (v1.3.0).** 8 CPUs (`FORAGE_CPUS=8`, `promptguard_threads: 8`) with
 the shipped pair `retrieve.max_promptguard_chunks: 64` and `promptguard_wait_seconds: 90.0`:
@@ -1399,6 +1425,24 @@ another ~20%. Below 8 CPUs, or for k = 2 headroom, lower the budget to
 `floor(wait / per-window latency)` for your host: at 90 s that is about **27** chunks at 1 CPU,
 **62** at 4 CPUs and **83** at 8 CPUs for the 86M; **79**, **141** and **182** for the 22M.
 Re-measure on your own hardware; per-window cost varies 3–4× across CPU generations.
+
+**GPU envelope (measured, not the default).** On a GPU host, size the budget so a worst-case
+page uses at most half of the wait:
+
+`retrieve.max_promptguard_chunks = min(1024, floor(0.5 × promptguard_wait_seconds / p))`
+
+`p` is the measured p95 per-window cost (in seconds), and the wait stays `90.0`:
+
+- 86M: `min(1024, floor(0.5 × 90 / 0.0165))` = `min(1024, 2727)` = **1024**, for a hold of about
+  16.9 s;
+- 22M: `min(1024, floor(0.5 × 90 / 0.0092))` = `min(1024, 4891)` = **1024**, for a hold of about
+  9.4 s.
+
+The page character ceiling is derived from the budget (1,792 characters per chunk: 114,688 at
+`64`, 1,835,008 at `1024`), so raising the budget also admits larger pages. At `1024` the worst
+case is a full 1,024-window page, which holds the permit for the hold shown, within half the wait
+as the formula intends. **The shipped defaults stay `64` and `90.0`.** They are sized for CPU
+hosts, and the GPU values are an operator setting.
 
 Raising the wait rather than lowering the budget trades queue latency for coverage: a
 request may wait up to 90 s behind a large page, but pages up to the 114,688-character
@@ -1428,8 +1472,8 @@ serve unscanned. The signal is `retrieve.classification_wait_timeouts` and
 `search.classification_wait_timeouts` rising while `/health` still reports
 `promptguard_loaded: true`, which means contention, not a missing model. Watch both
 counters after enabling `/retrieve` at volume; set `promptguard_fail_closed` if unscanned
-service is unacceptable. GPU acceleration, which removes the hold almost entirely, is
-planned as a separate epic.
+service is unacceptable. GPU inference (`FORAGE_DEVICE=cuda`, see "Installing on a
+GPU host") removes the hold almost entirely: a 64-chunk page holds the 86M permit about 1.1 s.
 
 ---
 

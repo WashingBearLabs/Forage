@@ -67,6 +67,14 @@ mode-0600 `--env-file`, never build arguments or inline token flags. Leave
 `VALKEY_URL` unset so an unrelated cache cannot prevent readiness. This tooling
 does not run the owner gates, vendor weights, enable 86M, or supply measurements.
 
+The report is device-aware: the JSON carries `promptguard_device` and
+`promptguard_requested_device` from the service's `/health`. A run meant for a GPU must show
+`"cuda"` for both, or it measured a CPU failover. For a GPU candidate, add `--gpus` and
+`-e FORAGE_DEVICE=cuda` to the container. The `gpu-validation` US-001 runs used
+`--gpus device=0 --cpus 8 --cpu-shares 256 --memory 3072m`, with the read-only weights cache
+mounted at `/app/model-cache` and `HF_HUB_OFFLINE=1`. Their figures are in `docs/configuration.md`
+"Measured per-window cost".
+
 Copy the selected model's tokenizer snapshot from the verified shared volume to
 `bench/tokenizer-<label>/`, dereferencing the hub's blob symlinks. Use the snapshot
 at `hub/models--<org>--<model>/snapshots/<manifest revision>`, not another model or
