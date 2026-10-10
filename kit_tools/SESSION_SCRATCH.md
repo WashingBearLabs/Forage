@@ -97,3 +97,5 @@
 [16:15] gpu-validation US-001 owner gate run on thelab: 86M cuda m50 16.0 ms, proj p95 1100 ms, VRAM peak 2879 MiB, mem_limit 3072m confirmed; attestation equal
 - Decision: operative VRAM floor = candidate peak + 512 MiB (Ollama model already resident) -> 3391 MiB free for US-002/003
 - Gotcha: scratch clone under umask 077 made the image entrypoint non-executable (exit 126); restored git modes and rebuilt
+[12:45] gpu-validation US-002 + US-003 owner gates on thelab: parity 6/6 clean (0 verdict changes, cpu controls drift 0); failover cpu/refuse proven; attestation equal
+- Decision: PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6 baked as image ENV (without it reserved VRAM grew >4.2 GiB; guard killed run)

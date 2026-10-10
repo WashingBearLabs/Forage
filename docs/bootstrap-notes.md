@@ -2741,6 +2741,27 @@ No rotation. This is an owner-gate measurement of the `main` image at `2c9b28f`
 The full table, the operative VRAM floor ruling (3,391 MiB free for later gates) and the
 umask build hazard are in `kit_tools/specs/feature-gpu-validation.md` Implementation Notes.
 
+### GPU validation on thelab: US-002 parity and US-003 failover (`gpu-validation`, 2026-10-10)
+
+No rotation (`Dockerfile` is not a revision input).
+
+- **Parity:** for the 22M and the 86M, on cuda at batches 16 and 1 and with a CPU control, all six
+  runs over 760 records gave 0 verdict changes and 0 unrecorded shas.
+  - Maximum window drift: 2.8e-05 (86M) and 1.3e-06 (22M). The CPU controls drift 0, so the
+    figures are attributable to the GPU.
+  - The only near-threshold id is `atk-0284` (86M), on every device.
+- **Allocator finding:** without `expandable_segments`, the 86M's reserved VRAM grew past 4.2 GiB
+  under varied page lengths and the guard stopped the run. With
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6`, the same drive
+  peaked at 2,834 MiB. The setting is now an image `ENV`.
+- **Failover:**
+  - Fallback `cpu` with the GPU hidden serves on CPU, reporting `promptguard_device_failover` and
+    `promptguard_device: "cpu"`.
+  - `refuse` exits 3 with the fixed `DeviceConfigurationError` message.
+- **Production attestation:** equal around both gates (23 containers, `5f7ae386…`).
+
+The full tables are in `kit_tools/specs/feature-gpu-validation.md` Implementation Notes.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

@@ -563,6 +563,18 @@ class TestRuntimeShapePreserved:
             "directory the non-root user owns"
         )
 
+    def test_cuda_allocator_uses_expandable_segments(
+        self, instructions: list[str]
+    ) -> None:
+        assert (
+            "ENV PYTORCH_CUDA_ALLOC_CONF="
+            "expandable_segments:True,garbage_collection_threshold:0.6"
+        ) in instructions, (
+            "The CUDA allocator setting must stay: without it reserved VRAM grows "
+            "with page-length variety (gpu-validation US-002 measured >4.2 GiB "
+            "against 2,834 MiB with it) on a GPU shared with other workloads"
+        )
+
     def test_build_time_import_smoke(self, instructions: list[str]) -> None:
         assert any(
             'python -c "import retrieval_app"' in line for line in instructions

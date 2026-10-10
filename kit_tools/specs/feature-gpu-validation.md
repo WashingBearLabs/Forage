@@ -174,10 +174,10 @@ control, so that the release has proof of zero verdict changes on the GPU.
 - Record the results by id only in `docs/bootstrap-notes.md`.
 
 **Acceptance Criteria:**
-- [ ] 22M and 86M on cuda at batch 16 give exit 0 (zero verdict changes, valid run). Max and p99
+- [x] 22M and 86M on cuda at batch 16 give exit 0 (zero verdict changes, valid run). Max and p99
       window drift and the long-text drift are recorded.
-- [ ] The batch-1 pair and the CPU control are recorded, and the control's drift is stated.
-- [ ] The checkout commit equals the audited head, and the attestation hash is equal before and
+- [x] The batch-1 pair and the CPU control are recorded, and the control's drift is stated.
+- [x] The checkout commit equals the audited head, and the attestation hash is equal before and
       after.
 
 ### US-003: Owner gate — failover proof
@@ -197,9 +197,9 @@ documented behaviour is proven where it matters.
 - Record the `/health` fields, the exit code and the one-line message.
 
 **Acceptance Criteria:**
-- [ ] The fallback `cpu` case shows the three fields after load, and the `refuse` case exits
+- [x] The fallback `cpu` case shows the three fields after load, and the `refuse` case exits
       non-zero with the fixed message (both recorded).
-- [ ] The safety rules were followed, and the attestation hash is equal before and after.
+- [x] The safety rules were followed, and the attestation hash is equal before and after.
 
 ### US-004: GPU sizing docs
 
@@ -380,6 +380,69 @@ the pins prepared, so that tagging is the only step left.
   **kept** for US-002 and US-003.
 - **Production attestation:** before (21:02:46 UTC) and after (23:08:45 UTC), 23 containers, SHA-256
   `5f7ae38680f1e40269fb5fc885c1f16a59eca1dafa8a1d5bcaf1b1ba4680cc72`. **Equal.**
+
+### US-003 — failover proof (owner gate, run 2026-10-10)
+
+- **Approval:** the owner approved US-002 and US-003 together in-session on 2026-10-10. The window
+  ran from 18:51 to 18:52 UTC with the host idle (load 0.3). The image is the same as US-001
+  (`8e2394d06cfa`, `main` at `2c9b28f`), with the read-only scratch cache and
+  `--gpus device=0 -e CUDA_VISIBLE_DEVICES=`, so the toolkit was present and the GPU hidden.
+- **Fallback `cpu`:** `/health` after load gave:
+  - `status: "degraded"` and `degraded_reasons: ["promptguard_device_failover"]`;
+  - `promptguard_device: "cpu"` and `promptguard_requested_device: "cuda"`;
+  - `promptguard_loaded: true` (86M).
+
+  The log tokens were `promptguard_device_probe result=unavailable` and
+  `promptguard_device_failover reason=unavailable`. The candidate never appeared among the GPU
+  processes.
+- **`refuse`:** the container exited with **code 3** before serving. The log line is the fixed
+  `DeviceConfigurationError: FORAGE_DEVICE=cuda with FORAGE_DEVICE_FALLBACK=refuse requires a usable
+  GPU`. The traceback that precedes it carries no value beyond that fixed message.
+- **Production attestation:** before (18:51:26 UTC) and after (18:52:14 UTC), 23 containers,
+  `5f7ae38680f1e40269fb5fc885c1f16a59eca1dafa8a1d5bcaf1b1ba4680cc72`. **Equal**, and identical to
+  US-001's.
+
+### US-002 — parity runs (owner gate, run 2026-10-10)
+
+- **Setup:** the scratch checkout at `2c9b28f`, the audited head (PR #47's merge plus nothing else),
+  and the venv from `uv sync --extra dev --extra cuda`. Each run was `nice -n 10` on the host with
+  `HF_HOME` set to the scratch cache and `HF_HUB_OFFLINE=1`, under the mid-run guard. The guard was
+  extended to also kill the parity process.
+- **First attempt stopped by the guard.** `86M --device cuda --batch-size 16`, with no allocator
+  setting, grew to about 4.27 GiB of VRAM within 16 s (free fell to 230 MiB). The guard killed it
+  (exit 143); Ollama stayed resident and production was untouched.
+  - **Cause:** the corpus feeds pages of many lengths, and PyTorch's caching allocator keeps a
+    reserved block per shape, so reserved VRAM climbs with shape variety. US-001's bench repeats one
+    55-window page and never showed it.
+  - **Owner ruling:** retry with
+    `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6`.
+  - That run peaked at **2,834 MiB** (sampled every 1 s), and all six runs below use the setting.
+  - **The setting now ships in the image** (`Dockerfile` `ENV`, pinned in
+    `tests/test_dockerfile.py`). This was the operative production risk: a GPU host shared with
+    another workload would otherwise see Forage's reservation creep with real traffic.
+- **Results** (760 records, 1,520 results compared, configs `default` and `contiguity`, torch
+  `2.14.0+cu130`). Every run: exit 0, 0 verdict changes, 0 unrecorded shas, 0 window-count
+  mismatches, 0 OOM reductions, 0 failovers, effective batch equal to requested. The **25
+  never-produced shas** are the known stale cassette entries (informational).
+
+| run | max window drift | p99 window drift | long-text check (windows, max drift, crossings) | VRAM peak | wall |
+|---|---|---|---|---|---|
+| 86M cuda b16 | 2.80e-05 | 4.86e-06 | 35 = 35, 4.17e-06, 0 | 2,834 MiB | 90 s |
+| 86M cuda b1 | 2.80e-05 | 5.38e-06 | 5 = 5, 0, 0 | 1,522 MiB | 97 s |
+| 86M cpu (control) | **0** | 0 | 5 = 5, 0, 0 | — | 1,204 s |
+| 22M cuda b16 | 1.25e-06 | 8.05e-07 | 35 = 35, 3.17e-08, 0 | 1,296 MiB | 76 s |
+| 22M cuda b1 | 1.13e-06 | 7.30e-07 | 5 = 5, 0, 0 | 588 MiB | 84 s |
+| 22M cpu (control) | **0** | 0 | 5 = 5, 0, 0 | — | 546 s |
+
+- **Reading:**
+  - The CPU controls reproduce the cassettes exactly, so the GPU drift is GPU-attributable.
+  - Batch 16 and batch 1 drift alike, so padding contributes nothing measurable.
+  - The 86M's single **near-threshold id is `atk-0284`** (within 0.01 of the threshold), on every
+    86M run including the CPU control. It is a property of the record, not of the device.
+- **Production attestation:** before (the US-003 reading, 18:51:26 UTC) and after (19:37:41 UTC),
+  23 containers, `5f7ae386…`. **Equal.** VRAM is back to the 7,376 MiB baseline.
+- **Scratch area:** kept until US-004 and US-005 are done (the owner deletes it, or asks for deletion,
+  afterwards).
 
 ## Refinement Notes
 

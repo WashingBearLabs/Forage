@@ -163,6 +163,14 @@ RUN useradd -r -s /bin/false poppy \
 # "degraded" means for a consumer in the meantime.
 ENV HF_HOME=/app/model-cache
 
+# CUDA allocator: without expandable segments, pages of many different lengths
+# leave the caching allocator holding a reserved block per shape, and reserved
+# VRAM climbs with traffic variety. On thelab (shared with Ollama) the 86M grew
+# past 4.2 GiB in a 760-record corpus drive and tripped the guard; with this
+# setting the same drive peaked at 2,834 MiB (gpu-validation US-002,
+# 2026-10-10). It only shapes allocation, never scores, and is inert on CPU.
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6
+
 # Application source. The COPY list is filename-enumerated on purpose — the
 # CI-only smoke drivers stay out of the image that way — which also means a new
 # module is invisible to the runtime until it is named here. `model_fetcher.py`
