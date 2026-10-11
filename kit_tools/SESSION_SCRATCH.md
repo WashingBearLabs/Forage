@@ -88,3 +88,16 @@
 [19:00] Epic-wide validate-implementation for forage-inference-backends: 0 critical, 2 warning, 8 info; no fix loop
 - Files: kit_tools/AUDIT_FINDINGS.md (2026-10-09-008..017)
 - Decision: 3 test_corpus_docs failures classified environmental (worktree-local gitignored AUDIT_FINDINGS.md); skip when file absent
+
+[12:15] epic-forage-inference-backends specs 1-4 executed (16/16, 23 attempts, 48 sessions); PR #47 open, CI green
+- Decision: US-001 (unified-image) recovered by supervisor after host sleep killed 3 attempts (bddc120 verified + ff'd, 5a63c7a notes)
+- Note: an implementer opened draft PR #46 (ci-probe, closed, branch gone) to get CI numbers; epic validation: 2 warnings in _classify_cuda (loop complexity; torch device-mismatch string match unpinned)
+- Findings files parked in scratchpad/ib-exec (spec2, spec3, spec4+epic) for merge into main AUDIT_FINDINGS.md
+[now] Fixed epic-validation warnings 2026-10-09-008/-009 (a5c52af): swap detected by snapshot identity, loop split; PR #47 merged (2c9b28f)
+[16:15] gpu-validation US-001 owner gate run on thelab: 86M cuda m50 16.0 ms, proj p95 1100 ms, VRAM peak 2879 MiB, mem_limit 3072m confirmed; attestation equal
+- Decision: operative VRAM floor = candidate peak + 512 MiB (Ollama model already resident) -> 3391 MiB free for US-002/003
+- Gotcha: scratch clone under umask 077 made the image entrypoint non-executable (exit 126); restored git modes and rebuilt
+[12:45] gpu-validation US-002 + US-003 owner gates on thelab: parity 6/6 clean (0 verdict changes, cpu controls drift 0); failover cpu/refuse proven; attestation equal
+- Decision: PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6 baked as image ENV (without it reserved VRAM grew >4.2 GiB; guard killed run)
+[14:20] gpu-validation US-004 (GPU sizing docs) + US-005 (v1.4.0 release prep): v1.3.0 folded into v1.4.0 (owner ruling); pins 1.4.0; rotation 64 02f7abcf -> a9beacbc (cuda cff06f97)
+- Gotcha: contract docstring entries may not carry publication state (test_docstring_entry_tense_has_no_publication_state)

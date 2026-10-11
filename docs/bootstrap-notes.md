@@ -2723,6 +2723,66 @@ agree.
 
 `orchestrator.py` is the only hashed file that changed; the reversal was read-only. Not replayed to Poppy.
 
+
+### The sixty-fourth rotation: the 1.5.0 entry finalised (`gpu-validation` US-005)
+
+`pipeline/contract.py`'s 1.5.0 bullet gains its consumer note: a consumer moving from 1.3.0 takes the
+1.4.0 and 1.5.0 entries together, because both ship in the same image (v1.3.0 was never published;
+owner ruling, 2026-10-10). Publication state stays out of the docstring
+(`test_docstring_entry_tense_has_no_publication_state`). Text only — **not** a
+sanitization-behaviour change. `uv run python -m scripts.export_contract` rewrote nothing:
+`contract/openapi.yaml` and `openapi.yaml.sha256` are byte-identical (the docstring is not in the
+document).
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`c8f198a`) / `contract.py` reverted read-only (= all-reverted control), `FORAGE_DEVICE` unset or `cpu` | `02f7abcf34ae7bc5781f0e90f317aab59c7f21a3b5cc8e4fba5cfdf9606aaa67` |
+| Before / reverted, `FORAGE_DEVICE=cuda` | `280511c1bfd3c801091bae9fa1901038b54ef43db663b7e99c5457c3d66da6a6` |
+| After, `FORAGE_DEVICE` unset or `cpu` | `a9beacbc306b300df987d91916c94a8a04a567d6ea3783809c5a8c3e3b4e7dba` |
+| After, `FORAGE_DEVICE=cuda` | `cff06f974e271422f134d2c1ce304a2a2a62d6ead5dfef1773015f1791076cfc` |
+
+`contract.py` is the only hashed source that moved; the control was computed on a temporary copy of
+the tree with `git show HEAD:pipeline/contract.py`, never by reverting the working tree. Not
+replayed to Poppy.
+### GPU validation on thelab: US-001 smoke and latency (`gpu-validation` US-001, 2026-10-09)
+
+No rotation. This is an owner-gate measurement of the `main` image at `2c9b28f`
+(`forage:gpu-cand-2c9b28f`, ID `8e2394d06cfa`) on an RTX 4070 Ti, driver 590.48.01.
+
+- **86M on cuda:**
+  - healthy, with `promptguard_device: "cuda"`;
+  - marginal per-window cost `m50` 16.0 ms (bar ≤ 25 ms: met);
+  - projected 64-window p95 1,100 ms (bar < 2 s: met);
+  - VRAM peak 2,879 MiB;
+  - host cgroup peak 2,185 MiB, which confirms the overlay's 3,072 MiB default.
+- **22M on cuda:** `m50` 8.8 ms, projected p95 641 ms, VRAM peak 1,311 MiB.
+- **Production attestation:** before and after equal (23 containers, `5f7ae386…`); the guard raised
+  0 alerts.
+
+The full table, the operative VRAM floor ruling (3,391 MiB free for later gates) and the
+umask build hazard are in `kit_tools/specs/feature-gpu-validation.md` Implementation Notes.
+
+### GPU validation on thelab: US-002 parity and US-003 failover (`gpu-validation`, 2026-10-10)
+
+No rotation (`Dockerfile` is not a revision input).
+
+- **Parity:** for the 22M and the 86M, on cuda at batches 16 and 1 and with a CPU control, all six
+  runs over 760 records gave 0 verdict changes and 0 unrecorded shas.
+  - Maximum window drift: 2.8e-05 (86M) and 1.3e-06 (22M). The CPU controls drift 0, so the
+    figures are attributable to the GPU.
+  - The only near-threshold id is `atk-0284` (86M), on every device.
+- **Allocator finding:** without `expandable_segments`, the 86M's reserved VRAM grew past 4.2 GiB
+  under varied page lengths and the guard stopped the run. With
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6`, the same drive
+  peaked at 2,834 MiB. The setting is now an image `ENV`.
+- **Failover:**
+  - Fallback `cpu` with the GPU hidden serves on CPU, reporting `promptguard_device_failover` and
+    `promptguard_device: "cpu"`.
+  - `refuse` exits 3 with the fixed `DeviceConfigurationError` message.
+- **Production attestation:** equal around both gates (23 containers, `5f7ae386…`).
+
+The full tables are in `kit_tools/specs/feature-gpu-validation.md` Implementation Notes.
+
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 
 Prepared, not published; nothing is pushed to Poppy. Image `v1.3.0` maps to contract `1.4.0`, a MINOR over

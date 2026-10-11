@@ -86,7 +86,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 ## Pre-deploy Checklist
 
-1. **Pick a tag.** The current release is `v1.3.0` / contract `1.4.0`,
+1. **Pick a tag.** The current release is `v1.4.0` / contract `1.5.0`,
    prepared and **not yet published** (the pull fails with `manifest unknown` until the
    tag publishes; until then the latest published is `v1.2.2` / contract `1.3.0`). Pin its
    full semver (`1.3.0`) or the `@sha256:` digest recorded in `docs/releases.md` once
@@ -146,7 +146,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
 Both fragments are standalone (no `extends`), validated by CI's `lint` job with
 `docker compose config -q`, and share the fixed-name volume `forage-model-cache`. **They
-pin `ghcr.io/washingbearlabs/forage:1.3.0` and
+pin `ghcr.io/washingbearlabs/forage:1.4.0` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** The companion is published;
 `1.3.0` is prepared and not yet published (the merge-to-publication window is open until the owner cut); `1.2.2` was published 2026-10-04 and verified (index
 `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`; its window, PR #36 merged as `c213bbf`, is closed). `1.2.1` remains published and
@@ -221,7 +221,7 @@ docker run --rm -p 127.0.0.1:8020:8020 \
   --env-file ./forage.env \
   -v forage-model-cache:/app/model-cache \
   -v "$PWD/config.yaml:/app/config.yaml:ro" \
-  ghcr.io/washingbearlabs/forage:1.3.0
+  ghcr.io/washingbearlabs/forage:1.4.0
 ```
 
 The env file carries `HF_TOKEN` and, if you run a Valkey, `VALKEY_URL`; only a *fully
@@ -240,7 +240,7 @@ warning and every key falls back to its code default, while a malformed `extract
    configurable via `FORAGE_CPUS` / `FORAGE_MEM_LIMIT` — see `docs/configuration.md` § Sizing the container).
    Once weights land, expect `promptguard_loaded: true`,
    `capabilities.search_sanitization: 1`, `contract_version` matching the image's own
-   contract (`"1.4.0"` for `v1.3.0`; `"1.3.0"` for `v1.2.2` and `v1.2.1`), and
+   contract (`"1.5.0"` for `v1.4.0`; `"1.3.0"` for `v1.2.2` and `v1.2.1`), and
    `cache_backend` reading `valkey` (with `cache_connected: true`) under `full.yml` or
    `memory` under `minimal.yml`. A failed acquisition retries in the background at 30 s,
    doubling to a 600 s ceiling with +/-20% jitter, forever; it converges in place without a
@@ -264,7 +264,7 @@ warning and every key falls back to its code default, while a malformed `extract
 
    ```bash
    curl -s http://127.0.0.1:8020/metrics | jq .model
-   curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.4.0 on v1.3.0
+   curl -s http://127.0.0.1:8020/openapi.json | jq -r .info.version   # 1.5.0 on v1.4.0
    ```
 
 3. **Run the contract smoke** from a checkout at the deployed tag. It polls `/health` until

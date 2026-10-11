@@ -12,14 +12,7 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 
 ## Unreleased
 
-Not yet tagged; the version number is decided at the release gate.
-
-- `inference-device` US-004: GPU out-of-memory handling (sticky batch halving, CPU failover or
-  refusal per `FORAGE_DEVICE_FALLBACK`). `sanitizer_revision` rotates a sixtieth time,
-  `2c6d0382…` → `6a0fcaad…`; no effect at the default `FORAGE_DEVICE=cpu` beyond the cache-key change.
-- `inference-surface` US-001: `/health` gains `promptguard_device` and `promptguard_requested_device`
-  and the degraded reasons `promptguard_device_failover` and `promptguard_device_oom` (contract
-  `1.5.0`, a MINOR). `sanitizer_revision` rotates a sixty-first time, `6a0fcaad…` → `396ea4bf…`.
+Nothing yet: everything merged so far is in the v1.4.0 entry below.
 
 ## Released versions
 
@@ -28,32 +21,35 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
 
-### v1.3.0 — `<publication date>` (NOT YET PUBLISHED)
+### v1.4.0 — `<publication date>` (NOT YET PUBLISHED)
 
-NOT YET PUBLISHED — prepared on `epic/forage-v1-3-0-release`; the owner cut
-(`release-1-3-0` US-005 owner sequence) fills the placeholders below.
+NOT YET PUBLISHED. It was prepared by `gpu-validation` US-005, and the owner's cut (that story's
+owner sequence) fills in the placeholders below. **v1.3.0 was never published.** Its prepared
+work (items 1–15) ships here, folded into v1.4.0 by owner ruling (2026-10-10). A consumer on
+v1.2.2 moves straight to contract 1.5.0 and takes the 1.4.0 and 1.5.0 entries at once. There
+is no `v1.3.0` tag.
 
-- contract: 1.4.0
-- anchor: `dcc4983033eb064636fb66d2b33266fd64a0f24adcd03a6aec21fd4b0e32d9db`
+- contract: 1.5.0
+- anchor: `9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`
 - index digest: `<index digest>`
 - tagged commit: `<tag commit>`
 
-Compose is pinned ahead of the cut; the tag lands with `v1.3.0`. Until then
+Compose is pinned ahead of the cut; the tag lands with `v1.4.0`. Until then
 v1.2.2 above is the latest published, verified tag. The recorded index digest
 is the **pinnable form** (`ghcr.io/washingbearlabs/forage@sha256:…`) for
 deployments that need immutability; the full-semver tag pin remains the
 quickstart default.
 
 Publication: `<publish run>`. Real-weights candidate smoke on the exact
-commit to be tagged (86M at `1536m`): `<candidate smoke record>`.
+commit to be tagged (86M at `1536m`, and on a GPU via `compose/gpu.yml`): `<candidate smoke record>`.
 
 **Outstanding unpublished-tag window:** merging the release PR makes `main`'s
 quickstart pull an unpublished tag until the owner runs the sequence. Cut from
 that merge commit in the same sitting; if the gate is not run, use
-`git revert <v1.3.0 pin commit>` before leaving that window open. Neither
+`git revert <v1.4.0 pin commit>` before leaving that window open. Neither
 publication nor post-release verification is complete.
 
-What ships (draft, pending the owner cut):
+What ships (draft, pending the owner cut). Items 1–15 are the never-published v1.3.0 work:
 
 1. **The 86M is the default model** (owner ruling 2026-10-06). With `FORAGE_MODEL_ID`
    unset the service loads `meta-llama/Llama-Prompt-Guard-2-86M`; the 22M stays allowlisted
@@ -94,15 +90,66 @@ What ships (draft, pending the owner cut):
     8 CPUs. Measured on a native x86 server, the 86M holds the permit ~55-70 s for a
     64-chunk page even at 8+ CPUs, so a 30 s wait would have timed concurrent requests out
     into unclassified service. Sizing tables for both models: [`docs/configuration.md`](configuration.md).
-14. **`sanitizer_revision` rotates seventeen times** (the forty-third to the fifty-ninth
-    rotations in [`docs/bootstrap-notes.md`](bootstrap-notes.md)): `021378ef…` →
-    `2c6d0382cd0f94158a64710db7b5beb8b26ea411d4f65eabd0d0ca03c1572591` at the default model.
-    A deployment sees **one** cache-invalidating window. Setting
-    `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` no longer reproduces `021378ef…`.
+14. **`sanitizer_revision` rotates twenty-two times** (the forty-third to the sixty-fourth
+    rotations in [`docs/bootstrap-notes.md`](bootstrap-notes.md)). It goes from `021378ef…` to
+    `a9beacbc306b300df987d91916c94a8a04a567d6ea3783809c5a8c3e3b4e7dba` at the default model with
+    `FORAGE_DEVICE` unset or `cpu`. With `FORAGE_DEVICE=cuda` it is
+    `cff06f974e271422f134d2c1ce304a2a2a62d6ead5dfef1773015f1791076cfc`: the `device@cuda` input
+    (item 21) changes it, and so does the active device in the cache key.
+    - A deployment sees **one** cache-invalidating window.
+    - Setting `FORAGE_MODEL_ID=meta-llama/Llama-Prompt-Guard-2-22M` no longer reproduces
+      `021378ef…`.
 15. **Compatibility windows: none open.** The `max_promptguard_chunks` window closed at `64`
     and the 422 placeholder window closed with the key drop; GOVERNANCE worked example 6's
     announce-then-flip window was waived by the owner for the default-model change (no known
     third-party consumers). The consumer note is in `docs/bootstrap-notes.md`.
+
+**CPU and GPU inference from one image** (`epic-forage-inference-backends`, contract 1.5.0):
+
+16. **One tag, both devices.** `forage:<version>` carries CUDA torch (`2.14.0+cu130`) on amd64 and
+    CPU torch on arm64. The architecture is selected inside the build `RUN`, with no build `ARG`,
+    and a build-time check asserts the torch suffix and the allowlisted CUDA payload. **The
+    amd64 image is larger:** the gzip layer sum is about 3.14 GB and the uncompressed size about
+    5.96 GB (CI run 37962323278). CPU scores on amd64 are `==` to the CPU wheel's.
+17. **The device is chosen at install time.** `FORAGE_DEVICE=cpu|cuda` (default `cpu`) with
+    `FORAGE_DEVICE_FALLBACK=cpu|refuse` (default `cpu`). An unusable GPU either falls back to CPU,
+    reporting `degraded` / `promptguard_device_failover`, or refuses at boot under `refuse`
+    (exit 3, fixed message). **The NVIDIA driver must be ≥ 580** (cu130), with the NVIDIA
+    Container Toolkit installed.
+18. **GPU batching:** `promptguard_cuda_batch_size` (1–64, default 16) applies on cuda only. CPU
+    classification stays one window per forward pass.
+19. **GPU out-of-memory handling:**
+    - an OOM halves the batch once per event, sticky until restart;
+    - at batch 1 it fails over to a CPU copy (`cpu`), or refuses the classification (`refuse`).
+    - A refusal is served as the tier's `unavailable_result`. That is **fail-open**
+      (`unavailable_allowed`) unless `promptguard_fail_closed` is set, and the body is never
+      cached.
+20. **Device telemetry:**
+    - `/health` gains `promptguard_device` and `promptguard_requested_device`, and the reasons
+      `promptguard_device_failover` and `promptguard_device_oom`;
+    - `/metrics.model` gains `device_failovers`, `oom_batch_reductions`, `oom_refusals` and
+      `effective_batch_size`.
+21. **Revision and cache key follow the device.** `sanitizer_revision` gains a `device@cuda` input
+    when cuda is requested, and nothing for cpu. The content-cache fingerprint carries the active
+    device, and a body is not cached if the device changed mid-request.
+22. **`compose/gpu.yml` overlay:**
+    - one GPU, `FORAGE_DEVICE: cuda`, and `FORAGE_DEVICE_FALLBACK` from `.env` (default `cpu`);
+    - `mem_limit` default `3072m`, confirmed on hardware (cgroup peak 2.19 GiB).
+23. **CUDA allocator setting in the image:**
+    `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6`. Without it,
+    varied page lengths grew the 86M's VRAM reservation past 4.2 GiB; with it the same corpus
+    drive peaked at 2,834 MiB. It is inert on CPU.
+24. **Measured on an RTX 4070 Ti** (`gpu-validation` US-001/US-002, 2026-10-09/10):
+    - **Latency:** the 86M's marginal per-window cost is 16.0 ms (p95 16.5 ms), against about
+      1.2 s per window on 8 CPUs; the projected 64-window p95 is 1.10 s and the VRAM peak
+      about 2.9 GiB. The 22M's marginal cost is 8.8 ms and its projected p95 0.64 s.
+    - **Parity:** against the CPU cassettes, 0 verdict changes for both models at batch 16 and
+      batch 1 over 760 records. The maximum window drift is 2.8e-5; the CPU controls drift 0.
+
+    Sizing is in [`docs/configuration.md`](configuration.md) "Measured per-window cost".
+25. **Developers install torch through an extra:** `uv sync --extra dev --extra cpu` (or
+    `--extra cuda`). A bare `uv sync` now installs no torch, and the test session fails up front
+    with the install hint.
 
 ### v1.2.2 — 2026-10-04
 
@@ -474,7 +521,7 @@ never starts.
 
 **The contract 1.3.0 window is closed and v1.2.1 is published and verified;**
 **v1.2.2 (PATCH, contract 1.3.0 unchanged) is published (2026-10-04) and verified;**
-**v1.3.0 (MINOR, contract 1.4.0) is prepared, not yet published.**
+**v1.3.0 was never published (folded into v1.4.0); v1.4.0 (MINOR, contract 1.5.0) is prepared, not yet published.**
 `hardening-release` US-002 froze the six-model
 `tests/golden/contract_1_3_0.json` and `_EXPECTED_ONE_THREE_ZERO_DIFF`.
 The exact-additions sweep and the release-entry completeness/tense guards run

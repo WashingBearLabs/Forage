@@ -76,7 +76,7 @@ _FORAGE_SERVICE = "forage"
 
 # The forage release the fragments pin (hardening-release US-004). One edit here
 # at the next release, together with the two `image:` lines it checks.
-_FORAGE_RELEASE_TAG = "1.3.0"
+_FORAGE_RELEASE_TAG = "1.4.0"
 
 # Passed through to the forage service as bare names, like HF_TOKEN: set in
 # `compose/.env` they reach the container, left out they are genuinely unset
