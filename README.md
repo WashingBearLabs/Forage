@@ -75,9 +75,8 @@ should refuse to activate on a mismatch rather than guess.
 Two containers, one token. [`compose/minimal.yml`](compose/minimal.yml) is the whole
 deployment:
 
-The Forage pin is **v1.4.0 / contract 1.5.0**, prepared and **not yet
-published** (the pull fails with `manifest unknown` until the tag publishes;
-see [`docs/releases.md`](docs/releases.md); v1.2.2 is the latest published). v1.2.0 was
+The Forage pin is **v1.4.0 / contract 1.5.0**, published 2026-10-11 and verified
+(see [`docs/releases.md`](docs/releases.md) for the index digest). v1.2.0 was
 withdrawn because its classifier rejected the verified default model.
 
 ```bash
@@ -261,7 +260,7 @@ weights, the Llama terms come with it.
 
 ## Status
 
-Forage is **post-1.0**, with **v1.4.0 / contract 1.5.0 prepared, not yet published**
+Forage is **post-1.0**, with **v1.4.0 / contract 1.5.0 published (2026-10-11) and verified**
 (a MINOR making the 86M the default classifier, bounding worker resources, and serving CPU
 and GPU hosts from one image; it folds in the never-published v1.3.0).
 It succeeds v1.2.2 (published and verified 2026-10-04) and v1.2.1 (2026-09-23),

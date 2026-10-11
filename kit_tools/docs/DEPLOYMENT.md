@@ -87,10 +87,8 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 ## Pre-deploy Checklist
 
 1. **Pick a tag.** The current release is `v1.4.0` / contract `1.5.0`,
-   prepared and **not yet published** (the pull fails with `manifest unknown` until the
-   tag publishes; until then the latest published is `v1.2.2` / contract `1.3.0`). Pin its
-   full semver (`1.3.0`) or the `@sha256:` digest recorded in `docs/releases.md` once
-   filled (v1.2.2: `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`);
+   published 2026-10-11 and verified. Pin its full semver (`1.4.0`) or the `@sha256:` digest
+   recorded in `docs/releases.md` (v1.4.0: `sha256:d305bbbe223e13479f8a119540714d2277fe3e13c38dcf426729cd8c10019036`; v1.2.2: `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`);
    never pin `latest`, and treat `sha-<short>` tags from `main` as unreleased.
    Neither v1.2.0 (default model rejected) nor v0.9.2-rc (cold parity failure)
    is suitable for deployment.
@@ -148,7 +146,7 @@ Both fragments are standalone (no `extends`), validated by CI's `lint` job with
 `docker compose config -q`, and share the fixed-name volume `forage-model-cache`. **They
 pin `ghcr.io/washingbearlabs/forage:1.4.0` and
 `ghcr.io/washingbearlabs/forage-searxng:0.1.1-rc`.** The companion is published;
-`1.3.0` is prepared and not yet published (the merge-to-publication window is open until the owner cut); `1.2.2` was published 2026-10-04 and verified (index
+`1.4.0` was published 2026-10-11 and verified (its merge-to-publication window, PR #48 merged as `49de6cc`, is closed); `1.2.2` was published 2026-10-04 and verified (index
 `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`; its window, PR #36 merged as `c213bbf`, is closed). `1.2.1` remains published and
 verified; never roll back to withdrawn v1.2.0.
 

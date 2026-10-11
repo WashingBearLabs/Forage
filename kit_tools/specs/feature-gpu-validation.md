@@ -515,7 +515,33 @@ the pins prepared, so that tagging is the only step left.
 
 - **Not measured, so the entry has no figure:** GPU utilisation during US-001.
 
-**Owner sequence (remaining).** No tag is pushed by this story.
+**Owner sequence: executed 2026-10-11** (owner approval in-session).
+
+1. PR #48 merged as `49de6cc`. Full-suite preflight on that commit: 5764 passed; ruff, format and
+   pyright clean.
+2. Real-weights candidate smoke on thelab, image `4760c351716d` built from `49de6cc`, both passed:
+   - CPU: 86M at `1536m`, `contract_smoke.py --expect-status healthy`;
+   - GPU: overlay settings, with `/extract` 200 `scanned` on cuda.
+
+   Attestation before and after was equal (23 containers, `5f7ae386…`).
+3. Tag `v1.4.0` pushed at `49de6cc`. Publish [run 38104861366](https://github.com/WashingBearLabs/Forage/actions/runs/38104861366)
+   was green.
+4. Anonymous checks:
+   - `1.4.0`, `1.4` and `latest` resolve to index
+     `sha256:d305bbbe223e13479f8a119540714d2277fe3e13c38dcf426729cd8c10019036`, with amd64 and
+     arm64 manifests;
+   - the pull succeeded;
+   - the GitHub Release is a full release with both contract assets.
+5. Published-image GPU smoke on thelab: healthy on cuda, contract verified against the
+   tag's anchor, cuda revision `cff06f97…`, `/extract` 200 `scanned`. Attestation equal.
+6. Placeholders filled in `docs/releases.md`, and every "not yet published" status site flipped.
+7. Thelab cleaned up: scratch area, uv cache, the candidate and pulled images. Free space is back to
+   113 GB. Build-cache layers from the two image builds remain in the shared BuildKit cache, which
+   can only be cleared by a broad prune (left to the owner's Poppy session).
+8. **Still open:** the consumer pin. Poppy pins `1.4.0` (contract 1.5.0, MAJOR unchanged; 1.4.0
+   and 1.5.0 entries taken together) in a dedicated Poppy session.
+
+**Original owner sequence (as prepared).** No tag was pushed by this story itself.
 
 1. Review and merge the `gpu-validation` branch. US-001 to US-003 are recorded.
 2. Tag `v1.4.0` on that merge commit and push the tag.

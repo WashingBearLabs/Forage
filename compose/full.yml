@@ -39,9 +39,8 @@ name: forage-full
 services:
   forage:
     # ghcr.io/washingbearlabs/forage, tag 1.4.0 — contract 1.5.0, 86M default, CPU or GPU.
-    # NOT YET PUBLISHED: the pull fails with `manifest unknown` until the
-    # v1.4.0 tag publishes. docs/releases.md has the release record (index
-    # digest for pinning by @sha256). Never roll back to the withdrawn 1.2.0.
+    # Published 2026-10-11 and verified. docs/releases.md has the release record
+    # (index digest for pinning by @sha256). Never roll back to the withdrawn 1.2.0.
     image: ghcr.io/washingbearlabs/forage:1.4.0
     restart: unless-stopped
     # Loopback only — see the DEPLOYMENT POSTURE note above.

@@ -101,3 +101,4 @@
 - Decision: PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6 baked as image ENV (without it reserved VRAM grew >4.2 GiB; guard killed run)
 [14:20] gpu-validation US-004 (GPU sizing docs) + US-005 (v1.4.0 release prep): v1.3.0 folded into v1.4.0 (owner ruling); pins 1.4.0; rotation 64 02f7abcf -> a9beacbc (cuda cff06f97)
 - Gotcha: contract docstring entries may not carry publication state (test_docstring_entry_tense_has_no_publication_state)
+[20:10] v1.4.0 published 2026-10-11 (tag 49de6cc, run 38104861366, index sha256:d305bbbe…); candidate + published-image smokes CPU/GPU green; thelab cleaned (113G free); publication record PR
