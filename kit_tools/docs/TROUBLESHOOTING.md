@@ -877,11 +877,10 @@ connected`, cache hits) is INFO and therefore invisible.
 an older image than expected.
 
 **Cause:** `compose/minimal.yml` and `compose/full.yml` pin
-`ghcr.io/washingbearlabs/forage:1.4.0` and `forage-searxng:0.1.1-rc`; the companion is
-published, but `1.4.0` is **not yet published**, so a `manifest unknown` on the forage
-pin is the expected release-sequencing gap until the owner cut (after publication, check
-registry reachability and the image name). The v1.2.2 merge-to-publication
-window is closed (pin commit `c933673`). A future pin that lands ahead of its
+`ghcr.io/washingbearlabs/forage:1.4.0` and `forage-searxng:0.1.1-rc`; both are
+published (`1.4.0` on 2026-10-11), so a `manifest unknown` on the forage pin means a
+registry reachability or image-name problem, not a release gap. The v1.4.0 and v1.2.2
+merge-to-publication windows are closed (pin commit `c933673`). A future pin that lands ahead of its
 tag reopens such a window until the cut or a revert of its pin commit. A
 withdrawn or never-published tag also pulls nothing: v1.2.0 was withdrawn
 after its real-model failure.

@@ -94,7 +94,7 @@ Run it by hand against a container, or anything else serving the contract::
     uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \
         --image forage:ci --expect-status degraded
 
-    # v1.4.0 (once published): a weights-loaded container and its tagged anchor
+    # v1.4.0: a weights-loaded container and its tagged anchor
     anchor="$(mktemp)"
     git show v1.4.0:contract/openapi.yaml.sha256 > "$anchor"
     uv run python contract_smoke.py --base-url http://127.0.0.1:8020 \

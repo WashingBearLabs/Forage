@@ -21,35 +21,52 @@ Every non-pre-release tag, newest first. The `contract:`, `anchor:`, `index dige
 into `kit_tools/specs/feature-search-release.md`'s Implementation Notes — that table is what
 the Poppy `epic-search-policy` session reads to pin a digest; nothing here pushes to Poppy.
 
-### v1.4.0 — `<publication date>` (NOT YET PUBLISHED)
+### v1.4.0 — 2026-10-11
 
-NOT YET PUBLISHED. It was prepared by `gpu-validation` US-005, and the owner's cut (that story's
-owner sequence) fills in the placeholders below. **v1.3.0 was never published.** Its prepared
+**v1.3.0 was never published.** Its prepared
 work (items 1–15) ships here, folded into v1.4.0 by owner ruling (2026-10-10). A consumer on
 v1.2.2 moves straight to contract 1.5.0 and takes the 1.4.0 and 1.5.0 entries at once. There
 is no `v1.3.0` tag.
 
 - contract: 1.5.0
 - anchor: `9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`
-- index digest: `<index digest>`
-- tagged commit: `<tag commit>`
+- index digest: `sha256:d305bbbe223e13479f8a119540714d2277fe3e13c38dcf426729cd8c10019036`
+- tagged commit: `49de6cc812052e925c6897b1812f55291dab0473`
 
-Compose is pinned ahead of the cut; the tag lands with `v1.4.0`. Until then
-v1.2.2 above is the latest published, verified tag. The recorded index digest
-is the **pinnable form** (`ghcr.io/washingbearlabs/forage@sha256:…`) for
-deployments that need immutability; the full-semver tag pin remains the
-quickstart default.
+Compose pins the verified `v1.4.0` (pin commit `f2c9e53`, merged via PR #48 at `49de6cc`). The
+recorded index digest is the **pinnable form** (`ghcr.io/washingbearlabs/forage@sha256:…`) for
+deployments that need immutability; the full-semver tag pin remains the quickstart default.
 
-Publication: `<publish run>`. Real-weights candidate smoke on the exact
-commit to be tagged (86M at `1536m`, and on a GPU via `compose/gpu.yml`): `<candidate smoke record>`.
+Published 2026-10-11 through [run 38104861366](https://github.com/WashingBearLabs/Forage/actions/runs/38104861366)
+(lint, typecheck, test, build-amd64, secret-grep, smoke and publish green; the `searxng-*` jobs
+skipped on a service tag). Checked anonymously from an empty Docker config:
+- `latest`, `1.4` and `1.4.0` resolve to the recorded index;
+- the index carries `linux/amd64` (`sha256:5ed1b7574e6b…`) and `linux/arm64`
+  (`sha256:9411c330b2be…`);
+- an anonymous `docker pull` of `1.4.0` succeeded.
 
-**Outstanding unpublished-tag window:** merging the release PR makes `main`'s
-quickstart pull an unpublished tag until the owner runs the sequence. Cut from
-that merge commit in the same sitting; if the gate is not run, use
-`git revert <v1.4.0 pin commit>` before leaving that window open. Neither
-publication nor post-release verification is complete.
+The GitHub Release is a full release (not a pre-release) carrying `openapi.yaml` and
+`openapi.yaml.sha256`.
 
-What ships (draft, pending the owner cut). Items 1–15 are the never-published v1.3.0 work:
+**Real-weights candidate smoke** on the exact tagged commit, before the tag was pushed. It ran on
+the lab host with the image built from `49de6cc` (ID `4760c351716d`, build check `amd64 ok, torch
+2.14.0+cu130`).
+- **CPU:** the default 86M at `1536m` (`--cpus 4`) passed `contract_smoke.py --expect-status
+  healthy --expect-device cpu`. The in-image contract equals the anchor; `sanitizer_revision` was
+  `a9beacbc306b…` and memory 787 MiB.
+- **GPU** (RTX 4070 Ti, `--gpus device=0`, `FORAGE_DEVICE=cuda`, fallback `cpu`, `3072m`): passed
+  `--expect-device cuda`, with `effective_batch_size` 16 and 0 failovers or OOM events.
+  `PYTORCH_CUDA_ALLOC_CONF` is present in the image, and `/extract` returned 200 `scanned`.
+
+**Published image:** `1.4.0` booted on the same GPU and passed `contract_smoke.py` against the anchor
+committed at the `v1.4.0` tag. It was healthy on `cuda` with contract 1.5.0 and `sanitizer_revision`
+`cff06f974e27…` (the cuda value), and `/extract` returned 200 `scanned`.
+
+**Production attestation** on the lab host was equal before and after each run (23 containers),
+and the scratch area and images were removed afterwards. The full record is in
+`kit_tools/specs/feature-gpu-validation.md` (US-005). The merge-to-publication window is closed.
+
+What ships. Items 1–15 are the never-published v1.3.0 work:
 
 1. **The 86M is the default model** (owner ruling 2026-10-06). With `FORAGE_MODEL_ID`
    unset the service loads `meta-llama/Llama-Prompt-Guard-2-86M`; the 22M stays allowlisted
@@ -521,7 +538,7 @@ never starts.
 
 **The contract 1.3.0 window is closed and v1.2.1 is published and verified;**
 **v1.2.2 (PATCH, contract 1.3.0 unchanged) is published (2026-10-04) and verified;**
-**v1.3.0 was never published (folded into v1.4.0); v1.4.0 (MINOR, contract 1.5.0) is prepared, not yet published.**
+**v1.3.0 was never published (folded into v1.4.0); v1.4.0 (MINOR, contract 1.5.0) is published (2026-10-11) and verified.**
 `hardening-release` US-002 froze the six-model
 `tests/golden/contract_1_3_0.json` and `_EXPECTED_ONE_THREE_ZERO_DIFF`.
 The exact-additions sweep and the release-entry completeness/tense guards run

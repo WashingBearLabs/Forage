@@ -68,13 +68,12 @@ contract `1.3.0`, whose window opened in
 US-002. Withdrawing a defective image does not withdraw its contract version.
 The archived release spec's US-005 handoff records replacement verification;
 `docs/releases.md` records completed recovery and withdrawal.
-The last published mapping is image `v1.2.2` (2026-10-04, verified), a PATCH that makes
-the opt-in 86M classifier selectable and serves contract `1.3.0`, unchanged from `v1.2.1`.
-The next mapping is **prepared, not yet published**: image `v1.4.0` serves contract `1.5.0`
-(it carries 1.4.0 too; image `v1.3.0` was never published, owner ruling 2026-10-10). Both "next MINOR" windows are **closed in 1.4.0** (2026-10-07): ruling (g)'s
+The last published mapping is image `v1.4.0` (2026-10-11, verified): contract `1.5.0`, which
+carries 1.4.0 too (image `v1.3.0` was never published, owner ruling 2026-10-10). Before it,
+image `v1.2.2` (2026-10-04, verified) served contract `1.3.0`, unchanged from `v1.2.1`. Both "next MINOR" windows are **closed in 1.4.0** (2026-10-07): ruling (g)'s
 `retrieve.max_promptguard_chunks` flip (to `64`) and ruling (l)'s validation-422 key drop.
 **No compatibility window is open.** A process built from this tree reports `1.5.0` on
-`/health` (the unpublished `inference-surface` MINOR: the device fields and two degraded
+`/health` (the `inference-surface` MINOR, published in `v1.4.0`: the device fields and two degraded
 reasons; `contract_1_4_0.json` is now frozen beside `contract_1_5_0.json`). Image `v1.0.0`
 serving contract `1.5.0` is not a mapping that exists; the example above stays the one that shows
 the two semvers diverging.
