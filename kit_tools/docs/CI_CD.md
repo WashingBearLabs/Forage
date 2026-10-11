@@ -370,7 +370,7 @@ verified against GHCR afterwards rather than assumed: `v1.0.0` (commit `f4c2b16`
 minted `latest`, `1.0` and `1.0.0` at index digest `sha256:d83639cc…`, and `v1.1.0` (commit
 `06b01b14`, 2026-09-18 UTC) moved `latest` and minted `1.1` and `1.1.0` at `sha256:e1b875cc…`.
 `docs/releases.md` § "Released versions" carries the full digests, anchors and tagged commits.
-`v1.3.0` / contract `1.4.0` is prepared and not yet published (compose pins it ahead of the cut). The latest published release, **v1.2.2 / contract 1.3.0** (a PATCH; contract
+`v1.4.0` / contract `1.5.0` is prepared and not yet published (compose pins it ahead of the cut; v1.3.0 was folded in, never published). The latest published release, **v1.2.2 / contract 1.3.0** (a PATCH; contract
 unchanged from v1.2.1), published 2026-10-04 and verified: `latest`, `1.2` and
 `1.2.2` resolve to `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`; `corpus-86m-enablement` US-004 records the cut.
 The previous release, **v1.2.1 / contract 1.3.0**, published and passed
@@ -593,7 +593,7 @@ gh cache delete <id>                # delete each index-publish-* entry
 
 The git tag **is** the version (`pyproject.toml`'s `version` is inert packaging metadata),
 and the image tag and `contract_version` are independent semvers:
-image `v1.3.0` (prepared, not yet published) serves contract `1.4.0`; the latest published, `v1.2.2`, serves `1.3.0`.
+image `v1.4.0` (prepared, not yet published) serves contract `1.5.0`; the latest published, `v1.2.2`, serves `1.3.0`.
 
 `v1.2.2` is cut and published; never re-run a cut for an existing tag. For any
 later release, choose a new version and repeat all owner gates (`vX.Y.Z` below).

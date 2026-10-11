@@ -10,7 +10,7 @@ entries, bounded providers, an operator-sizable envelope, and model-selection to
 at contract **1.3.0**. At v1.2.1 only the 22M was allowlisted.
 **Status:** Shipped and verified (2026-09-23). v1.2.0 was withdrawn after its
 default-model failure. [Handoff](../specs/archive/feature-hardening-release.md).
-**Current release:** MINOR `v1.3.0` / contract `1.4.0` is prepared and **not yet published** (`epic-forage-v1-3-0-release`; pins moved ahead of the cut, owner gates pending). Latest published: PATCH `v1.2.2` (`epic-forage-injection-corpus` spec 0) makes the 86M
+**Current release:** MINOR `v1.4.0` / contract `1.5.0` is prepared and **not yet published** (`epic-forage-inference-backends` with the never-published v1.3.0 folded in, owner ruling 2026-10-10; pins moved ahead of the cut, owner gates pending). Latest published: PATCH `v1.2.2` (`epic-forage-injection-corpus` spec 0) makes the 86M
 selectable via `FORAGE_MODEL_ID` with the 22M default, contract 1.3.0 unchanged;
 published 2026-10-04 and verified (index `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`).
 
@@ -82,7 +82,7 @@ Poppy.
       inline-hidden body content) with stage-2 scan forms, keeping stage-3 input byte-identical
       so no cassette is re-recorded. Wrapper `../specs/epic-forage-structural-hardening.md`.
 
-- [ ] **v1.3.0 release** (`epic-forage-v1-3-0-release`, planned 2026-10-07, three specs / fourteen
+- [x] **v1.3.0 release work** — merged (PR #44); never tagged, folded into v1.4.0 (owner ruling 2026-10-10) (`epic-forage-v1-3-0-release`, planned 2026-10-07, three specs / fourteen
       stories; P1, follows structural hardening): `/retrieve` HTML above a measured size parses in
       the rlimited worker (coded 422), `/search` parse off the event loop, a refused look-alike
       fold BLOCKs at `max(2n, n + 256)`, budget default 64, validation-422 placeholders dropped → contract

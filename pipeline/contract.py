@@ -215,7 +215,8 @@ MINOR when fields are only added.
   ``model`` section gains ``device_failovers``, ``oom_batch_reductions`` and
   ``oom_refusals`` (counters, ``0`` without a classifier snapshot) and
   ``effective_batch_size`` (windows per GPU forward pass; ``null`` on ``cpu`` or
-  without a snapshot); all additive.
+  without a snapshot); all additive. A consumer moving from 1.3.0 takes the
+  1.4.0 and 1.5.0 entries together: both ship in the same image.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy

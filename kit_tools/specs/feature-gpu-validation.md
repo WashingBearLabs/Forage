@@ -279,15 +279,15 @@ the pins prepared, so that tagging is the only step left.
   7. fill the placeholders.
 
 **Acceptance Criteria:**
-- [ ] The 1.5.0 bullet is final and reconciled. The `export_contract` result and the rotation are
+- [x] The 1.5.0 bullet is final and reconciled. The `export_contract` result and the rotation are
       recorded.
-- [ ] The v1.4.0 NOT YET PUBLISHED entry contains each item, from recorded figures or
+- [x] The v1.4.0 NOT YET PUBLISHED entry contains each item, from recorded figures or
       `NOT YET MEASURED`, with the anchor and the cpu/cuda revisions verified by a recorded command.
-- [ ] Pins name 1.4.0, the classified table is recorded, and `tests/test_compose_fragments.py`
+- [x] Pins name 1.4.0, the classified table is recorded, and `tests/test_compose_fragments.py`
       passes.
-- [ ] Implementation Notes end with the owner sequence. No tag is pushed.
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .` and `uv run ruff format --check .` pass
+- [x] Implementation Notes end with the owner sequence. No tag is pushed.
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .` and `uv run ruff format --check .` pass
 
 ## Edge Cases
 
@@ -467,6 +467,66 @@ the pins prepared, so that tagging is the only step left.
   `FORAGE_DEVICE=cuda`.
 - `docs/weights.md` "Benchmarking the classifier": the report is device-aware. It records the GPU
   candidate's flags and says a GPU run must show `"cuda"` for both device fields.
+
+### US-005 — v1.4.0 release prep (2026-10-10)
+
+- **Release sequencing (owner ruling, 2026-10-10).** v1.3.0 was merged (PR #44) but never tagged.
+  It is **folded into v1.4.0**:
+  - there is no `v1.3.0` tag;
+  - the v1.3.0 draft entry in `docs/releases.md` became the `v1.4.0` NOT YET PUBLISHED entry,
+    keeping its items 1–15 (the 1.3.0 work);
+  - it gained items 16–25 (this epic);
+  - the pins go from 1.3.0 to **1.4.0**, and a v1.2.2 consumer takes contract 1.4.0 and 1.5.0 at
+    once.
+- **1.5.0 bullet, reconciled.** `git diff 35a393c..HEAD -- pipeline/contract.py
+  contract/openapi.yaml` adds the two `/health` fields and two reasons, plus the four
+  `/metrics.model` fields. The bullet already named all of them; finalising it added the consumer
+  note (a consumer moving from 1.3.0 takes 1.4.0 and 1.5.0 together).
+  - The first wording ("Released in v1.4.0 …") was refused by
+    `test_docstring_entry_tense_has_no_publication_state`. Publication state belongs in
+    `docs/releases.md`.
+- **`uv run python -m scripts.export_contract`:** `contract/openapi.yaml` and
+  `openapi.yaml.sha256` are byte-identical (the docstring is not in the document). The anchor is
+  `9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`, checked with
+  `cat contract/openapi.yaml.sha256` and recorded in the entry.
+- **Sixty-fourth rotation:** `02f7abcf…` → `a9beacbc306b300df987d91916c94a8a04a567d6ea3783809c5a8c3e3b4e7dba`
+  (cpu, or `FORAGE_DEVICE` unset). For `FORAGE_DEVICE=cuda` it goes `280511c1…` →
+  `cff06f974e271422f134d2c1ce304a2a2a62d6ead5dfef1773015f1791076cfc`.
+  - The values are identical under default, `config.yaml` and `bench/config.yaml`.
+  - Command: `uv run python <scratch>/rev.py`, which loads each config and calls
+    `derive_sanitizer_revision` with `FORAGE_DEVICE` unset, `cpu` and `cuda`.
+  - Control: a temporary copy of the tree with `git show HEAD:pipeline/contract.py` reproduces
+    `02f7abcf…` and `280511c1…` exactly. It is read-only; the working tree was never reverted.
+  - Recorded in `CLAUDE.md`, `docs/bootstrap-notes.md`, the GOTCHAS table and tally (now 42 of 64
+    with no policy change) and `docs/releases.md` item 14.
+  - Count sites updated: GOTCHAS intro and tally, `SERVICE_MAP.md`, and `TROUBLESHOOTING.md`
+    (whose count was stale at "Sixty-one … `41ac98ca`"). A grep for "sixty-three" leaves no
+    current-count hit.
+- **Classified `git grep -n '1\.3\.0'`.** There are 276 hits. Most mean *contract* 1.3.0 (goldens,
+  GOVERNANCE history, the docstring), which is history.
+
+| Class | Sites |
+|---|---|
+| **Rewritten: image pin** | `compose/minimal.yml` (comment and `image:`), `compose/full.yml` (comment and `image:`), `tests/test_compose_fragments.py` `_FORAGE_RELEASE_TAG` |
+| **Rewritten: "current release" prose** | README (2), `contract/GOVERNANCE.md` (next mapping), `AGENT_README.md`, `SYNOPSIS.md` (maturity and planned next), `INFRA_ARCH.md` (4), `SERVICE_MAP.md` (current state, pins, pin sequencing, and the consumer `contract_version` now 1.5.0), `CI_CD.md` (2), `DEPLOYMENT.md` (5), `LOCAL_DEV.md`, `TROUBLESHOOTING.md`, `TESTING_GUIDE.md`, `MILESTONES.md` (current release; the v1.3.0 milestone marked folded), `docs/releases.md` (status line) |
+| **Rewritten: anchor example** | `contract_smoke.py` (docstring and recipe), `MONITORING.md` (`git show v1.4.0:…`) |
+| **Relabelled** | `docs/configuration.md`: "Recommended CPU envelope (since v1.4.0, prepared as v1.3.0)", plus the wait-default sentence |
+| **History, kept** | rotation paragraphs naming "the v1.3.0 validation fix" (`CLAUDE.md`, `CODE_ARCH.md`, GOTCHAS row), `DECISIONS.md` narrative, BACKLOG headings, archived and epic specs, contract 1.3.0 references (goldens, GOVERNANCE rulings, the docstring, `models.py`, `retrieval_app.py`, OpenAPI descriptions), `uv.lock` (a package version) |
+
+- **Not measured, so the entry has no figure:** GPU utilisation during US-001.
+
+**Owner sequence (remaining).** No tag is pushed by this story.
+
+1. Review and merge the `gpu-validation` branch. US-001 to US-003 are recorded.
+2. Tag `v1.4.0` on that merge commit and push the tag.
+3. Watch the publish lane (all gates plus the layer-identity check) and record the run, index
+   digest and tagged commit in the entry.
+4. Anonymous pull of `ghcr.io/washingbearlabs/forage:1.4.0` (amd64 and arm64).
+5. GPU smoke of the **published** image on thelab: the US-001 container shape with
+   `compose/gpu.yml` semantics, `/health` showing cuda, attestation before and after.
+6. Fill the entry's placeholders (`<publication date>`, digest, commit, runs) and mark it published.
+7. Consumer note for Poppy, when Poppy pins: contract 1.5.0 (MAJOR unchanged), with the 1.4.0 and
+   1.5.0 entries taken together.
 
 ## Refinement Notes
 

@@ -770,6 +770,14 @@ rotation for cpu** (`sanitizer_revision.py` is not a hashed source and `cpu`/uns
 cuda value is `280511c1bfd3c801091bae9fa1901038b54ef43db663b7e99c5457c3d66da6a6`. Old cache keys
 invalidate. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
 
+The sixty-fourth rotation is `02f7abcf…` → `a9beacbc…` for `gpu-validation` US-005 —
+**not a sanitization-behaviour change**: only `pipeline/contract.py` moves, finalising the 1.5.0
+entry (a consumer moving from 1.3.0 takes the 1.4.0 and 1.5.0 entries together: v1.3.0 was never
+published and v1.4.0 carries both — owner ruling 2026-10-10). A read-only whole-file reversal against `HEAD` reproduces `02f7abcf…` under
+default, `config.yaml` and `bench/config.yaml`; the cuda value moves `280511c1…` → `cff06f97…`.
+`contract/openapi.yaml` and its anchor are byte-identical. Text only; old cache keys invalidate.
+Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
 ## Session Scratchpad
 
 After completing significant work (feature, bug fix, refactor, investigation, decision), append a note to `kit_tools/SESSION_SCRATCH.md`:

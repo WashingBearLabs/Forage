@@ -1417,7 +1417,7 @@ the wait ÷ k.
 | 64 | 22M, GPU (RTX 4070 Ti, batch 16) | 0.6 s | 1.2 s |
 | 1,024 | 86M, GPU (RTX 4070 Ti, batch 16) | 16.9 s | 33.8 s |
 
-**Recommended envelope (v1.3.0).** 8 CPUs (`FORAGE_CPUS=8`, `promptguard_threads: 8`) with
+**Recommended CPU envelope (since v1.4.0, prepared as v1.3.0).** 8 CPUs (`FORAGE_CPUS=8`, `promptguard_threads: 8`) with
 the shipped pair `retrieve.max_promptguard_chunks: 64` and `promptguard_wait_seconds: 90.0`:
 a worst-case 64-chunk page holds the 86M permit about 69 s, which fits the 90 s wait at
 k = 1. On a multi-die CPU, pin the container to memory-bearing NUMA nodes (`cpuset`) for
@@ -1447,7 +1447,7 @@ hosts, and the GPU values are an operator setting.
 Raising the wait rather than lowering the budget trades queue latency for coverage: a
 request may wait up to 90 s behind a large page, but pages up to the 114,688-character
 ceiling are still classified rather than refused. The default was raised from 30.0 to 90.0
-in v1.3.0 for exactly that reason (owner ruling, 2026-10-07).
+in v1.4.0 (prepared as v1.3.0) for exactly that reason (owner ruling, 2026-10-07).
 
 **What a waiter gets when its wait expires.** Its stage 3 is not run. The request receives
 `stage3_promptguard.unavailable_result`: with `promptguard_fail_closed` off it is

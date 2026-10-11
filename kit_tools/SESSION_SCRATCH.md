@@ -99,3 +99,5 @@
 - Gotcha: scratch clone under umask 077 made the image entrypoint non-executable (exit 126); restored git modes and rebuilt
 [12:45] gpu-validation US-002 + US-003 owner gates on thelab: parity 6/6 clean (0 verdict changes, cpu controls drift 0); failover cpu/refuse proven; attestation equal
 - Decision: PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6 baked as image ENV (without it reserved VRAM grew >4.2 GiB; guard killed run)
+[14:20] gpu-validation US-004 (GPU sizing docs) + US-005 (v1.4.0 release prep): v1.3.0 folded into v1.4.0 (owner ruling); pins 1.4.0; rotation 64 02f7abcf -> a9beacbc (cuda cff06f97)
+- Gotcha: contract docstring entries may not carry publication state (test_docstring_entry_tense_has_no_publication_state)

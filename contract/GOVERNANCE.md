@@ -70,8 +70,8 @@ The archived release spec's US-005 handoff records replacement verification;
 `docs/releases.md` records completed recovery and withdrawal.
 The last published mapping is image `v1.2.2` (2026-10-04, verified), a PATCH that makes
 the opt-in 86M classifier selectable and serves contract `1.3.0`, unchanged from `v1.2.1`.
-The next mapping is **prepared, not yet published**: image `v1.3.0` serves contract `1.4.0`,
-the next MINOR. Both "next MINOR" windows are **closed in 1.4.0** (2026-10-07): ruling (g)'s
+The next mapping is **prepared, not yet published**: image `v1.4.0` serves contract `1.5.0`
+(it carries 1.4.0 too; image `v1.3.0` was never published, owner ruling 2026-10-10). Both "next MINOR" windows are **closed in 1.4.0** (2026-10-07): ruling (g)'s
 `retrieve.max_promptguard_chunks` flip (to `64`) and ruling (l)'s validation-422 key drop.
 **No compatibility window is open.** A process built from this tree reports `1.5.0` on
 `/health` (the unpublished `inference-surface` MINOR: the device fields and two degraded

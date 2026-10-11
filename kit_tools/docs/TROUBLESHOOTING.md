@@ -549,8 +549,8 @@ different `sanitizer_revision` than before the deploy.
 
 **Cause:** expected, not a bug. `sanitizer_revision` hashes eight `pipeline/*.py` files, the
 model identity and `promptguard_threshold`, and it is part of the content-cache key
-fingerprint, so a rotation invalidates every existing entry on purpose. Sixty-one rotations
-are recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `41ac98ca`); that file, not
+fingerprint, so a rotation invalidates every existing entry on purpose. Sixty-four rotations
+are recorded in `docs/bootstrap-notes.md` (`e6b2b56d` → ... → `a9beacbc`); that file, not
 this count, is the record. Any consumer cache keyed on the revision must flush too.
 
 **Fix:** none needed. If the rotation surprised you, the bump was made as a drive-by inside
@@ -877,8 +877,8 @@ connected`, cache hits) is INFO and therefore invisible.
 an older image than expected.
 
 **Cause:** `compose/minimal.yml` and `compose/full.yml` pin
-`ghcr.io/washingbearlabs/forage:1.3.0` and `forage-searxng:0.1.1-rc`; the companion is
-published, but `1.3.0` is **not yet published**, so a `manifest unknown` on the forage
+`ghcr.io/washingbearlabs/forage:1.4.0` and `forage-searxng:0.1.1-rc`; the companion is
+published, but `1.4.0` is **not yet published**, so a `manifest unknown` on the forage
 pin is the expected release-sequencing gap until the owner cut (after publication, check
 registry reachability and the image name). The v1.2.2 merge-to-publication
 window is closed (pin commit `c933673`). A future pin that lands ahead of its

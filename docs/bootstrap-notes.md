@@ -2723,6 +2723,27 @@ agree.
 
 `orchestrator.py` is the only hashed file that changed; the reversal was read-only. Not replayed to Poppy.
 
+
+### The sixty-fourth rotation: the 1.5.0 entry finalised (`gpu-validation` US-005)
+
+`pipeline/contract.py`'s 1.5.0 bullet gains its consumer note: a consumer moving from 1.3.0 takes the
+1.4.0 and 1.5.0 entries together, because both ship in the same image (v1.3.0 was never published;
+owner ruling, 2026-10-10). Publication state stays out of the docstring
+(`test_docstring_entry_tense_has_no_publication_state`). Text only — **not** a
+sanitization-behaviour change. `uv run python -m scripts.export_contract` rewrote nothing:
+`contract/openapi.yaml` and `openapi.yaml.sha256` are byte-identical (the docstring is not in the
+document).
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`c8f198a`) / `contract.py` reverted read-only (= all-reverted control), `FORAGE_DEVICE` unset or `cpu` | `02f7abcf34ae7bc5781f0e90f317aab59c7f21a3b5cc8e4fba5cfdf9606aaa67` |
+| Before / reverted, `FORAGE_DEVICE=cuda` | `280511c1bfd3c801091bae9fa1901038b54ef43db663b7e99c5457c3d66da6a6` |
+| After, `FORAGE_DEVICE` unset or `cpu` | `a9beacbc306b300df987d91916c94a8a04a567d6ea3783809c5a8c3e3b4e7dba` |
+| After, `FORAGE_DEVICE=cuda` | `cff06f974e271422f134d2c1ce304a2a2a62d6ead5dfef1773015f1791076cfc` |
+
+`contract.py` is the only hashed source that moved; the control was computed on a temporary copy of
+the tree with `git show HEAD:pipeline/contract.py`, never by reverting the working tree. Not
+replayed to Poppy.
 ### GPU validation on thelab: US-001 smoke and latency (`gpu-validation` US-001, 2026-10-09)
 
 No rotation. This is an owner-gate measurement of the `main` image at `2c9b28f`
