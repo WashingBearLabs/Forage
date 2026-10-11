@@ -585,7 +585,7 @@ edit. The CPU-only claims in the Dockerfile header and the docs were corrected i
 `feature-unified-image` US-003, including the GOTCHAS claim that the image never reads the lock,
 which had been false since `forage-ci-and-image` US-003.
 
-**Source:** `kit_tools/specs/feature-unified-image.md`; `kit_tools/specs/epic-forage-inference-backends.md`
+**Source:** `kit_tools/specs/archive/feature-unified-image.md`; `kit_tools/specs/epic-forage-inference-backends.md`
 (measured basis); `pyproject.toml` `[tool.uv.sources]`; `scripts/check_lock_cuda_scope.py`.
 
 ---

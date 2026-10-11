@@ -96,7 +96,7 @@ crash reads as a false regression.
 
 **56 `test_*.py` modules** under `tests/`, flat, one per subject — 60 Python files in all
 once `conftest.py`, `fakes.py`, `corpus_stage2.py` and `__init__.py` are counted — plus
-`golden/`, `fixtures/` and `corpus/`. **5557 tests collected** on 2026-10-07 (`release-1-3-0` US-005; `epic-forage-structural-hardening`: 4860 -> 5389; before that, the 86M default split the shipped-envelope test into the 86M and 22M cases; the `/retrieve` bounded-decoder fix added nine before it; before that
+`golden/`, `fixtures/` and `corpus/`. **5766 tests collected** on 2026-10-11 (`epic-forage-inference-backends` and v1.4.0: 5557 -> 5766; before that `release-1-3-0` US-005, `epic-forage-structural-hardening`: 4860 -> 5389; before that, the 86M default split the shipped-envelope test into the 86M and 22M cases; the `/retrieve` bounded-decoder fix added nine before it; before that
 4850, after the epic-wide validation fixes for `forage-injection-corpus`; `uv run pytest --collect-only -q`).
 Every per-module row below is remeasured
 from collection, not incremented from a previous story's count; their sum

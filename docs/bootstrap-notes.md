@@ -2760,7 +2760,7 @@ No rotation. This is an owner-gate measurement of the `main` image at `2c9b28f`
   0 alerts.
 
 The full table, the operative VRAM floor ruling (3,391 MiB free for later gates) and the
-umask build hazard are in `kit_tools/specs/feature-gpu-validation.md` Implementation Notes.
+umask build hazard are in `kit_tools/specs/archive/feature-gpu-validation.md` Implementation Notes.
 
 ### GPU validation on thelab: US-002 parity and US-003 failover (`gpu-validation`, 2026-10-10)
 
@@ -2781,7 +2781,7 @@ No rotation (`Dockerfile` is not a revision input).
   - `refuse` exits 3 with the fixed `DeviceConfigurationError` message.
 - **Production attestation:** equal around both gates (23 containers, `5f7ae386…`).
 
-The full tables are in `kit_tools/specs/feature-gpu-validation.md` Implementation Notes.
+The full tables are in `kit_tools/specs/archive/feature-gpu-validation.md` Implementation Notes.
 
 ### Consumer note for Poppy: Forage v1.3.0 / contract 1.4.0 (`release-1-3-0` US-004)
 

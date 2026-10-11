@@ -64,7 +64,7 @@ committed at the `v1.4.0` tag. It was healthy on `cuda` with contract 1.5.0 and 
 
 **Production attestation** on the lab host was equal before and after each run (23 containers),
 and the scratch area and images were removed afterwards. The full record is in
-`kit_tools/specs/feature-gpu-validation.md` (US-005). The merge-to-publication window is closed.
+`kit_tools/specs/archive/feature-gpu-validation.md` (US-005). The merge-to-publication window is closed.
 
 What ships. Items 1–15 are the never-published v1.3.0 work:
 
