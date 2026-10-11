@@ -102,3 +102,4 @@
 [14:20] gpu-validation US-004 (GPU sizing docs) + US-005 (v1.4.0 release prep): v1.3.0 folded into v1.4.0 (owner ruling); pins 1.4.0; rotation 64 02f7abcf -> a9beacbc (cuda cff06f97)
 - Gotcha: contract docstring entries may not carry publication state (test_docstring_entry_tense_has_no_publication_state)
 [20:10] v1.4.0 published 2026-10-11 (tag 49de6cc, run 38104861366, index sha256:d305bbbe…); candidate + published-image smokes CPU/GPU green; thelab cleaned (113G free); publication record PR
+[20:40] Closed epic-forage-inference-backends: spec 5 archived, epic wrapper completed, BACKLOG/MILESTONES updated, 3 GOTCHAS added, parked findings merged into AUDIT_FINDINGS.md (spec4/epic IDs +12; 020/021 resolved), test count 5766

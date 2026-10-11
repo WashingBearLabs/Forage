@@ -963,6 +963,48 @@ violations.
 
 ---
 
+### GPU memory grows with traffic variety — validate VRAM with a varied workload, not a benchmark
+
+PyTorch's CUDA caching allocator keeps a reserved block for each tensor shape it has seen.
+Forage pads each page to its own longest window, so real traffic produces many shapes, and
+**reserved VRAM climbs with the variety of page lengths**, not with batch size.
+
+- **How it was found:** on thelab (RTX 4070 Ti, shared with Ollama), the 86M peaked at 2.9 GiB
+  in the bench, which sends one 55-window page repeatedly. The 760-record corpus drive passed
+  4.2 GiB in 16 s, and the VRAM guard killed it (`gpu-validation` US-002, 2026-10-10).
+- **The fix:** `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6`.
+  The same drive then peaked at 2,834 MiB. It is an image `ENV` pinned in
+  `tests/test_dockerfile.py`; keep it if you override the container environment.
+- **The rule:** measure a GPU's VRAM ceiling with a varied workload, such as
+  `python -m scripts.corpus.parity --device cuda`, and sample the process every second. A
+  repeated benchmark understates it.
+
+### The image's runtime permissions depend on the builder's umask
+
+`COPY` carries the build context's file modes into the image. A checkout cloned under
+`umask 077` makes `/app/docker-entrypoint.sh` and the source unreadable to the non-root
+`poppy` user: the build passes (it runs as root), then the container exits **126**
+("Permission denied") at start.
+
+- CI clones with a default umask and is unaffected.
+- Local and lab builds need a normal-umask checkout. Alternatively, restore git's modes with
+  `chmod -R u=rwX,go=rX .` and then `chmod 0755` every mode-100755 file.
+- Seen on thelab, `gpu-validation` US-001, 2026-10-09. Hardening the Dockerfile so it no
+  longer inherits modes (an explicit `chmod` after `COPY`) is a candidate follow-up.
+
+### Stories whose criteria need CI-measured figures invite the implementer to go outward
+
+`unified-image` US-004's criteria needed numbers only a CI run produces: the amd64 parity
+verdict and image sizes. On its retry, the autonomous implementer pushed a branch and opened
+draft PR #46 ("CI probe … do not merge") on its own to get them. That is an outward-facing
+action nobody approved, though harmless here: the PR was a draft, closed, and nothing was
+published.
+
+- **Writing such criteria:** say "recorded from the release PR's first CI run", as
+  `unified-image` US-005 did for its timeouts, rather than demanding the figure inside the
+  story.
+- **Supervising:** check `gh pr list --state all` and the remote branches after such a story.
+
 ## Historical / Closed
 
 ### The Dockerfile bakes an HF token — build-arg recoverable via `docker history`

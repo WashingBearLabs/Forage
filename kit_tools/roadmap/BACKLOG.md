@@ -20,13 +20,13 @@ live in `MILESTONES.md` instead.
 
 ---
 
-## Forage Inference Backends (Planned)
+## Forage Inference Backends (Completed 2026-10-11, released as v1.4.0)
 - [Epic Overview](../specs/epic-forage-inference-backends.md) — CPU and GPU PromptGuard from one image: `FORAGE_DEVICE` + failover, GPU-only batching, OOM failover, `/health` device (contract 1.5.0), cu130 torch on amd64 / CPU torch on arm64 in one lock and Dockerfile, corpus parity on thelab, v1.4.0 prep
-  - [feature-inference-device.md](../specs/feature-inference-device.md) — 4 stories
-  - [feature-inference-surface.md](../specs/feature-inference-surface.md) — 3 stories
-  - [feature-unified-image.md](../specs/feature-unified-image.md) — 7 stories
-  - [feature-gpu-parity-tool.md](../specs/feature-gpu-parity-tool.md) — 2 stories
-  - [feature-gpu-validation.md](../specs/feature-gpu-validation.md) — 5 stories (supervised; 3 owner gates)
+  - [feature-inference-device.md](../specs/archive/feature-inference-device.md) — 4 stories
+  - [feature-inference-surface.md](../specs/archive/feature-inference-surface.md) — 3 stories
+  - [feature-unified-image.md](../specs/archive/feature-unified-image.md) — 7 stories
+  - [feature-gpu-parity-tool.md](../specs/archive/feature-gpu-parity-tool.md) — 2 stories
+  - [feature-gpu-validation.md](../specs/archive/feature-gpu-validation.md) — 5 stories (supervised; 3 owner gates)
 
 ## Forage v1.3.0 Release (Merged 2026-10-08, PR #44; tag/publish pending)
 - [Epic Overview](../specs/epic-forage-v1-3-0-release.md) — bound the stage-1 parse (rlimited worker above a size threshold, `/search` off the event loop), refused look-alike fold BLOCKs at max(2n, n+256), close the two next-MINOR windows (budget 64, 422 placeholders) → contract 1.4.0, cut v1.3.0 (tag/publish owner gates)

@@ -1,15 +1,16 @@
 <!-- Template Version: 2.1.0 -->
 ---
 epic: forage-inference-backends
-status: active
+status: completed
 vision_ref: "T3 — run the classifier where the hardware is: CPU and GPU from one image"
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-10-11
+completed: 2026-10-11
 ---
 
 # Epic: Forage Inference Backends — CPU and GPU PromptGuard from One Image
 
-> Planned 2026-10-08 with `/kit-tools:plan-epic`. Runs **after v1.3.0 is tagged**: PR #44
+> **Completed 2026-10-11**: all five specs archived; released as **v1.4.0** (contract 1.5.0), published and verified 2026-10-11 (v1.3.0 folded in). Planned 2026-10-08 with `/kit-tools:plan-epic`. Runs **after v1.3.0 is tagged**: PR #44
 > (`epic-forage-v1-3-0-release`) must be merged first, because these specs build on its tree
 > (contract 1.4.0, `promptguard_wait_seconds` 90, sanitizer revision `2c6d0382…`). Validate with
 > `/kit-tools:validate-epic` before executing. Tag and publish (v1.4.0) are owner gates.
@@ -55,11 +56,11 @@ installs nothing in speed. The only cost is size: amd64 grows from about 350 MB 
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-inference-device.md](feature-inference-device.md) — 4 stories: device settings and boot probe; CUDA load with failover; GPU batching; GPU OOM handling | Planned | v1.3.0 merged |
-| 2 | [feature-inference-surface.md](feature-inference-surface.md) — 3 stories: `/health` fields and reasons (contract 1.5.0); `/metrics` and bench; revision input and cache fingerprint | Planned | 1 |
-| 3 | [feature-unified-image.md](feature-unified-image.md) — 7 stories: lock and install commands; CUDA-scope checker; docs claims; Dockerfile with build checks; CI budgets; failover smokes; `compose/gpu.yml` | Planned | 2 |
-| 4 | [feature-gpu-parity-tool.md](feature-gpu-parity-tool.md) — 2 stories: shared live loader; parity tool | Planned | 3 |
-| 5 | [feature-gpu-validation.md](feature-gpu-validation.md) — 5 stories, **supervised mode**: owner gates for GPU smoke and latency, parity, and failover on thelab; sizing docs; v1.4.0 prep | Planned | 4 |
+| 1 | [feature-inference-device.md](archive/feature-inference-device.md) — 4 stories: device settings and boot probe; CUDA load with failover; GPU batching; GPU OOM handling | Completed | v1.3.0 merged |
+| 2 | [feature-inference-surface.md](archive/feature-inference-surface.md) — 3 stories: `/health` fields and reasons (contract 1.5.0); `/metrics` and bench; revision input and cache fingerprint | Completed | 1 |
+| 3 | [feature-unified-image.md](archive/feature-unified-image.md) — 7 stories: lock and install commands; CUDA-scope checker; docs claims; Dockerfile with build checks; CI budgets; failover smokes; `compose/gpu.yml` | Completed | 2 |
+| 4 | [feature-gpu-parity-tool.md](archive/feature-gpu-parity-tool.md) — 2 stories: shared live loader; parity tool | Completed | 3 |
+| 5 | [feature-gpu-validation.md](archive/feature-gpu-validation.md) — 5 stories, **supervised mode**: owner gates for GPU smoke and latency, parity, and failover on thelab; sizing docs; v1.4.0 prep | Completed | 4 |
 
 ## Completion Criteria
 
