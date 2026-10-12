@@ -8,8 +8,8 @@
 
 > **TEMPLATE_INTENT:** Record architectural decisions and their rationale. Explains the 'why' behind technical choices.
 
-> Last updated: 2026-10-07
-> Updated by: Claude (structural-closeout US-002)
+> Last updated: 2026-10-11
+> Updated by: Claude (inference-backends decisions)
 
 This file records significant architectural and technical decisions.
 
@@ -1237,3 +1237,31 @@ same-uid child could still read `/proc/<ppid>/environ`. Non-dumpable makes that 
 hashed file changed; `sanitizer_revision` stays `0ace27ca…`.
 
 **Source:** `kit_tools/specs/feature-release-resource-bounds.md` US-003.
+
+### 2026-10-10: One image serves CPU and GPU through torch, and v1.3.0 ships folded into v1.4.0
+
+**Decision:** PromptGuard runs on torch for both devices — CUDA torch on amd64, CPU torch on
+arm64 — from one Dockerfile, one lock and one tag. `FORAGE_DEVICE=cpu|cuda` (default `cpu`)
+picks the device at install time and `FORAGE_DEVICE_FALLBACK=cpu|refuse` (default `cpu`) sets
+failover. Batching is GPU-only; the CPU path stays at batch 1. The image sets
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6`. The
+never-published v1.3.0 work ships inside v1.4.0 (contract 1.5.0), so consumers take the 1.4.0
+and 1.5.0 contract entries together.
+
+**Rationale:** The CUDA-built wheel runs CPU inference at parity with the CPU-only wheel
+(86M 1,172 vs 1,077–1,212 ms per window on 8 CPUs), so one image costs CPU installs size, not
+speed, and the lab and production cannot drift between variants. ONNX Runtime was about 1.3×
+faster on CPU but would have added a second engine whose scores need their own parity proof;
+on the GPU torch already gives 15–16 ms per window. On thelab the 86M measured 16.0 ms per
+window (projected 64-window p95 1.10 s) and parity showed zero verdict flips with a maximum GPU
+drift of 2.8e-5 and CPU drift of 0. Without the allocator setting, reserved VRAM grew past
+4.2 GiB as traffic varied, because the caching allocator fragmented. With it the peak was 2.8 GiB.
+Folding v1.3.0 avoided publishing a release that would be superseded within days.
+
+**Consequences:** The amd64 image is about 3.1 GB gzipped. `device@cuda` is a
+`sanitizer_revision` input (cpu adds nothing), and the active device is part of the cache
+fingerprint. A GPU OOM halves the batch, then migrates to CPU or refuses according to policy, and
+is reported on `/health` and `/metrics`. INT8 and ONNX remain unexplored opt-ins.
+
+**Source:** `kit_tools/specs/epic-forage-inference-backends.md`;
+`kit_tools/specs/archive/feature-gpu-validation.md` (owner rulings 2026-10-10).

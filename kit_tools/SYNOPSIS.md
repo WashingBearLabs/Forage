@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # SYNOPSIS.md
 
-> Last updated: 2026-10-07
-> Updated by: Claude (structural-hardening epic completed)
+> Last updated: 2026-10-11
+> Updated by: Claude (inference-backends epic closed; v1.4.0 published)
 
 ---
 
@@ -35,7 +35,7 @@ preserved). See `docs/bootstrap-notes.md` for the pin record.
 | CI | `.github/workflows/ci.yml` — ten jobs in two lanes: `lint`, `typecheck`, `test`, `build-amd64`, `secret-grep`, `smoke`, `publish` for the service image, and `searxng-build`/`-smoke`/`-publish` for the companion |
 | Published image | `ghcr.io/washingbearlabs/forage` — `1.4.0` published 2026-10-11 and verified, index `sha256:d305bbbe223e13479f8a119540714d2277fe3e13c38dcf426729cd8c10019036` (amd64 CUDA torch, arm64 CPU torch); `latest` / `1.4` / `1.4.0` equality verified anonymously. Tag commit `49de6cc812052e925c6897b1812f55291dab0473`; [publish run](https://github.com/WashingBearLabs/Forage/actions/runs/38104861366); [record](specs/archive/feature-gpu-validation.md). `1.3.0` was never published (folded into `1.4.0`). Previous: `1.2.2` published 2026-10-04 and verified, index `sha256:5cb60943b99da45829613cde1f8286bdb4b72866210aa2146ca0cc5233569365`; `latest` / `1.2` / `1.2.2` equality verified anonymously. Tag commit `c213bbfbe31c42dcf3a84dcaba14145e89805182`; [publish run](https://github.com/WashingBearLabs/Forage/actions/runs/37163854549); [record](specs/feature-corpus-86m-enablement.md). Previous: `1.2.1`, index `sha256:a29329af38ee563dcc890c9b68749e4d7bc32e20c422640b2f5ffecaa8c89e7b`, tag commit `e8cf83c51e8786abf30d79ae0a3d6608c5f8df2c`; [handoff](specs/archive/feature-hardening-release.md). `docs/releases.md` records v1.2.0's withdrawal |
 | Deployment | Poppy's in-tree copy is still the deployed source of truth (coexistence rule) |
-| Planned next | Poppy pins the published `v1.4.0` (contract 1.5.0) in a Poppy session; close `epic-forage-inference-backends` (archive specs). `epic-forage-structural-hardening` (T2.4) is complete (PR #42, now in `v1.3.0`): Stage 2 scans decoded, confusable-folded, inline-joined and raw-markup forms with linear patterns; quarantined titles are null (ruling (m)); hidden body content is pruned; every structural corpus cell is at 1.0. Stage-3 input and cassettes unchanged. Unreleased since v1.2.2 as well: the 86M default and the `/retrieve` decoder bound. Next: release decision (two published "next MINOR" windows), then follow-ups `2026-10-07-001/002`, `2026-10-06-001` (`AUDIT_FINDINGS.md`) |
+| Planned next | Poppy pins the published `v1.4.0` (contract 1.5.0) in a Poppy session, ending the coexistence rule. `epic-forage-inference-backends` is closed (all five specs archived, 2026-10-11). Next: plan the next epic (`/kit-tools:plan-epic`); open info-level follow-ups are in the local `AUDIT_FINDINGS.md` |
 
 **Coexistence rule:** until Poppy pins a published Forage image, any fix to the extracted
 paths on either side must be replayed onto the other, and `docs/bootstrap-notes.md`'s pin

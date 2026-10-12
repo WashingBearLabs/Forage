@@ -2,7 +2,7 @@
 # SESSION_LOG.md
 
 > Running history of development sessions. Enables continuity across sessions.
-> Last updated: 2026-10-05
+> Last updated: 2026-10-11
 
 ---
 
@@ -574,3 +574,55 @@ model. Stage 2 does nearly all the blocking (`docs/corpus.md` "Decision inputs")
 - The classic PAT created for the mirror push can be revoked.
 - Close-out found the corpus audit findings lost with the torn-down worktree (gitignored file);
   regenerated into the local `AUDIT_FINDINGS.md` from the committed baseline, and recorded as a gotcha.
+
+---
+
+## 2026-10-06 → 2026-10-11 — Release-hardening specs, `epic-forage-inference-backends` executed, `v1.4.0` published
+
+**Duration:** multi-day session (several context compactions)
+**Focus:** `release-resource-bounds`, `release-padding-gate`, `release-1-3-0`, then
+`epic-forage-inference-backends` (specs 1–5) through publication.
+
+### Accomplished
+
+- **Release hardening (held v1.3.0):**
+  - `release-resource-bounds`: stage 1 made linear, the rlimited HTML worker at 512 KiB, and `/search` parsing in a thread per result (rotations 53–56).
+  - `release-padding-gate`: a refused look-alike fold now BLOCKs (rotation 57).
+  - `release-1-3-0`: release tree prepared, plus a validation fix (rotations 58–59).
+- **Inference backends epic:**
+  - Validate-epic round 3, then specs 1–4 executed in guarded mode (16/16 stories).
+  - US-001 recovered by hand after laptop sleep killed three attempts.
+  - Epic-validation warnings 008/009 fixed (`a5c52af`); PR #47 merged.
+- **Spec 5 (`gpu-validation`), supervised on thelab:**
+  - 86M CUDA latency 16.0 ms per window, projected p95 1.10 s.
+  - Parity across 6 runs: 0 verdict changes.
+  - Failover proven for both `cpu` and `refuse`.
+  - Allocator ENV added after the first parity run's VRAM growth.
+  - Sizing docs written; rotation 64 (`a9beacbc…`).
+- **v1.4.0** tagged at `49de6cc` and published:
+  - publish run 38104861366; index `sha256:d305bbbe…`;
+  - candidate and published-image smokes green on CPU and GPU;
+  - publication record in PR #49; thelab cleaned back to 113G free.
+- **Epic closed** (PR #50, `8de7586`): specs archived, three GOTCHAS added, parked audit findings merged locally, worktree torn down.
+
+### Documentation Updated
+
+- [x] `docs/releases.md`, `docs/configuration.md`, `docs/weights.md`, `docs/bootstrap-notes.md`, `CLAUDE.md` (rotations 53–64)
+- [x] Release pins and status set to 1.4.0 across README, compose, contract smoke and the kit_tools docs
+- [x] `kit_tools/specs/archive/` (five inference specs), epic wrapper (completed, criteria ticked)
+- [x] `kit_tools/docs/GOTCHAS.md`, `kit_tools/arch/DECISIONS.md` (one-image torch CPU/GPU; v1.3.0 folded into v1.4.0), `kit_tools/SYNOPSIS.md`
+
+### Decisions
+
+- Torch serves both devices from one image; ONNX and INT8 stay unexplored opt-ins.
+- v1.3.0 was never published; its work ships in v1.4.0 (owner ruling 2026-10-10).
+- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6` is baked into the image.
+- On thelab, everything we create is deleted afterwards; BuildKit layers (~18 GB) are left for the owner to prune.
+
+### Open / Next
+
+- Poppy: pin `1.4.0` (contract 1.5.0) in a dedicated Poppy session.
+- thelab: optional BuildKit prune (owner's call).
+- Stray local branch `fix/retrieve-bounded-decoder` (work merged via PR #41) can be deleted.
+- Info-level findings remain in the local `AUDIT_FINDINGS.md`.
+- Next epic: `/kit-tools:plan-epic`.
