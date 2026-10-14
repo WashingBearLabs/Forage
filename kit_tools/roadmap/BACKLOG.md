@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # BACKLOG.md
 
-> Last updated: 2026-10-07
-> Updated by: Claude (v1.3.0 release epic planned 2026-10-07)
+> Last updated: 2026-10-13
+> Updated by: Claude (close-session 2026-10-13)
 
 Work that is real but not yet scheduled into a feature spec. Items with an owning spec
 live in `MILESTONES.md` instead.
@@ -15,7 +15,7 @@ live in `MILESTONES.md` instead.
 | P1 | `ruff format --check` backlog — 6 files | Tech Debt | `feature-forage-ci-and-image` | Done |
 | P1 | `pyright` strict backlog — 214 errors (22 service / 192 tests, incl. 35 `reportPrivateUsage`) | Tech Debt | `feature-forage-ci-and-image` | Done |
 | P1 | Committed hermeticity canary test (deliberately omitted at bootstrap to keep the exact-count gate) | Tech Debt | `feature-forage-ci-and-image` (US-002) | Done |
-| P2 | Rotate the SearXNG placeholder `secret_key` before the repo goes public | Security | — | Planned |
+| P2 | Rotate the SearXNG placeholder `secret_key` before the repo goes public | Security | — | Done (no baked key; `SEARXNG_SECRET` required at runtime) |
 | P2 | Automated container smoke (`docker build` + `docker run` + `/health`) — manual today | Tech Debt | `feature-forage-ci-and-image` | Done |
 
 ---

@@ -2,7 +2,7 @@
 # SESSION_LOG.md
 
 > Running history of development sessions. Enables continuity across sessions.
-> Last updated: 2026-10-11
+> Last updated: 2026-10-13
 
 ---
 
@@ -626,3 +626,16 @@ model. Stage 2 does nearly all the blocking (`docs/corpus.md` "Decision inputs")
 - Stray local branch `fix/retrieve-bounded-decoder` (work merged via PR #41) can be deleted.
 - Info-level findings remain in the local `AUDIT_FINDINGS.md`.
 - Next epic: `/kit-tools:plan-epic`.
+
+### Addendum 2026-10-13 — Poppy handoff and next-scope review
+
+- Wrote the Poppy session prompt (pin `1.4.0`, re-vendor contract 1.5.0, roll out `poppy-forage`, scoped
+  BuildKit prune on thelab). The owner reports both are done.
+- Reviewed what comes next. No epic is planned. Candidates:
+  - `/extract` latency profiling plus the per-model working set, with the cheap device-helper cleanups
+    (`2026-10-08-001..003`) folded in so they share one `sanitizer_revision` rotation;
+  - T3.1 additional providers, only on operator demand;
+  - T3.2 provenance hooks.
+- BACKLOG: the SearXNG `secret_key` row marked done (the image bakes no key).
+- Next: the owner is setting up the lab to put Forage through security testing. The findings from that will
+  shape the next scope.
