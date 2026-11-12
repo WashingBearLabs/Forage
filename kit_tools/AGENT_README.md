@@ -76,8 +76,8 @@ listed below exists, and nothing is listed that doesn't.
       Read the hardening archived handoff before consumer or corpus work
 - [ ] Scan `docs/GOTCHAS.md`
 - [ ] Confirm the environment: `uv sync --extra dev --extra cpu && uv run pytest` (expect ALL green, zero
-      failures — the current count lives in `testing/TESTING_GUIDE.md`; 4272 collected
-      and passed locally at the v1.3.0 release-prep gate, with no expected failures)
+      failures — the current count lives in `testing/TESTING_GUIDE.md`; 5879 collected
+      on 2026-11-12, with no expected failures)
 
 **Flag anything that looks like:**
 - A new coupling back to Poppy → stop, it is forbidden

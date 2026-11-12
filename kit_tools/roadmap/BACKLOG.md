@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # BACKLOG.md
 
-> Last updated: 2026-10-13
-> Updated by: Claude (close-session 2026-10-13)
+> Last updated: 2026-11-12
+> Updated by: Claude (close-session 2026-11-12)
 
 Work that is real but not yet scheduled into a feature spec. Items with an owning spec
 live in `MILESTONES.md` instead.
@@ -20,9 +20,9 @@ live in `MILESTONES.md` instead.
 
 ---
 
-## Forage Config Overlay (Planned 2026-11-11)
+## Forage Config Overlay (Completed 2026-11-12, PR #53; unreleased)
 - [Epic Overview](../specs/epic-forage-config-overlay.md) — `FORAGE_CONFIG_OVERLAY`: a strict partial YAML overlay merged over the baked `config.yaml` (blocks merge, lists replace, unknown/null/shape refuse boot, one WARNING naming the keys set); no contract bump, no revision rotation; follows PR #52 (`FORAGE_EXTRACT_ROUTE_ENABLED`, contract 1.6.0)
-  - [feature-config-overlay.md](../specs/feature-config-overlay.md) — 3 stories (2 × P1, 1 × P2)
+  - [feature-config-overlay.md](../specs/archive/feature-config-overlay.md) — 3 stories (2 × P1, 1 × P2)
 
 ## Forage Inference Backends (Completed 2026-10-11, released as v1.4.0)
 - [Epic Overview](../specs/epic-forage-inference-backends.md) — CPU and GPU PromptGuard from one image: `FORAGE_DEVICE` + failover, GPU-only batching, OOM failover, `/health` device (contract 1.5.0), cu130 torch on amd64 / CPU torch on arm64 in one lock and Dockerfile, corpus parity on thelab, v1.4.0 prep
@@ -32,7 +32,7 @@ live in `MILESTONES.md` instead.
   - [feature-gpu-parity-tool.md](../specs/archive/feature-gpu-parity-tool.md) — 2 stories
   - [feature-gpu-validation.md](../specs/archive/feature-gpu-validation.md) — 5 stories (supervised; 3 owner gates)
 
-## Forage v1.3.0 Release (Merged 2026-10-08, PR #44; tag/publish pending)
+## Forage v1.3.0 Release (Merged 2026-10-08, PR #44; never tagged, folded into v1.4.0)
 - [Epic Overview](../specs/epic-forage-v1-3-0-release.md) — bound the stage-1 parse (rlimited worker above a size threshold, `/search` off the event loop), refused look-alike fold BLOCKs at max(2n, n+256), close the two next-MINOR windows (budget 64, 422 placeholders) → contract 1.4.0, cut v1.3.0 (tag/publish owner gates)
   - [feature-release-resource-bounds.md](../specs/feature-release-resource-bounds.md) — 8 stories
   - [feature-release-padding-gate.md](../specs/feature-release-padding-gate.md) — 1 story

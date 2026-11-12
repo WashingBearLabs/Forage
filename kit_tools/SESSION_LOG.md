@@ -639,3 +639,83 @@ model. Stage 2 does nearly all the blocking (`docs/corpus.md` "Decision inputs")
 - BACKLOG: the SearXNG `secret_key` row marked done (the image bakes no key).
 - Next: the owner is setting up the lab to put Forage through security testing. The findings from that will
   shape the next scope.
+
+## 2026-11-11 → 2026-11-12 — `/extract` gate from the environment (contract 1.6.0), `epic-forage-config-overlay` planned, validated and executed
+
+**Focus:** a Poppy handoff (opening `/extract` meant copying the whole `config.yaml`; a closed route
+looked like an outage), then the general overlay, then CI drift on GitHub's runners.
+
+### Accomplished
+
+- **PR #52, merged `8563b2c`, unreleased.** Contract **1.6.0** adds:
+  - `FORAGE_EXTRACT_ROUTE_ENABLED`, which takes precedence over `config.yaml`; an invalid value
+    refuses boot (owner ruling);
+  - a self-describing 404 that keeps `detail` beside the new `error: route_disabled` and
+    `reason` (the nineteenth error code);
+  - `/health` `capabilities.extract_route`, which is present-only, not a 0/1 value as the
+    handoff proposed;
+  - a memory rule that counts both workers while uploads are open: 1,781 MiB with the 86M, so
+    `FORAGE_MEM_LIMIT` must be at least `1792m`;
+  - a compose passthrough for the new variable.
+
+  Rotation 65 `a9beacbc…` → `e61c960e…` (`contract.py` only, control measured). Poppy consumer
+  note in `docs/bootstrap-notes.md`.
+- **`epic-forage-config-overlay` planned** (`/kit-tools:plan-epic`, four clarifications) and
+  **validated in two rounds**:
+  - round 1 found 2 criticals (a path leaking through a chained traceback; dotted top-level keys);
+  - round 2 found 1 critical (the echo regex `^…$` accepts a trailing newline, so it must be
+    `fullmatch`).
+
+  All were folded in. The plan rode along in #52.
+- **CI drift unblocked inside #52.** Since 2026-10-11:
+  - `ubuntu-latest` (26.04) ships Python 3.14, which made `confusables.py` look stale; fixed with
+    `.python-version` 3.12;
+  - newer Docker writes out-of-range mtimes, which broke the image-size gzip step; fixed with
+    `gzip -n`.
+
+  The stage-2 linearity check failed because its 100 ms skip had masked `exfil_image` and
+  `disregard_instructions`. Both patterns measure linear, so the bound was made machine-relative.
+  A runner pin to 24.04 was tried and reverted: the diagnosis was wrong.
+- **PR #53, merged `ac9ee04`, unreleased.** `FORAGE_CONFIG_OVERLAY` was built in a guarded run:
+  - 3/3 stories, 4 attempts, about 45 minutes;
+  - validation clean, info findings only; fixed -006 and -009 before merge.
+
+  No contract change and no rotation.
+
+### Documentation Updated
+
+- [x] Contract 1.6.0 fan-out across the docs (configuration, ENV_REFERENCE, API_GUIDE,
+      TROUBLESHOOTING, MONITORING, LOGGING, ERROR_HANDLING, SECURITY, GOVERNANCE, README,
+      CLAUDE.md rotation 65), done by #52 itself
+- [x] Overlay docs, the DECISIONS entry and two GOTCHAS, done by #53 itself
+- [x] GOTCHAS: "A timing gate only gates what it actually asserts" (CI drift and the machine-relative bound)
+- [x] SYNOPSIS, MILESTONES, BACKLOG, AGENT_README test count. Epic wrappers set to completed:
+      `config-overlay`, and the stale `v1-3-0-release` and `search-providers`
+- [x] PR #51's 10-11 session log and addendum merged in through this branch
+
+### Decisions
+
+- An invalid `FORAGE_EXTRACT_ROUTE_ENABLED` refuses boot rather than falling back.
+- Overlay rules:
+  - delivered as an env var naming a file;
+  - lists replace;
+  - unknown keys refuse boot;
+  - loosening is allowed but every set key is logged at WARNING.
+- The linearity gate normalizes to a known-linear baseline. It is never stricter than before and
+  loosens to at most 21× (below n^1.5).
+
+### Mistakes caught
+
+- Two wrong CI diagnoses: gzip-from-stdin, then the runner pin. Each was corrected by the next CI
+  run.
+- `AUDIT_FINDINGS.md` was overwritten by the worktree's partial copy, then restored immediately
+  from a backup. The new blocks were merged in, and nothing was lost.
+
+### Open / Next
+
+- Owner: decide on cutting **v1.5.0**, so Poppy can adopt the env flag and overlay and drop its
+  vendored config.
+- Owner: retire or keep `CLAUDE.md`'s coexistence section now that Poppy has pinned `v1.4.0`.
+- `kit_tools/SESSION_SCRATCH.md` is untracked again (removed in this branch; it is gitignored).
+- Info-level findings 2026-11-11-001..009 are in the local `AUDIT_FINDINGS.md`.
+- The owner's lab security testing still shapes the next epic.

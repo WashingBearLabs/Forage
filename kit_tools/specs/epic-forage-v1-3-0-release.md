@@ -1,13 +1,15 @@
 <!-- Template Version: 2.1.0 -->
 ---
 epic: forage-v1-3-0-release
-status: active
+status: completed
 vision_ref: "T2 hardening follow-through — bound the remaining CPU costs and cut v1.3.0"
 created: 2026-10-07
 updated: 2026-10-07
 ---
 
 # Epic: Forage v1.3.0 — Bound the Parse, Close the Padding Gate, Cut the Release
+
+> **Completed** — merged 2026-10-08 (PR #44); never tagged: its work shipped folded into **v1.4.0** (owner ruling 2026-10-10). Status reconciled 2026-11-12.
 
 > Planned 2026-10-07 with `/kit-tools:plan-epic`, after `epic-forage-structural-hardening`
 > merged (PR #42, `7fe91c0`). The owner scoped it that day: both CPU-cost fixes and the padding

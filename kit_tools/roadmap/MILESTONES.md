@@ -1,8 +1,8 @@
 <!-- Template Version: 2.0.0 -->
 # Milestones
 
-> Last updated: 2026-10-07
-> Updated by: Claude (v1.3.0 release epic planned 2026-10-07)
+> Last updated: 2026-11-12
+> Updated by: Claude (close-session: PR #52 and PR #53 merged, unreleased)
 
 **Previous release:** Forage `v1.2.1` — the hardened image (`epic-forage-hardening`, T2.2):
 `/retrieve` parity, search-text and URL audit in attacker-controlled forms, signed cache
@@ -94,12 +94,15 @@ Poppy.
       amd64, CPU torch on arm64), `FORAGE_DEVICE` + `FORAGE_DEVICE_FALLBACK`, GPU batching, OOM failover,
       `/health` device → contract `1.5.0`, corpus parity on thelab's RTX 4070 Ti. Wrapper
       `../specs/epic-forage-inference-backends.md`.
-- [ ] **Config overlay** (`epic-forage-config-overlay`, planned 2026-11-11, one spec / three stories; P1,
+- [x] **Config overlay**: completed 2026-11-12, PR #53, unreleased (`epic-forage-config-overlay`, planned 2026-11-11, one spec / three stories; P1,
       follows PR #52's `FORAGE_EXTRACT_ROUTE_ENABLED` / contract `1.6.0`): `FORAGE_CONFIG_OVERLAY` merges a
       strict partial YAML over the baked `config.yaml` (blocks merge, lists replace; unknown, `null` or
       shape mismatch refuses boot; one WARNING names the keys set), so an operator never copies the whole
       file and Poppy can drop its vendored copy. No contract bump, no revision rotation. Wrapper
       `../specs/epic-forage-config-overlay.md`.
+- [x] **`/extract` gate from the environment / contract 1.6.0**: merged 2026-11-12, PR #52, unreleased, no spec.
+      `FORAGE_EXTRACT_ROUTE_ENABLED` (env beats `config.yaml`; invalid values refuse boot), the 404 `route_disabled`,
+      `/health` `capabilities.extract_route`, and a memory rule that counts both workers while uploads are open.
 
 ## Exit Criteria for `v1.0.0`
 
