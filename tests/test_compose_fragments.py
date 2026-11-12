@@ -551,7 +551,10 @@ class TestSearchProviderPassthrough:
         )
 
 
-@pytest.mark.parametrize("variable", ["FORAGE_MODEL_ID", "FORAGE_MODEL_REVISION"])
+@pytest.mark.parametrize(
+    "variable",
+    ["FORAGE_MODEL_ID", "FORAGE_MODEL_REVISION", "FORAGE_EXTRACT_ROUTE_ENABLED"],
+)
 @pytest.mark.parametrize("name", _FRAGMENTS)
 def test_model_selection_is_a_bare_passthrough_only_on_forage(
     fragments: dict[str, dict[str, Any]], name: str, variable: str

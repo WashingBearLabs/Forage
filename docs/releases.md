@@ -12,7 +12,17 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 
 ## Unreleased
 
-Nothing yet: everything merged so far is in the v1.4.0 entry below.
+Contract **1.6.0** (MINOR, additive), awaiting the next image tag:
+
+- `FORAGE_EXTRACT_ROUTE_ENABLED=1|0` sets the `/extract` release gate without a replacement
+  `config.yaml`. It overrides `extract_route_enabled`, and any other value refuses boot.
+- A closed gate answers 404 `{"detail": "Not Found", "error": "route_disabled", "reason": …}`.
+  `route_disabled` is the nineteenth error code.
+- `/health` `capabilities.extract_route` is present while the gate is open.
+- With the gate open, the advisory memory rule counts the upload worker beside `/retrieve`'s. The
+  default 86M then needs `FORAGE_MEM_LIMIT` ≥ `1792m`.
+- `sanitizer_revision` rotates to `e61c960e…` (contract text only, not a sanitization change).
+  The consumer note is in `docs/bootstrap-notes.md`.
 
 ## Released versions
 

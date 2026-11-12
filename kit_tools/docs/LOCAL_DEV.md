@@ -134,7 +134,8 @@ The variables you will actually touch locally:
 | `HF_HOME` | `/app/model-cache` (image `ENV`; the same default is `model_fetcher.DEFAULT_CACHE_ROOT`) | Weights cache root. Mount the `forage-model-cache` volume here or the weights are re-fetched on every container recreate. |
 
 `config.yaml` keys worth knowing: `promptguard_threshold` (`0.85`), `extract_route_enabled`
-(`false` — `POST /extract` returns 404 until you flip it and restart),
+(`false` — `POST /extract` returns 404 `route_disabled` until you flip it, or set
+`FORAGE_EXTRACT_ROUTE_ENABLED=1`, and restart),
 `cache.max_entries` and `cache.max_bytes` (256 entries / 32 MiB, the in-memory bounds),
 `cache.max_value_bytes` (4 MiB per value, both backends; range 512 KiB-8 MiB), and
 the `extraction.*` limits, which are validated at boot and refuse to start on a bad value.
@@ -452,11 +453,11 @@ Commit `contract/openapi.yaml`, `contract/openapi.yaml.sha256` and the golden fi
 
 ### `POST /extract` returns 404
 
-**Symptom:** `{"detail": "Not Found"}` from a route the OpenAPI document lists.
+**Symptom:** `{"detail": "Not Found", "error": "route_disabled", ...}` from a route the OpenAPI document lists.
 
-**Cause:** `extract_route_enabled: false` is the shipped default in `config.yaml`; the admission middleware hides the route.
+**Cause:** `extract_route_enabled: false` is the shipped default in `config.yaml`; the admission middleware refuses the route.
 
-**Fix:** set `extract_route_enabled: true` in `config.yaml` (mount it with `-v "$PWD/config.yaml:/app/config.yaml:ro"` in the container) and restart.
+**Fix:** run with `FORAGE_EXTRACT_ROUTE_ENABLED=1` (`-e FORAGE_EXTRACT_ROUTE_ENABLED=1` on `docker run`; no config mount needed), or set `extract_route_enabled: true` in `config.yaml`, and restart.
 
 ---
 

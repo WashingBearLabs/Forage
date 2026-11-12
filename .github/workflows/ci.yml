@@ -825,7 +825,11 @@ jobs:
           gz_total=0; raw_total=0; largest=0
           while read -r layer; do
             raw="$(stat -c %s "${dir}/${layer}")"
-            gz="$(gzip -c -6 "${dir}/${layer}" | wc -c)"
+            # -n: store no name or mtime. Newer Docker's `save` emits blobs whose
+            # mtime is out of gzip's range; GNU gzip warns (exit 2, fatal under
+            # `set -e`) even when reading them via a stdin redirect, because it
+            # fstat()s the descriptor. The measured size is unaffected.
+            gz="$(gzip -n -c -6 "${dir}/${layer}" | wc -c)"
             gz_total=$((gz_total + gz)); raw_total=$((raw_total + raw))
             if [ "${raw}" -gt "${largest}" ]; then largest="${raw}"; fi
           done < <(jq -r '.[0].Layers[]' "${dir}/manifest.json")

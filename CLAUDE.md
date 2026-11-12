@@ -79,7 +79,7 @@ is now load-bearing for the two consumers above.
 ### 4. A change to a response shape is a contract change.
 
 The response contract is versioned (`pipeline/contract.py`, `contract_version` currently
-**1.5.0**), and consumers are expected to refuse activation on a major mismatch rather
+**1.6.0**), and consumers are expected to refuse activation on a major mismatch rather
 than guess. Changing any response shape means: bump the version, add a golden fixture
 under `tests/golden/` (older ones are retained, never edited), and note the change for the
 consuming repo.
@@ -128,7 +128,7 @@ reason. Any new startup or cache code must preserve this.
 
 ```bash
 uv sync --extra dev --extra cpu     # environment (creates .venv)
-uv run pytest           # hermetic blocking CI gate; 5766 collected, no xfails (count: TESTING_GUIDE.md)
+uv run pytest           # hermetic blocking CI gate; 5800 collected, no xfails (count: TESTING_GUIDE.md)
 uv run ruff check .     # must stay clean — blocking CI gate
 uv run ruff format .    # must stay clean — blocking CI gate
 uv run pyright          # strict, ZERO errors — blocking CI gate
@@ -777,6 +777,15 @@ published and v1.4.0 carries both — owner ruling 2026-10-10). A read-only whol
 default, `config.yaml` and `bench/config.yaml`; the cuda value moves `280511c1…` → `cff06f97…`.
 `contract/openapi.yaml` and its anchor are byte-identical. Text only; old cache keys invalidate.
 Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
+
+The sixty-fifth rotation is `a9beacbc…` → `e61c960e…` for `extract-route-env` (contract
+`1.6.0`) — **not a sanitization-behaviour change**: only `pipeline/contract.py` moves among the
+hashed sources (the version bump, the `route_disabled` 404 code and the 1.6.0 entry). A read-only
+whole-file reversal of `contract.py` against `HEAD` reproduces `a9beacbc…` under default,
+`config.yaml` and `bench/config.yaml`; the cuda value moves `cff06f97…` → `a9ed1b4a…`. The
+env override (`FORAGE_EXTRACT_ROUTE_ENABLED`, `pipeline/extraction_limits.py`), the 404 body,
+the `extract_route` capability and the two-worker memory rule (`retrieval_app.py`) are not
+hashed. Old cache keys invalidate. Not replayed to Poppy. Full values: `docs/bootstrap-notes.md`.
 
 ## Session Scratchpad
 

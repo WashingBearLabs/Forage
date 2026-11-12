@@ -214,7 +214,7 @@ behaviour is described here from Forage's own docs and tests
   tag, `gh release download v<ver> --pattern 'openapi.yaml*'`, or
   `docker run --rm --entrypoint cat <image> /app/contract/openapi.yaml`); run
   `sha256sum -c openapi.yaml.sha256`; commit both; record the tag. The anchor is
-  currently `9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`.
+  currently `8fa753beb3decaef8454bab0c430f590083bcce0d855bc77cd3c01aca8637d90`.
 - Its client caches `sanitizer_revision` from `/health`, pins the ten `/extract` error
   codes, rejects an `/extract` 422 lacking `sanitizer_revision`, gates web search on
   `capabilities.search_sanitization`, and buckets unknown `omitted_by_reason` /
@@ -335,7 +335,7 @@ place at the next retry; restarting the container runs the first attempt immedia
 
 ## Failure Impact Matrix
 
-Every row is HTTP-level truth from `pipeline/contract.py`'s 18-code vocabulary and the
+Every row is HTTP-level truth from `pipeline/contract.py`'s 19-code vocabulary and the
 `/health` / `/metrics` models in `retrieval_app.py`. "Unaffected" means the endpoint's
 behaviour and status code do not change. Symptom-first remedies are in
 `kit_tools/docs/TROUBLESHOOTING.md`; counter semantics in `kit_tools/docs/MONITORING.md`.

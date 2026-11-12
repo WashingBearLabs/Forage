@@ -152,16 +152,16 @@ components:
         it.
 
 
-        Used by ``/extract`` for the release-gate 404 and the two admission 503s.
+        Used by ``/extract`` for the two admission 503s, which carry no ``error``
 
-        These three carry no ``error`` code at all — they are pre-pipeline
+        code at all — they are pre-pipeline conditions rather than document
 
-        conditions rather than document failures, and homogenizing them into the
+        failures. The release-gate 404 used this shape until contract 1.6.0 gave it
 
-        coded envelope would be a wire change this spec forbids.'
+        an ``error`` code (:class:`RouteDisabled404Response`).'
       properties:
         detail:
-          description: 'Short reason phrase: ''Not Found'' (404) or ''Unavailable'' (503).'
+          description: 'Short reason phrase: ''Unavailable'' (503).'
           title: Detail
           type: string
       required:
@@ -468,7 +468,7 @@ components:
             type: integer
           description: 'Capabilities this deployment advertises, as a presence map: a key
             is present with the value 1 when the capability is available and absent otherwise.
-            Three keys are defined in contract 1.3.0. ''search_sanitization'' (contract 1.1.0)
+            Four keys are defined in contract 1.6.0. ''search_sanitization'' (contract 1.1.0)
             is a runtime claim, present when PromptGuard is loaded — or when the break-glass
             override is armed; see docs/configuration.md, which only ever forces this key.
             ''brave_api_key'' (contract 1.2.0) is an environment fact, present when this start
@@ -477,8 +477,11 @@ components:
             (contract 1.3.0) is present only when this start resolved a usable FORAGE_CACHE_HMAC_KEY
             and selected the Valkey backend, independently of cache connectivity and untouched
             by the break-glass override. Memory mode does not sign and never advertises it.
-            Deliberately a dict rather than an enum: a consumer reads the keys it knows and
-            ignores the rest, so a future capability is an additive-safe MINOR change.'
+            ''extract_route'' (contract 1.6.0) is present when this start resolved POST /extract''s
+            release gate open — FORAGE_EXTRACT_ROUTE_ENABLED, else config.yaml''s extract_route_enabled
+            — and absent when the route answers 404 ''route_disabled''; untouched by the break-glass
+            override. Deliberately a dict rather than an enum: a consumer reads the keys it
+            knows and ignores the rest, so a future capability is an additive-safe MINOR change.'
           title: Capabilities
           type: object
         contract_version:
@@ -1130,6 +1133,41 @@ components:
       - domain
       title: RetrievedContent
       type: object
+    RouteDisabled404Response:
+      additionalProperties: false
+      description: '``POST /extract`` release-gate refusal — the 404 shape (contract 1.6.0).
+
+
+        ``detail`` keeps the exact bytes the gate answered before 1.6.0, so a
+
+        consumer that read only it is unaffected; ``error`` and ``reason`` make the
+
+        refusal self-describing. No ``request_id``: the middleware refuses before
+
+        the body is read, as the 413 does.'
+      properties:
+        detail:
+          const: Not Found
+          description: Always 'Not Found', unchanged from contract 1.5.0.
+          title: Detail
+          type: string
+        error:
+          const: route_disabled
+          description: 'Always ''route_disabled'': the deployment''s extract_route_enabled
+            (or FORAGE_EXTRACT_ROUTE_ENABLED) resolved false at start. Not retryable; /health
+            capabilities omits ''extract_route''.'
+          title: Error
+          type: string
+        reason:
+          description: Fixed, content-free operator-facing message.
+          title: Reason
+          type: string
+      required:
+      - detail
+      - error
+      - reason
+      title: RouteDisabled404Response
+      type: object
     SearchMetricsResponse:
       additionalProperties: false
       description: The ``search`` section of ``GET /metrics``.
@@ -1641,7 +1679,7 @@ info:
     Forage is not a trust boundary. A `healthy` Forage is not a promise that the content it
     returned is safe. See `docs/configuration.md`, "Deployment posture".'
   title: Forage
-  version: 1.5.0
+  version: 1.6.0
 openapi: 3.1.0
 paths:
   /extract:
@@ -1697,9 +1735,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DetailResponse'
-          description: The extract route is disabled for this deployment (extract_route_enabled
-            is false).
+                $ref: '#/components/schemas/RouteDisabled404Response'
+          description: 'The extract route is disabled for this deployment: FORAGE_EXTRACT_ROUTE_ENABLED,
+            else config.yaml''s extract_route_enabled, resolved false at start. The body carries
+            error ''route_disabled'' beside the unchanged detail (contract 1.6.0).'
         '413':
           content:
             application/json:

@@ -20,6 +20,10 @@ live in `MILESTONES.md` instead.
 
 ---
 
+## Forage Config Overlay (Planned 2026-11-11)
+- [Epic Overview](../specs/epic-forage-config-overlay.md) — `FORAGE_CONFIG_OVERLAY`: a strict partial YAML overlay merged over the baked `config.yaml` (blocks merge, lists replace, unknown/null/shape refuse boot, one WARNING naming the keys set); no contract bump, no revision rotation; follows PR #52 (`FORAGE_EXTRACT_ROUTE_ENABLED`, contract 1.6.0)
+  - [feature-config-overlay.md](../specs/feature-config-overlay.md) — 3 stories (2 × P1, 1 × P2)
+
 ## Forage Inference Backends (Completed 2026-10-11, released as v1.4.0)
 - [Epic Overview](../specs/epic-forage-inference-backends.md) — CPU and GPU PromptGuard from one image: `FORAGE_DEVICE` + failover, GPU-only batching, OOM failover, `/health` device (contract 1.5.0), cu130 torch on amd64 / CPU torch on arm64 in one lock and Dockerfile, corpus parity on thelab, v1.4.0 prep
   - [feature-inference-device.md](../specs/archive/feature-inference-device.md) — 4 stories

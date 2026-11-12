@@ -357,7 +357,7 @@ ruling (d)'s resolved-private-IP echo remains deliberately outside this closure.
 
 ### The `/extract` release gate
 
-`config.yaml` ships `extract_route_enabled: false`. While it is false both `ExtractionAdmissionMiddleware` and the route itself answer `404 {"detail": "Not Found"}`; opening the route requires a restart. `tests/test_app.py::test_extract_release_gate_returns_404_when_disabled`.
+`config.yaml` ships `extract_route_enabled: false`, and `FORAGE_EXTRACT_ROUTE_ENABLED` (exact `1`/`0`; anything else refuses boot, so a typo can never be read as either state) overrides it. While the gate is closed both `ExtractionAdmissionMiddleware` and the route itself answer `404 {"detail": "Not Found", "error": "route_disabled", "reason": …}`; opening it requires a restart, logs `extract_route_resolved` at WARNING and adds `capabilities.extract_route` to `/health`, so an open upload route is never silent. `tests/test_app.py::test_extract_release_gate_returns_404_when_disabled`.
 
 ### Upload ceilings
 

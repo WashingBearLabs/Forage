@@ -40,8 +40,9 @@ search_searxng_query_max_chars: 400
 # Observational targets, not request deadlines; first-token is log-only today.
 search_promptguard_latency_target_ms: 1000
 search_first_token_target_ms: 5000
-# Release gate: /extract remains invisible (404) until this is enabled and the
-# service is restarted. Forage ships no authentication, so once the gate is
+# Release gate: /extract answers 404 route_disabled until this is enabled and the
+# service is restarted. FORAGE_EXTRACT_ROUTE_ENABLED=1|0 overrides it without
+# copying this file. Forage ships no authentication, so once the gate is
 # open the route is reachable by anything that can reach port 8020 — network
 # placement is the only control (docs/configuration.md, "Deployment posture").
 extract_route_enabled: false
@@ -66,9 +67,8 @@ extraction:
   # 2 x 384 MiB + 512 MiB = 1 280 MiB, against the 1 GiB container this same
   # file describes above. What prevents two workers running at once today is
   # `extract_route_enabled: false` — nobody can upload while a fetched PDF
-  # parses. See docs/configuration.md, "Sizing the container": the advisory
-  # boot rule counts one extraction slot, not both routes' combined workers.
-  # Enabling uploads requires budgeting both plus classification and cache.
+  # parses. The advisory boot rule counts both workers once the gate is open
+  # (docs/configuration.md, "Sizing the container"); budget them before opening.
   child_address_space_bytes: 402653184
   wall_clock_seconds: 90
   # Derived character ceiling = (512 - 64) * 64 * 4 = 114688.

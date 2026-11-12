@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict, cast, get_args
 
 import yaml
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,21 +57,25 @@ from pipeline.contract import (
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
     POLICY_DOMAIN_LIST_TOO_LARGE,
     POLICY_EXCLUDED_ALL_PROVIDERS,
+    ROUTE_DISABLED_REASON,
     Admission413ErrorCode,
     DegradedReason,
     Extract422ErrorCode,
     Pipeline422ErrorCode,
     PromptGuardState,
     RateLimit429ErrorCode,
+    RouteDisabled404ErrorCode,
 )
 from pipeline.extraction_limits import (
     CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL,
+    EXTRACT_ROUTE_ENV_VAR,
     MAX_EXTRACTION_WALL_SECONDS,
     MAX_INPUT_BYTES,
     PARENT_RESERVATION_BYTES,
     PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES,
     ExtractionSettings,
     extraction_settings_from_config,
+    resolve_extract_route,
 )
 from pipeline.orchestrator import (
     DOCUMENT_FAILURE_REASONS,
@@ -519,19 +523,22 @@ def _load_config() -> dict[str, Any]:
 
 # -- Response models --
 
-# The three capability keys ``/health`` can advertise, named once so the CI
+# The four capability keys ``/health`` can advertise, named once so the CI
 # contract smoke (``contract_smoke.py``) can import the sanitization one
 # instead of restating the wire string. The literals are still pinned by
 # ``tests/test_app.py``, which spells them out: the constants single-source
 # the *symbol*, those tests pin the *value*, and renaming a value without
-# meaning to fails them. The three are computed independently (see
+# meaning to fails them. The four are computed independently (see
 # ``HealthResponse.capabilities``): ``search_sanitization`` is a runtime
 # claim the break-glass override can force, ``brave_api_key`` an environment
 # fact no override touches, and ``cache_hmac_key`` the boot verdict that a
-# usable key is signing the Valkey backend, also untouched by the override.
+# usable key is signing the Valkey backend, also untouched by the override,
+# and ``extract_route`` the boot-resolved ``/extract`` release gate.
 CAPABILITY_SEARCH_SANITIZATION = "search_sanitization"
 CAPABILITY_BRAVE_API_KEY = "brave_api_key"
 CAPABILITY_CACHE_HMAC_KEY = "cache_hmac_key"
+# Contract 1.6.0: a consumer reads it once instead of probing POST /extract.
+CAPABILITY_EXTRACT_ROUTE = "extract_route"
 
 
 class HealthResponse(BaseModel):
@@ -584,8 +591,8 @@ class HealthResponse(BaseModel):
         description=(
             "Capabilities this deployment advertises, as a presence map: a "
             "key is present with the value 1 when the capability is "
-            "available and absent otherwise. Three keys are defined in "
-            "contract 1.3.0. 'search_sanitization' (contract 1.1.0) is a "
+            "available and absent otherwise. Four keys are defined in "
+            "contract 1.6.0. 'search_sanitization' (contract 1.1.0) is a "
             "runtime claim, present when PromptGuard is loaded — or when "
             "the break-glass override is armed; see docs/configuration.md, "
             "which only ever forces this key. 'brave_api_key' (contract "
@@ -596,7 +603,12 @@ class HealthResponse(BaseModel):
             "1.3.0) is present only when this start resolved a usable "
             "FORAGE_CACHE_HMAC_KEY and selected the Valkey backend, independently "
             "of cache connectivity and untouched by the break-glass override. "
-            "Memory mode does not sign and never advertises it. Deliberately a dict "
+            "Memory mode does not sign and never advertises it. 'extract_route' "
+            "(contract 1.6.0) is present when this start resolved POST "
+            "/extract's release gate open — FORAGE_EXTRACT_ROUTE_ENABLED, else "
+            "config.yaml's extract_route_enabled — and absent when the route "
+            "answers 404 'route_disabled'; untouched by the break-glass "
+            "override. Deliberately a dict "
             "rather than an enum: a consumer reads the keys it knows and "
             "ignores the rest, so a future capability is an additive-safe "
             "MINOR change."
@@ -1180,16 +1192,52 @@ class RateLimit429Response(BaseModel):
 class DetailResponse(BaseModel):
     """The bare ``{\"detail\": ...}`` body, as FastAPI's ``HTTPException`` emits it.
 
-    Used by ``/extract`` for the release-gate 404 and the two admission 503s.
-    These three carry no ``error`` code at all — they are pre-pipeline
-    conditions rather than document failures, and homogenizing them into the
-    coded envelope would be a wire change this spec forbids.
+    Used by ``/extract`` for the two admission 503s, which carry no ``error``
+    code at all — they are pre-pipeline conditions rather than document
+    failures. The release-gate 404 used this shape until contract 1.6.0 gave it
+    an ``error`` code (:class:`RouteDisabled404Response`).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    detail: str = Field(
-        description="Short reason phrase: 'Not Found' (404) or 'Unavailable' (503)."
+    detail: str = Field(description="Short reason phrase: 'Unavailable' (503).")
+
+
+class RouteDisabled404Response(BaseModel):
+    """``POST /extract`` release-gate refusal — the 404 shape (contract 1.6.0).
+
+    ``detail`` keeps the exact bytes the gate answered before 1.6.0, so a
+    consumer that read only it is unaffected; ``error`` and ``reason`` make the
+    refusal self-describing. No ``request_id``: the middleware refuses before
+    the body is read, as the 413 does.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    detail: Literal["Not Found"] = Field(
+        description="Always 'Not Found', unchanged from contract 1.5.0."
+    )
+    error: RouteDisabled404ErrorCode = Field(
+        description=(
+            "Always 'route_disabled': the deployment's extract_route_enabled "
+            "(or FORAGE_EXTRACT_ROUTE_ENABLED) resolved false at start. Not "
+            "retryable; /health capabilities omits 'extract_route'."
+        )
+    )
+    reason: str = Field(description="Fixed, content-free operator-facing message.")
+
+
+def _route_disabled_response() -> JSONResponse:
+    """Build the one release-gate 404 body both emission sites send."""
+    return JSONResponse(
+        status_code=404,
+        content=RouteDisabled404Response(
+            # A literal, not a constant: the raise-site sweep in
+            # tests/test_contract_errors.py reads codes off string literals.
+            detail="Not Found",
+            error="route_disabled",
+            reason=ROUTE_DISABLED_REASON,
+        ).model_dump(),
     )
 
 
@@ -1500,10 +1548,21 @@ def _warn_if_envelope_memory_rule_unmet(
     cache_settings: CacheSettings,
     backend: CacheBackend,
     *,
+    fetch_concurrency: int,
     model_id: str,
     memory_max: int | float | None,
 ) -> None:
-    """Advise once at boot; missing cgroups and deliberate oversubscription work."""
+    """Advise once at boot; missing cgroups and deliberate oversubscription work.
+
+    Workers are counted per route that can spawn one: ``/retrieve``'s fetched
+    PDFs and large HTML bodies always (``retrieve.fetch_concurrency``), and
+    ``/extract``'s uploads only while its release gate is open
+    (``extraction.extraction_concurrency``). Both run under the same
+    ``child_address_space_bytes`` rlimit, so they can be resident together.
+    """
+    worker_count = fetch_concurrency + (
+        settings.extraction_concurrency if settings.route_enabled else 0
+    )
     parent_bytes = (
         PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[model_id]
     )
@@ -1515,19 +1574,20 @@ def _warn_if_envelope_memory_rule_unmet(
     required = (
         parent_bytes
         + settings.classification_concurrency * PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES
-        + settings.extraction_concurrency * settings.child_address_space_bytes
+        + worker_count * settings.child_address_space_bytes
         + cache_term_bytes
     )
     if memory_max is not None and memory_max < required:
         logger.warning(
             "envelope_memory_rule_unmet — memory_max=%d required=%d "
-            "classification_concurrency=%d extraction_concurrency=%d "
-            "child_address_space_bytes=%d model_id=%s parent_bytes=%d "
-            "cache_backend=%s cache_term_bytes=%d",
+            "classification_concurrency=%d worker_count=%d "
+            "extract_route_enabled=%d child_address_space_bytes=%d "
+            "model_id=%s parent_bytes=%d cache_backend=%s cache_term_bytes=%d",
             memory_max,
             required,
             settings.classification_concurrency,
-            settings.extraction_concurrency,
+            worker_count,
+            int(settings.route_enabled),
             settings.child_address_space_bytes,
             model_id,
             parent_bytes,
@@ -1598,9 +1658,7 @@ class ExtractionAdmissionMiddleware:
         app = scope.get("app")
         settings = getattr(getattr(app, "state", None), "extraction_settings", None)
         if not isinstance(settings, ExtractionSettings) or not settings.route_enabled:
-            await JSONResponse(status_code=404, content={"detail": "Not Found"})(
-                scope, receive, send
-            )
+            await _route_disabled_response()(scope, receive, send)
             return
         if app is None:
             await JSONResponse(status_code=503, content={"detail": "Unavailable"})(
@@ -1801,8 +1859,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("config_invalid_value — key=policy_domain_entries_max_bytes")
         policy_domain_entries_max_bytes = _DEFAULT_POLICY_DOMAIN_ENTRIES_MAX_BYTES
     app.state.policy_domain_entries_max_bytes = policy_domain_entries_max_bytes
-    settings = extraction_settings_from_config(config)
+    route_enabled, route_source = resolve_extract_route(config, os.environ)
+    settings = extraction_settings_from_config(config, route_enabled=route_enabled)
     app.state.extraction_settings = settings
+    # Opening an unauthenticated upload route must be visible in `docker logs`
+    # (root logger at WARNING); the closed default stays in the INFO narrative.
+    logger.log(
+        logging.WARNING if route_enabled else logging.INFO,
+        "extract_route_resolved — enabled=%d source=%s env_var=%s",
+        int(route_enabled),
+        route_source,
+        EXTRACT_ROUTE_ENV_VAR,
+    )
     retrieve_settings = retrieve_settings_from_config(config)
     app.state.retrieve_settings = retrieve_settings
     app.state.search_targets = search_targets_from_config(config)
@@ -1905,6 +1973,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings,
         app.state.cache_settings,
         backend,
+        fetch_concurrency=retrieve_settings.fetch_concurrency,
         model_id=model_id,
         memory_max=_cgroup_memory_snapshot()["cgroup_memory_max_bytes"],
     )
@@ -2218,6 +2287,11 @@ async def health(request: Request) -> HealthResponse:
         capabilities[key] = 1
     if cache_signing_active:
         capabilities[CAPABILITY_CACHE_HMAC_KEY] = 1
+    extraction_settings = getattr(request.app.state, "extraction_settings", None)
+    if isinstance(extraction_settings, ExtractionSettings) and (
+        extraction_settings.route_enabled
+    ):
+        capabilities[CAPABILITY_EXTRACT_ROUTE] = 1
 
     return HealthResponse(
         status="degraded" if degraded_reasons else "healthy",
@@ -2507,10 +2581,13 @@ async def retrieve(request: Request, body: RetrieveRequest) -> RetrievedContent:
             ),
         },
         404: {
-            "model": DetailResponse,
+            "model": RouteDisabled404Response,
             "description": (
-                "The extract route is disabled for this deployment "
-                "(extract_route_enabled is false)."
+                "The extract route is disabled for this deployment: "
+                "FORAGE_EXTRACT_ROUTE_ENABLED, else config.yaml's "
+                "extract_route_enabled, resolved false at start. The body "
+                "carries error 'route_disabled' beside the unchanged detail "
+                "(contract 1.6.0)."
             ),
         },
         413: {
@@ -2553,7 +2630,7 @@ async def extract(
     extract_mode: Annotated[Literal["summary", "full"], Form()] = "full",
     request_id: Annotated[str | None, Form()] = None,
     timeout_s: Annotated[float | None, Form(gt=0)] = None,
-) -> ExtractedContent:
+) -> ExtractedContent | JSONResponse:
     """Extract an internal-network upload with fixed untrusted fail-closed policy.
 
     This endpoint is unauthenticated — like every other Forage route — so
@@ -2571,7 +2648,8 @@ async def extract(
     del timeout_s
     settings: ExtractionSettings = request.app.state.extraction_settings
     if not settings.route_enabled:
-        raise HTTPException(status_code=404, detail="Not Found")
+        # Backstop only: the admission middleware refuses first.
+        return _route_disabled_response()
 
     started_at = time.monotonic()
     safe_request_id = uuid.uuid4().hex

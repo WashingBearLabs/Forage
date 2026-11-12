@@ -179,12 +179,12 @@ retention is configured anywhere in the repo; the Docker daemon defaults apply.
 
 ## Error-Code Reference
 
-The complete wire vocabulary is the eighteen codes in `pipeline/contract.py`
+The complete wire vocabulary is the nineteen codes in `pipeline/contract.py`
 (`ErrorCode`), verified against the source at seeding time. `content_too_large` is one
 code emitted from three sites, `busy` is shared by `/extract` (429) and `/retrieve`
-(422), and `extraction_failed` by `/extract` and `/retrieve` (both 422), which is why ten
+(422), and `extraction_failed` by `/extract` and `/retrieve` (both 422), which is why eleven
 `/extract` codes plus eight `/retrieve` codes plus three `/search` codes deduplicate to
-eighteen.
+nineteen.
 
 | Code | HTTP | Route | What it means | First thing to check |
 |---|---|---|---|---|
@@ -204,6 +204,7 @@ eighteen.
 | `pdf_encrypted` | 422 | `/extract` | The PDF is encrypted | Nothing server-side; the fixed reason says so |
 | `pdf_no_text` | 422 | `/extract` | No extractable text; OCR is not supported | A scanned document; nothing server-side |
 | `private_ip` | 422 | `/retrieve` | Hostname is `localhost` or ends in `.local` or `.localhost`, or **any** resolved address is private, loopback, link-local, CGN, multicast or reserved, or is an IPv6 literal embedding a private IPv4 — IPv4-mapped, 6to4 (`2002::/16`), Teredo (the client field), NAT64 (only inside `64:ff9b::/96`) or IPv4-compatible (only inside `::/96`) (`_PRIVATE_NETWORKS_*` and `private_address_class` in `url_validator.py`). The `.localhost` suffix and the four embedded classes are **newly refused** since `hardening-search-sanitization` US-003 (`contract/GOVERNANCE.md` ruling (f)); a public embedding such as `2002:808:808::` and ordinary public IPv6 such as `2a00:1450:4001:80e::200e` stay fetchable, which is what the prefix guards are for. Re-checked on every redirect hop. Reason echoes the resolved IP (GOVERNANCE ruling d) | Intended. A public name resolving privately from inside the container is split-horizon DNS or a rebinding attempt |
+| `route_disabled` | 404 | `/extract` | The release gate resolved closed at start; the body keeps `detail: "Not Found"` beside the code (contract 1.6.0). Permanent for the process, so retrying cannot help | `/health` `capabilities.extract_route` is absent. Set `FORAGE_EXTRACT_ROUTE_ENABLED=1` (or `extract_route_enabled: true`), size the memory rule for a second worker, restart; the boot log line `extract_route_resolved` names the value and its source |
 | `search_unavailable` | 422 | `/search` | Two reason forms. **Provider failure:** every provider in the configured chain failed and the chain is **not** a lone `searxng` — the chain is tried in order (free-first), and the reason is every provider's `<provider_name>: <failure_class>` entry, in chain order, joined by `"; "` — e.g. `searxng: rate_limited; brave: timeout` — never a URL and never exception text. A single non-`searxng` provider's chain has exactly one entry (e.g. `brave: auth`). Added in contract `1.2.0`, chain traversal in `search-fallback` US-001. **Policy-excluded:** the fixed literal reason `policy_excluded_all_providers` — the request's `providers` and/or `allow_paid_fallback` narrowed the effective chain to empty before any provider was called; no provider was tried, so there is no per-provider entry (`search-policy-and-health` US-010) | Which providers `FORAGE_SEARCH_PROVIDERS` names, and in what order — the first entry is the one that was tried first. Each `failure_class` is the diagnosis for that provider: `auth` is the provider account, `rate_limited`/`timeout` is the provider, `hard_error` is Forage's log. For `policy_excluded_all_providers`, nothing failed: the configured chain has no free provider (`FORAGE_SEARCH_PROVIDERS` names only paid ones), and the request either sent `allow_paid_fallback: false` or a non-empty `providers` list naming none of them — compare it against `/health` `search_providers`. Add a free provider to the chain, or fix the consumer's policy |
 | `brave: auth` | 422 | `/search` | Brave rejected the key on the LLM-Context call — wrong, revoked, or not entitled (`401`/`403`) | Replace `FORAGE_BRAVE_API_KEY` and **restart the container** — `BraveApiProvider` reads the key once, at process start |
 | `brave: rate_limited` | 422 | `/search` | Brave answered `429` — a per-second limit and plan exhaustion share the same status | Retry after a pause; if it persists, check the Brave account's plan, since a transient limit and an exhausted quota look identical here |
@@ -218,7 +219,6 @@ Bodies without an error code, all on `/extract` unless noted:
 | HTTP | Body | Cause |
 |---|---|---|
 | 400 | `{"detail": "There was an error parsing the body"}` | FastAPI's multipart parser; also what an oversized upload actually receives (see `content_too_large`) |
-| 404 | `{"detail": "Not Found"}` | `extract_route_enabled: false` (the shipped default) |
 | 503 | `{"detail": "Unavailable"}` | Admission state missing because the lifespan did not run (test transports, not a deployed container) |
 | 422 | `{"detail": [ ... ]}` (any JSON route) | FastAPI schema validation of the request body, not a pipeline refusal |
 
@@ -639,17 +639,21 @@ as soon as SearXNG does.
 
 ### `/extract` returns 404, 503, or 429
 
-**Symptom:** `{"detail": "Not Found"}`, `{"detail": "Unavailable"}`, or
-`{"error": "busy", ...}` with `sanitizer_revision`.
+**Symptom:** `{"detail": "Not Found", "error": "route_disabled", ...}`,
+`{"detail": "Unavailable"}`, or `{"error": "busy", ...}` with `sanitizer_revision`.
 
-**Cause:** 404: `extract_route_enabled` is `false` (shipped default), enforced by
-`ExtractionAdmissionMiddleware`. 503: the admission controller was never wired because the
+**Cause:** 404: the release gate resolved closed — `FORAGE_EXTRACT_ROUTE_ENABLED` unset and
+`extract_route_enabled: false` (the shipped default), or `FORAGE_EXTRACT_ROUTE_ENABLED=0` —
+enforced by `ExtractionAdmissionMiddleware`. A client that treats it as transient will retry
+forever; read `/health` `capabilities.extract_route` instead. 503: the admission controller was never wired because the
 lifespan did not run; you will see this from a test transport, not a deployed container.
 429: the admission queue is full (`admission_queue_depth` 1, `max_queued_upload_bytes`
 50 MiB), counted in `extraction.busy_rejections`; `semaphore_saturation` counts every time
 all slots were busy, queued or rejected, so it is always the larger number.
 
-**Fix:** 404: set `extract_route_enabled: true` in the mounted `config.yaml` and restart.
+**Fix:** 404: set `FORAGE_EXTRACT_ROUTE_ENABLED=1` (no copied `config.yaml` needed) and
+restart, after raising `FORAGE_MEM_LIMIT` for the second worker (`1792m` with the default 86M).
+A value other than `1`/`0` refuses boot with `ExtractionConfigurationError`.
 429: extraction is one-at-a-time by design; queue client-side.
 
 ---

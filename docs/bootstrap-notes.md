@@ -2744,6 +2744,27 @@ document).
 `contract.py` is the only hashed source that moved; the control was computed on a temporary copy of
 the tree with `git show HEAD:pipeline/contract.py`, never by reverting the working tree. Not
 replayed to Poppy.
+### The sixty-fifth rotation: contract 1.6.0, the `/extract` gate from the environment (`extract-route-env`)
+
+`pipeline/contract.py` bumps `CONTRACT_VERSION` to `1.6.0`, adds `RouteDisabled404ErrorCode`
+(`route_disabled`, the nineteenth code), `ROUTE_DISABLED_REASON` and the 1.6.0 docstring entry.
+**Not** a sanitization-behaviour change. The rest of the change lives in unhashed files:
+`FORAGE_EXTRACT_ROUTE_ENABLED` and `resolve_extract_route` in `pipeline/extraction_limits.py`;
+the `RouteDisabled404Response` body, `capabilities.extract_route`, the `extract_route_resolved`
+boot line and the memory rule's per-route worker count in `retrieval_app.py`.
+
+| State | Revision (default, `config.yaml`, `bench/config.yaml`) |
+|---|---|
+| Before (`HEAD` = `8de7586`) / `contract.py` reverted read-only (= all-reverted control), `FORAGE_DEVICE` unset or `cpu` | `a9beacbc306b300df987d91916c94a8a04a567d6ea3783809c5a8c3e3b4e7dba` |
+| Before / reverted, `FORAGE_DEVICE=cuda` | `cff06f974e271422f134d2c1ce304a2a2a62d6ead5dfef1773015f1791076cfc` |
+| After, `FORAGE_DEVICE` unset or `cpu` | `e61c960e3adfb09fd7c4cf816f2bc257856cc8e0c0dfd3db156a0aea8fb86fb2` |
+| After, `FORAGE_DEVICE=cuda` | `a9ed1b4ae9d348f34bd0bdc6c79c042e721c893dd44666acfd0e03b19bf90e19` |
+
+The control was computed on a copy of the working tree with `git show HEAD:pipeline/contract.py`
+written over `contract.py`, never by reverting the working tree. `contract/openapi.yaml` and its
+anchor moved (`9e17c913…` → `8fa753be…`), and `tests/golden/contract_1_6_0.json` was added beside
+the frozen `contract_1_5_0.json`. Not replayed to Poppy.
+
 ### GPU validation on thelab: US-001 smoke and latency (`gpu-validation` US-001, 2026-10-09)
 
 No rotation. This is an owner-gate measurement of the `main` image at `2c9b28f`
@@ -2813,3 +2834,24 @@ rewritten; the rest is per-release history), `contract/GOVERNANCE.md` (:71 rewri
 :110 and `kit_tools/arch/DECISIONS.md` :1107 were reviewed and left: both are the dated outcome record of
 `structural-hardening` (which did not bump), not a statement of the current version. No sanitizer-revision
 rotation: docs only (`91455b21…` unchanged).
+
+### Consumer note for Poppy: contract 1.6.0 (`extract-route-env`)
+
+Prepared, not published; nothing is pushed to Poppy. Contract `1.6.0` is a MINOR over `1.5.0` and
+is unreleased until the next image tag.
+
+1. **`FORAGE_EXTRACT_ROUTE_ENABLED=1`** opens `POST /extract` without a replacement `config.yaml`.
+   Poppy can then delete its vendored `config/forage/config.yaml`, the mount, the baked-copy sha256
+   pin and the drift test. Exactly `1`/`0`: any other value refuses Forage's boot.
+2. **Memory.** With the route open the advisory rule counts two workers. The default 86M needs
+   `1,781 MiB` on the in-memory cache, so set `FORAGE_MEM_LIMIT` to at least `1792m`; boot warns
+   `envelope_memory_rule_unmet` below it.
+3. **Capability.** `/health` `capabilities.extract_route: 1` is present when the gate is open and
+   absent otherwise (a presence map, never `0`). The deploy check should read it instead of probing.
+4. **The 404 is coded.** A closed gate answers `{"detail": "Not Found", "error": "route_disabled",
+   "reason": …}`. It is permanent for the process: map it to "disabled", never to a retryable
+   "temporarily unavailable". `route_disabled` joins the `/extract` vocabulary; Poppy's
+   `_SIDECAR_EXTRACT_FAILURE_CODES` (the 422 allowlist) may add it or treat 404 separately.
+   `tests/test_contract_errors.py` carves it out of the inlined copy until Poppy decides.
+5. **Activation.** Re-vendor `contract/openapi.yaml` from the release tag and verify it against that
+   tag's anchor. A consumer that refuses only on a major mismatch activates unchanged.

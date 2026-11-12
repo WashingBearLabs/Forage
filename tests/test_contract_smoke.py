@@ -52,6 +52,7 @@ from pipeline.contract import (
     DEGRADED_CACHE_UNAVAILABLE,
     DEGRADED_PROMPTGUARD_UNAVAILABLE,
 )
+from pipeline.extraction_limits import extraction_settings_from_config
 from promptguard.classifier import DEFAULT_MODEL_ID, PromptGuardClassifier
 from retrieval_app import CAPABILITY_SEARCH_SANITIZATION, HealthResponse
 from scripts.export_contract import ANCHOR_PATH, CONTRACT_PATH, render_anchor
@@ -233,6 +234,10 @@ class TestSingleSourceOfTruth:
         app.state.cache = None
         app.state.config = {}
         app.state.sanitizer_revision = _REVISION
+        # Pin the /extract gate closed: an earlier test may leave it open on
+        # the shared app, which would add `extract_route` (contract 1.6.0).
+        previous_settings = app.state.extraction_settings
+        app.state.extraction_settings = extraction_settings_from_config({})
         try:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
@@ -241,6 +246,7 @@ class TestSingleSourceOfTruth:
                 response = await client.get("/health")
             capabilities: dict[str, int] = response.json()["capabilities"]
         finally:
+            app.state.extraction_settings = previous_settings
             app.state.classifier = PromptGuardClassifier()
 
         assert set(capabilities) == {contract_smoke.CAPABILITY_SEARCH_SANITIZATION}

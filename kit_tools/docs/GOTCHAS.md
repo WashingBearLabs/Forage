@@ -16,6 +16,33 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
+### A timing gate only gates what it actually asserts
+
+`test_stage2_complexity`'s linearity check skips any pair where both sizes finish under
+`_FAST_SECONDS` (100 ms). On a fast machine, `exfil_image` and `disregard_instructions` at
+2 MiB finish in about 60–90 ms, so their ratio was **never asserted**: not locally, and not on
+CI before 2026-11.
+
+Slower GitHub runners pushed the 2 MiB time past 100 ms, and the assertion ran for the first
+time. It saw 13–15× against the 12× bound, in four runs out of four, on both `ubuntu-26.04` and
+`ubuntu-24.04`. Both patterns are linear: a flat 30–44 ns/char from 64 KiB to 32 MiB. The
+excess was the 256 KiB → 2 MiB step costing about 1.6× more per character on those runners,
+probably a memory-hierarchy effect.
+
+The bound is now relative to the machine. A known-linear baseline with the same opcodes is
+timed over the same texts, interleaved with the pattern. The 12× bound follows the baseline's
+excess over 8×, capped at 1.75× (21×, below n^1.5). It is never stricter than before.
+
+Two lessons:
+- Pinning the runner was tried and did not help; don't repeat it.
+- When adding a skip threshold to a timing test, check which cases it silently exempts on a fast
+  developer machine.
+
+Same day, two real runner drifts were fixed:
+- `ubuntu-latest` (26.04) has CPython 3.14 as its system Python, so `.python-version` pins 3.12;
+  otherwise `confusables.py` reads as stale.
+- Newer Docker writes out-of-range layer mtimes, so the size-budget `gzip` runs with `-n`.
+
 ### Derived Stage 2 scan forms must never change Stage 3's input
 
 `epic-forage-structural-hardening` closed thirty structural findings by giving Stage 2 extra
@@ -729,7 +756,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved sixty-four times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved sixty-five times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -800,11 +827,12 @@ were recorded at their implementation boundaries:
 | `inference-surface` US-002 | `2384820b…` | Sixty-second, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.5.0 entry names `/metrics.model` `device_failovers`, `oom_batch_reductions`, `oom_refusals`, `effective_batch_size`). A read-only whole-file reversal against `fd10964` reproduces `396ea4bf…` under default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` and `promptguard/classifier.py` are not hashed. |
 | `inference-surface` US-003 | `02f7abcf…` | Sixty-third, **not a sanitization-behaviour change at shipped defaults**: only `orchestrator.py` moves (active device in `cache_policy_fingerprint`, step 8 skips the write if it changed). A read-only reversal against `3acbb81` reproduces `2384820b…` under default, `config.yaml` and `bench/config.yaml`. The `device@cuda` revision input is a no-rotation for cpu (`sanitizer_revision.py` is unhashed); cuda is `280511c1…`. |
 | `gpu-validation` US-005 | `a9beacbc…` | Sixty-fourth, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.5.0 entry is finalised with its consumer note: 1.4.0 and 1.5.0 are taken together). A read-only whole-file reversal against `c8f198a` reproduces `02f7abcf…` under default, `config.yaml` and `bench/config.yaml`; cuda `280511c1…` → `cff06f97…`. |
+| `extract-route-env` | `e61c960e…` | Sixty-fifth, **not a sanitization-behaviour change**: only `contract.py` moves (contract `1.6.0`: `/extract`'s 404 gains `error: route_disabled`, `/health` capabilities gains `extract_route`). A read-only whole-file reversal against `HEAD` reproduces `a9beacbc…` under default, `config.yaml` and `bench/config.yaml`; cuda `cff06f97…` → `a9ed1b4a…`. `extraction_limits.py` (the `FORAGE_EXTRACT_ROUTE_ENABLED` override) and `retrieval_app.py` are not hashed. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Forty-two of the sixty-four rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Forty-three of the sixty-five rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),

@@ -15,7 +15,7 @@
 ## Overview
 
 Forage's error handling rests on five conventions. **The wire vocabulary is closed and
-versioned**: eighteen error codes live in `pipeline/contract.py` as nested `Literal`
+versioned**: nineteen error codes live in `pipeline/contract.py` as nested `Literal`
 types, each bound to a fixed HTTP status, and adding one is a contract change governed by
 `contract/GOVERNANCE.md`. **Exceptions are typed and mapped once**: stages raise their own
 domain exceptions, `pipeline/orchestrator.py` translates them into a `PipelineError` that
@@ -54,7 +54,8 @@ Reference"; the consumer-facing one is `kit_tools/docs/API_GUIDE.md` "Error resp
 | Search chain policy-excluded | `search_unavailable` | `/search` 422 | `retrieval_app.search`, before `run_search_pipeline` is called: `apply_request_policy` narrows the configured chain to empty for this request; reason is the fixed literal `policy_excluded_all_providers` — no provider was tried (`search-policy-and-health` US-010) | not logged |
 | Capacity / admission | `busy` | `/extract` 429 | `ExtractionAdmissionMiddleware` (queue depth 1, 50 MiB queued-bytes reservation) | not logged; counted in `/metrics.extraction.busy_rejections` |
 | Upload size, streaming | `content_too_large` | `/extract` 413 declared, **400 observed** (see Observed rough edges) | `DocumentSizeLimitMiddleware` via `_RequestBodyTooLargeError` | not logged |
-| Route disabled / not wired | none (bare `detail`) | `/extract` 404 / 503 | `ExtractionAdmissionMiddleware`; the handler repeats the 404 as `HTTPException` | not logged |
+| Route disabled | `route_disabled` (beside `detail: "Not Found"`, contract 1.6.0) | `/extract` 404 | `ExtractionAdmissionMiddleware`; the handler repeats the same body via `_route_disabled_response()` | not logged per request; the boot line `extract_route_resolved` names the gate and its source, and `/health` omits `capabilities.extract_route` |
+| Admission not wired | none (bare `detail`) | `/extract` 503 | `ExtractionAdmissionMiddleware` | not logged |
 | Boot-time configuration | none (no HTTP) | process refuses to serve | Typed readers, including `ExtractionConfigurationError`, `CacheConfigurationError`, `SearchProviderConfigurationError` and `ModelConfigurationError`, raise out of `lifespan` | uvicorn reports it; unknown model selection also logs the closed WARNING `model_id_not_allowed` |
 | Internal | none | 500, Starlette default body | no `Exception` handler is registered; the recorded cases are `/health` failing response validation on an unlisted `degraded_reasons` value and an unmodeled `/metrics` counter (`extra="forbid"`) | not logged by the app |
 
@@ -94,14 +95,19 @@ RateLimit429Response         /extract 429
   request_id         : str                   -- minted by the middleware
   sanitizer_revision : str
 
-DetailResponse               /extract 404, 503, and the observed 400
-  detail             : str                   -- "Not Found" | "Unavailable" | "There was an error parsing the body"
+RouteDisabled404Response     /extract 404 (contract 1.6.0)
+  detail             : Literal["Not Found"]  -- unchanged from 1.5.0
+  error              : Literal["route_disabled"]
+  reason             : str                   -- fixed; no request_id
+
+DetailResponse               /extract 503, and the observed 400
+  detail             : str                   -- "Unavailable" | "There was an error parsing the body"
 
 HTTPValidationError          any POST route, 422 (schema-invalid request)
   detail             : list[ValidationErrorDetail]   -- FastAPI default: loc, msg, type
 ```
 
-`error` is the contract: the eighteen values are enumerated in `contract/openapi.yaml`
+`error` is the contract: the nineteen values are enumerated in `contract/openapi.yaml`
 and pinned by `tests/golden/`. `reason` is not: it is documented as descriptive, and
 `contract/GOVERNANCE.md` ruling (d) records that redacting it would itself be a wire change.
 `request_id` is a per-call uuid4 hex minted in the orchestrator, in the admission middleware
@@ -142,9 +148,10 @@ through headers.
 is the only registered exception handler. It calls `exc.to_dict()`, adds
 `sanitizer_revision` from `app.state` when `request.url.path == "/extract"`, and answers
 `429 if exc.error == "busy" else 422`. The live emitter of `busy` is the middleware, which
-never enters the handler; the arm keeps the taxonomy consistent. The only `HTTPException`
-in the codebase is `extract()`'s 404 when the route is disabled, a second guard behind the
-middleware.
+never enters the handler; the arm keeps the taxonomy consistent. `extract()` repeats the
+middleware's disabled-route 404 as a second guard, returning the same
+`_route_disabled_response()` body rather than raising; no `HTTPException` remains in the
+codebase.
 
 ### Stages raise, the orchestrator maps, the handler renders
 
@@ -308,8 +315,8 @@ Recorded for the owner as observations, not decisions. Each has a place in
 
 - **Vocabulary and handler parity**: `tests/test_contract_errors.py` (25 tests) drives
   every emission site through real routes and asserts byte-for-byte parity with the mirror
-  models. Load-bearing names: `test_error_vocabulary_is_the_documented_eighteen`,
-  `test_all_eighteen_codes_render_as_enums_in_the_schema`,
+  models. Load-bearing names: `test_error_vocabulary_is_the_documented_nineteen`,
+  `test_all_nineteen_codes_render_as_enums_in_the_schema`,
   `test_every_raise_site_in_the_repo_is_in_the_vocabulary`,
   `test_extract_vocabulary_matches_poppys_pinned_allowlist`,
   `test_declared_error_statuses_match_the_emission_map`,
