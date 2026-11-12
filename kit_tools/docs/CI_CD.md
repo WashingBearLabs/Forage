@@ -16,7 +16,7 @@
 
 ## Overview
 
-**CI/CD Platform:** GitHub Actions — GitHub-hosted `ubuntu-latest` runners, no matrix, no self-hosted runners
+**CI/CD Platform:** GitHub Actions — GitHub-hosted `ubuntu-24.04` runners (pinned, not `ubuntu-latest`), no matrix, no self-hosted runners
 **Pipeline Config:** `.github/workflows/ci.yml` — one workflow file, about 1,700 lines, ten jobs in two lanes
 **Dashboard:** https://github.com/WashingBearLabs/Forage/actions (there is no status badge in `README.md`)
 
@@ -134,7 +134,7 @@ chain for a publish.
 
 ## Jobs
 
-All jobs run on `ubuntu-latest`. Every `uses:` is pinned to a 40-hex commit SHA with a
+All jobs run on `ubuntu-24.04`, pinned since 2026-11-11: `ubuntu-latest` moved to 26.04, whose missing system Python 3.12 and newer Docker broke the suite and the size budget (see GOTCHAS). Every `uses:` is pinned to a 40-hex commit SHA with a
 `# vX.Y.Z` comment (`actions/checkout` v7.0.1, `astral-sh/setup-uv` v10.0.1,
 `docker/setup-buildx-action` v4.3.0, `docker/setup-qemu-action` v4.3.0,
 `docker/build-push-action` v7.3.0, `docker/login-action` v4.6.0,

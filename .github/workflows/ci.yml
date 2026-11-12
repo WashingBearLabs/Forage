@@ -128,7 +128,7 @@ env:
 jobs:
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -246,7 +246,7 @@ jobs:
 
   typecheck:
     name: typecheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -280,7 +280,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The suite is hermetic and CPU-only: ~3 s locally, and on a cold cache the
     # job is dominated by the ~185 MB torch wheel, not by pytest. The cap is a
     # runaway backstop, not a budget.
@@ -344,7 +344,7 @@ jobs:
     # of the `needs:` graph that a later edit could remove without noticing.
     if: >-
       !startsWith(github.ref, 'refs/tags/searxng-v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The cold build downloads ~3 GB of CUDA torch plus the rest of the lock.
     # Initial 90 min is a runaway backstop set before the larger image existed;
     # CI_CD.md "Timeout and cache budgets" has the ceil(1.5 x measured) re-pin
@@ -526,7 +526,7 @@ jobs:
     # Cross-fire guard, service side — see `build-amd64`.
     if: >-
       !startsWith(github.ref, 'refs/tags/searxng-v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Free runner disk space
@@ -633,7 +633,7 @@ jobs:
     # Cross-fire guard, service side — see `build-amd64`.
     if: >-
       !startsWith(github.ref, 'refs/tags/searxng-v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The 120 s health budget, plus `docker load` of the ~3 GB-layer image and
     # a cold `uv sync`. Initial 45 min; re-pin per CI_CD.md.
     timeout-minutes: 45
@@ -894,7 +894,7 @@ jobs:
     # in one workflow. A tag pushed onto a red tree runs the gates, they fail,
     # and this job never starts.
     needs: [lint, typecheck, test, build-amd64, secret-grep, smoke]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The one deliberate exception to this file's no-job-permissions rule, and
     # it is scoped to this job alone — the top-level grant stays `contents:
     # read`, so nothing else in the workflow can inherit either of these.
@@ -1494,7 +1494,7 @@ jobs:
     # config could have changed.
     if: >-
       !startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 90 MB image, no compilation, one COPY over a pinned base. A backstop.
     timeout-minutes: 20
     steps:
@@ -1603,7 +1603,7 @@ jobs:
     # Cross-fire guard, companion side — see `searxng-build`.
     if: >-
       !startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Four container starts, each waiting on SearXNG's boot, plus an advisory
     # probe that reaches real engines. A backstop, not a budget.
     timeout-minutes: 30
@@ -1733,7 +1733,7 @@ jobs:
     # `test` is the load-bearing edge here — see the lane comment above. The
     # other two are this lane's own build and its blocking smoke.
     needs: [test, searxng-build, searxng-smoke]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # `contents: read` is written out rather than inherited: a job-level
     # permissions block REPLACES the top-level grant instead of merging with
     # it, so omitting it here would lose the read this job needs to check the

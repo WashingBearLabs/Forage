@@ -16,6 +16,29 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
+### CI is pinned to `ubuntu-24.04`; don't move it to `ubuntu-latest` without these three checks
+
+On 2026-11-11, `ubuntu-latest` became Ubuntu 26.04, and PR #52 hit three failures that had nothing
+to do with its change:
+
+1. **Interpreter.** The runner's system Python became 3.14. uv synced on it, and
+   `pipeline/confusables.py` read as stale under 3.14's `unicodedata`. `.python-version` now pins
+   3.12, matching the image.
+2. **Docker.** 26.04's newer Docker `save` writes layer blobs with an out-of-range mtime. GNU gzip
+   warns on that and exits 2, even on a stdin redirect, because it `fstat()`s the descriptor. The
+   size budget now uses `gzip -n`.
+3. **Timing.** With no system 3.12, uv downloads its own CPython 3.12.12. On that runner,
+   `test_stage2_complexity`'s `one_start_many_interior` family measured 13–15× at 2 MiB against
+   the 12× bound for `disregard_instructions` and `exfil_image`, in two runs out of two. Locally,
+   and on 3.14, it passes.
+
+All jobs are pinned to `ubuntu-24.04`, which has the system CPython 3.12.3 that `main` last passed
+on. `tests/test_ci_workflow.py` pins that label; its intent is still "GitHub-hosted, never Poppy's
+self-hosted runner".
+
+Before lifting the pin, profile item 3: tell a cache or allocator artifact apart from real
+superlinearity. Never loosen the 12× bound just to get green.
+
 ### Derived Stage 2 scan forms must never change Stage 3's input
 
 `epic-forage-structural-hardening` closed thirty structural findings by giving Stage 2 extra
