@@ -1,13 +1,16 @@
 <!-- Template Version: 2.1.0 -->
 ---
 epic: forage-config-overlay
-status: active
+status: completed
 vision_ref: "T2.2 — Forage hardening (operator configuration, single source)"
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
+completed: 2026-11-12
 ---
 
 # Epic: Forage Config Overlay — Change One Key Without Copying the File
+
+> **Completed 2026-11-12** (PR #53, `ac9ee04`): one spec, 3 stories, 4 attempts; guarded run, validation clean (info findings only). Unreleased on `main` with contract 1.6.0.
 
 > Planned 2026-11-11 with `/kit-tools:plan-epic`, as the follow-up to PR #52
 > (`FORAGE_EXTRACT_ROUTE_ENABLED`, contract 1.6.0). Build on a tree where #52 is merged:
@@ -42,7 +45,7 @@ It changes no wire byte and no hashed source: there is **no contract bump and no
 
 | Seq | Feature Spec | Status | Dependencies |
 |-----|-------------|--------|--------------|
-| 1 | [feature-config-overlay.md](feature-config-overlay.md) | Planned | PR #52 merged |
+| 1 | [feature-config-overlay.md](archive/feature-config-overlay.md) | Completed | PR #52 merged |
 
 One spec with three stories:
 1. the pure merge and validation function;
@@ -53,13 +56,13 @@ The work has no second independently meaningful concern, so it is not split furt
 
 ## Completion Criteria
 
-- [ ] `feature-config-overlay` completed and archived
-- [ ] A container started with only `FORAGE_CONFIG_OVERLAY` pointing at a one-key file serves
+- [x] `feature-config-overlay` completed and archived
+- [x] A container started with only `FORAGE_CONFIG_OVERLAY` pointing at a one-key file serves
       exactly the baked configuration with that one key changed. Every other key, including
       every security-relevant key, keeps its shipped value.
-- [ ] `docs/configuration.md` recommends the overlay as the default way to change a key, and keeps
+- [x] `docs/configuration.md` recommends the overlay as the default way to change a key, and keeps
       the full-replacement mount as a supported alternative
-- [ ] Poppy consumer note written, so Poppy can replace its vendored full copy with an overlay
+- [x] Poppy consumer note written, so Poppy can replace its vendored full copy with an overlay
       (Poppy executes its own half)
 
 ## Notes

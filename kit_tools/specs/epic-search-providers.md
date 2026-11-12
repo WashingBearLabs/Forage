@@ -1,13 +1,15 @@
 <!-- Template Version: 2.1.0 -->
 ---
 epic: search-providers
-status: active
+status: completed
 vision_ref: "T2.1 — Search-provider abstraction & reliable search"
 created: 2026-09-14
 updated: 2026-09-14
 ---
 
 # Epic: Search Providers — Pluggable Search Backends + Free-First/Paid-on-Failure Fallback
+
+> **Completed** — shipped as **v1.1.0** (contract 1.2.0, 2026-09-18). Status reconciled 2026-11-12.
 
 > **Planned in Poppy, executes here.** This is the **Forage half of Web Access family Epic 3**
 > (search-reliability). It was re-planned 2026-09-14 against the shipped Forage layout and

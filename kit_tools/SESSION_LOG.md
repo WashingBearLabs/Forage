@@ -2,7 +2,7 @@
 # SESSION_LOG.md
 
 > Running history of development sessions. Enables continuity across sessions.
-> Last updated: 2026-10-05
+> Last updated: 2026-10-13
 
 ---
 
@@ -574,3 +574,148 @@ model. Stage 2 does nearly all the blocking (`docs/corpus.md` "Decision inputs")
 - The classic PAT created for the mirror push can be revoked.
 - Close-out found the corpus audit findings lost with the torn-down worktree (gitignored file);
   regenerated into the local `AUDIT_FINDINGS.md` from the committed baseline, and recorded as a gotcha.
+
+---
+
+## 2026-10-06 → 2026-10-11 — Release-hardening specs, `epic-forage-inference-backends` executed, `v1.4.0` published
+
+**Duration:** multi-day session (several context compactions)
+**Focus:** `release-resource-bounds`, `release-padding-gate`, `release-1-3-0`, then
+`epic-forage-inference-backends` (specs 1–5) through publication.
+
+### Accomplished
+
+- **Release hardening (held v1.3.0):**
+  - `release-resource-bounds`: stage 1 made linear, the rlimited HTML worker at 512 KiB, and `/search` parsing in a thread per result (rotations 53–56).
+  - `release-padding-gate`: a refused look-alike fold now BLOCKs (rotation 57).
+  - `release-1-3-0`: release tree prepared, plus a validation fix (rotations 58–59).
+- **Inference backends epic:**
+  - Validate-epic round 3, then specs 1–4 executed in guarded mode (16/16 stories).
+  - US-001 recovered by hand after laptop sleep killed three attempts.
+  - Epic-validation warnings 008/009 fixed (`a5c52af`); PR #47 merged.
+- **Spec 5 (`gpu-validation`), supervised on thelab:**
+  - 86M CUDA latency 16.0 ms per window, projected p95 1.10 s.
+  - Parity across 6 runs: 0 verdict changes.
+  - Failover proven for both `cpu` and `refuse`.
+  - Allocator ENV added after the first parity run's VRAM growth.
+  - Sizing docs written; rotation 64 (`a9beacbc…`).
+- **v1.4.0** tagged at `49de6cc` and published:
+  - publish run 38104861366; index `sha256:d305bbbe…`;
+  - candidate and published-image smokes green on CPU and GPU;
+  - publication record in PR #49; thelab cleaned back to 113G free.
+- **Epic closed** (PR #50, `8de7586`): specs archived, three GOTCHAS added, parked audit findings merged locally, worktree torn down.
+
+### Documentation Updated
+
+- [x] `docs/releases.md`, `docs/configuration.md`, `docs/weights.md`, `docs/bootstrap-notes.md`, `CLAUDE.md` (rotations 53–64)
+- [x] Release pins and status set to 1.4.0 across README, compose, contract smoke and the kit_tools docs
+- [x] `kit_tools/specs/archive/` (five inference specs), epic wrapper (completed, criteria ticked)
+- [x] `kit_tools/docs/GOTCHAS.md`, `kit_tools/arch/DECISIONS.md` (one-image torch CPU/GPU; v1.3.0 folded into v1.4.0), `kit_tools/SYNOPSIS.md`
+
+### Decisions
+
+- Torch serves both devices from one image; ONNX and INT8 stay unexplored opt-ins.
+- v1.3.0 was never published; its work ships in v1.4.0 (owner ruling 2026-10-10).
+- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6` is baked into the image.
+- On thelab, everything we create is deleted afterwards; BuildKit layers (~18 GB) are left for the owner to prune.
+
+### Open / Next
+
+- Poppy: pin `1.4.0` (contract 1.5.0) in a dedicated Poppy session.
+- thelab: optional BuildKit prune (owner's call).
+- Stray local branch `fix/retrieve-bounded-decoder` (work merged via PR #41) can be deleted.
+- Info-level findings remain in the local `AUDIT_FINDINGS.md`.
+- Next epic: `/kit-tools:plan-epic`.
+
+### Addendum 2026-10-13 — Poppy handoff and next-scope review
+
+- Wrote the Poppy session prompt (pin `1.4.0`, re-vendor contract 1.5.0, roll out `poppy-forage`, scoped
+  BuildKit prune on thelab). The owner reports both are done.
+- Reviewed what comes next. No epic is planned. Candidates:
+  - `/extract` latency profiling plus the per-model working set, with the cheap device-helper cleanups
+    (`2026-10-08-001..003`) folded in so they share one `sanitizer_revision` rotation;
+  - T3.1 additional providers, only on operator demand;
+  - T3.2 provenance hooks.
+- BACKLOG: the SearXNG `secret_key` row marked done (the image bakes no key).
+- Next: the owner is setting up the lab to put Forage through security testing. The findings from that will
+  shape the next scope.
+
+## 2026-11-11 → 2026-11-12 — `/extract` gate from the environment (contract 1.6.0), `epic-forage-config-overlay` planned, validated and executed
+
+**Focus:** a Poppy handoff (opening `/extract` meant copying the whole `config.yaml`; a closed route
+looked like an outage), then the general overlay, then CI drift on GitHub's runners.
+
+### Accomplished
+
+- **PR #52, merged `8563b2c`, unreleased.** Contract **1.6.0** adds:
+  - `FORAGE_EXTRACT_ROUTE_ENABLED`, which takes precedence over `config.yaml`; an invalid value
+    refuses boot (owner ruling);
+  - a self-describing 404 that keeps `detail` beside the new `error: route_disabled` and
+    `reason` (the nineteenth error code);
+  - `/health` `capabilities.extract_route`, which is present-only, not a 0/1 value as the
+    handoff proposed;
+  - a memory rule that counts both workers while uploads are open: 1,781 MiB with the 86M, so
+    `FORAGE_MEM_LIMIT` must be at least `1792m`;
+  - a compose passthrough for the new variable.
+
+  Rotation 65 `a9beacbc…` → `e61c960e…` (`contract.py` only, control measured). Poppy consumer
+  note in `docs/bootstrap-notes.md`.
+- **`epic-forage-config-overlay` planned** (`/kit-tools:plan-epic`, four clarifications) and
+  **validated in two rounds**:
+  - round 1 found 2 criticals (a path leaking through a chained traceback; dotted top-level keys);
+  - round 2 found 1 critical (the echo regex `^…$` accepts a trailing newline, so it must be
+    `fullmatch`).
+
+  All were folded in. The plan rode along in #52.
+- **CI drift unblocked inside #52.** Since 2026-10-11:
+  - `ubuntu-latest` (26.04) ships Python 3.14, which made `confusables.py` look stale; fixed with
+    `.python-version` 3.12;
+  - newer Docker writes out-of-range mtimes, which broke the image-size gzip step; fixed with
+    `gzip -n`.
+
+  The stage-2 linearity check failed because its 100 ms skip had masked `exfil_image` and
+  `disregard_instructions`. Both patterns measure linear, so the bound was made machine-relative.
+  A runner pin to 24.04 was tried and reverted: the diagnosis was wrong.
+- **PR #53, merged `ac9ee04`, unreleased.** `FORAGE_CONFIG_OVERLAY` was built in a guarded run:
+  - 3/3 stories, 4 attempts, about 45 minutes;
+  - validation clean, info findings only; fixed -006 and -009 before merge.
+
+  No contract change and no rotation.
+
+### Documentation Updated
+
+- [x] Contract 1.6.0 fan-out across the docs (configuration, ENV_REFERENCE, API_GUIDE,
+      TROUBLESHOOTING, MONITORING, LOGGING, ERROR_HANDLING, SECURITY, GOVERNANCE, README,
+      CLAUDE.md rotation 65), done by #52 itself
+- [x] Overlay docs, the DECISIONS entry and two GOTCHAS, done by #53 itself
+- [x] GOTCHAS: "A timing gate only gates what it actually asserts" (CI drift and the machine-relative bound)
+- [x] SYNOPSIS, MILESTONES, BACKLOG, AGENT_README test count. Epic wrappers set to completed:
+      `config-overlay`, and the stale `v1-3-0-release` and `search-providers`
+- [x] PR #51's 10-11 session log and addendum merged in through this branch
+
+### Decisions
+
+- An invalid `FORAGE_EXTRACT_ROUTE_ENABLED` refuses boot rather than falling back.
+- Overlay rules:
+  - delivered as an env var naming a file;
+  - lists replace;
+  - unknown keys refuse boot;
+  - loosening is allowed but every set key is logged at WARNING.
+- The linearity gate normalizes to a known-linear baseline. It is never stricter than before and
+  loosens to at most 21× (below n^1.5).
+
+### Mistakes caught
+
+- Two wrong CI diagnoses: gzip-from-stdin, then the runner pin. Each was corrected by the next CI
+  run.
+- `AUDIT_FINDINGS.md` was overwritten by the worktree's partial copy, then restored immediately
+  from a backup. The new blocks were merged in, and nothing was lost.
+
+### Open / Next
+
+- Owner: decide on cutting **v1.5.0**, so Poppy can adopt the env flag and overlay and drop its
+  vendored config.
+- Owner: retire or keep `CLAUDE.md`'s coexistence section now that Poppy has pinned `v1.4.0`.
+- `kit_tools/SESSION_SCRATCH.md` is untracked again (removed in this branch; it is gitignored).
+- Info-level findings 2026-11-11-001..009 are in the local `AUDIT_FINDINGS.md`.
+- The owner's lab security testing still shapes the next epic.
