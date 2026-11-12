@@ -6,7 +6,7 @@ session_ready: true
 depends_on: []
 vision_ref: "T2.2 — Forage hardening (operator configuration, single source)"
 type: epic-child
-size: M
+size: L
 epic: forage-config-overlay
 epic_seq: 1
 epic_final: true
