@@ -14,6 +14,10 @@ lane and is documented separately in `docs/searxng.md` (US-004).
 
 Contract **1.6.0** (MINOR, additive), awaiting the next image tag:
 
+- `FORAGE_CONFIG_OVERLAY=<path>` merges a small YAML file over `config.yaml`, so changing one key
+  no longer means copying the whole file. Blocks merge, lists replace, unknown names, nulls and
+  wrong shapes refuse boot with six closed `overlay_*` tokens, and one `config_overlay_applied`
+  WARNING names the keys set. No contract change and no `sanitizer_revision` rotation.
 - `FORAGE_EXTRACT_ROUTE_ENABLED=1|0` sets the `/extract` release gate without a replacement
   `config.yaml`. It overrides `extract_route_enabled`, and any other value refuses boot.
 - A closed gate answers 404 `{"detail": "Not Found", "error": "route_disabled", "reason": …}`.

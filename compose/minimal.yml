@@ -97,6 +97,8 @@ services:
       # route and needs a second worker's memory: raise FORAGE_MEM_LIMIT to at
       # least 1792m with the default 86M first. Any value but 1/0 refuses boot.
       - FORAGE_EXTRACT_ROUTE_ENABLED
+      # Overlay recipe, with the commented `volumes:` line below:
+      # - FORAGE_CONFIG_OVERLAY=/app/overlay.yaml
       # SEARXNG_URL is deliberately NOT set. Forage's built-in default is
       # `http://searxng:8080`, a neutral service name — which is why the
       # service below is called `searxng` and not `forage-searxng`. Renaming it
@@ -111,6 +113,11 @@ services:
       # canonical name docs/weights.md § "The model cache volume" pins, and
       # `/app/model-cache` is the image's own `HF_HOME`.
       - forage-model-cache:/app/model-cache
+      # To change a few config.yaml keys, mount a small overlay file (only the
+      # keys you change) READ-ONLY and name it in the environment block above.
+      # Both lines go together: a path without its mount refuses the boot
+      # (overlay_missing). docs/configuration.md § "Delivering config.yaml".
+      # - ./overlay.yaml:/app/overlay.yaml:ro
     # Resource envelope: FORAGE_CPUS unset or 0 = no CPU limit (today's
     # behaviour; Compose omits the key). Below 1 vCPU is unsupported.
     # Service-level `cpus` needs Docker Compose v2 (Compose Spec); verified

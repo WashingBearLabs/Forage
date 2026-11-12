@@ -272,6 +272,78 @@ or invalid operator domain entries.
 
 ---
 
+### overlay_missing
+
+**Symptom:** the container exits at start; the traceback ends in `ConfigOverlayError: overlay_missing: …`. The message never shows the overlay path or any value.
+
+**Cause:** the path in `FORAGE_CONFIG_OVERLAY` does not exist inside the container, or is not a regular file (a missing short-syntax bind source mounts a *directory*).
+
+**Fix:** create the host file, add the `:ro` bind mount that puts it at that path, and make the variable name the in-container path. Restart.
+
+---
+
+### overlay_unreadable
+
+**Symptom:** the container exits at start; the traceback ends in `ConfigOverlayError: overlay_unreadable: …`. The message never shows the overlay path or any value.
+
+**Cause:** the file exists but could not be read or parsed: I/O or permission error, larger than 1 MiB, not UTF-8, invalid YAML, a duplicate key, a YAML alias or a merge key.
+
+**Fix:** check the file mode is readable by the container user, shrink it to the keys you change, save as UTF-8, remove anchors/aliases (`&`, `*`, `<<`) and duplicate keys, and validate it with any YAML linter. Restart.
+
+---
+
+### overlay_not_mapping
+
+**Symptom:** the container exits at start; the traceback ends in `ConfigOverlayError: overlay_not_mapping: …`. The message never shows the overlay path or any value.
+
+**Cause:** the document is not a mapping at the top level (a list or a bare scalar).
+
+**Fix:** write `key: value` pairs at the top level. Restart.
+
+An empty or comments-only overlay is **not** this refusal: it is a no-op that still logs `config_overlay_applied — keys= count=0`. If you expected keys to change and see `count=0`, the file you mounted is empty.
+
+---
+
+### overlay_unknown_key
+
+**Symptom:** the container exits at start; the traceback ends in `ConfigOverlayError: overlay_unknown_key: …`. The message never shows the overlay path or any value.
+
+**Cause:** the overlay names a key that is not a known config key, at the top level or one level inside `cache:`, `extraction:` or `retrieve:`. The message carries `key=<name>` when the name is a plain lower-case name, otherwise `<unprintable key>`.
+
+**Fix:** compare the name and indentation with `docs/configuration.md`. Write nested keys as blocks, not as `cache.max_bytes:`. The base file ignores unknown keys; the overlay refuses them. Restart.
+
+---
+
+### overlay_null_value
+
+**Symptom:** the container exits at start; the traceback ends in `ConfigOverlayError: overlay_null_value: …`. The message never shows the overlay path or any value.
+
+**Cause:** a key, or a list item, is null (`key:` with nothing after it, `~` or `null`). The message names the key.
+
+**Fix:** give the key a value; an overlay cannot unset a key. To get a code default back, remove the key from the overlay only if the base already holds it. Restart.
+
+---
+
+### overlay_shape_mismatch
+
+**Symptom:** the container exits at start; the traceback ends in `ConfigOverlayError: overlay_shape_mismatch: …`. The message never shows the overlay path or any value.
+
+**Cause:** a value has the wrong shape for its key: a block that is not a mapping, a mapping under a non-block key, a scalar where the base has a list, or a list where the base has a scalar. The message names the key.
+
+**Fix:** match the shape in `docs/configuration.md` (blocks hold mappings; list keys hold lists). Restart.
+
+---
+
+### config_overlay_applied
+
+**Symptom:** boot logs `config_overlay_applied — keys=<dotted,keys> count=<n>` at WARNING.
+
+**Cause:** `FORAGE_CONFIG_OVERLAY` is set and the overlay was accepted. This is informational, not a fault; it is a WARNING so a loosened security key is never silent.
+
+**Fix:** none needed. Read the key list to confirm it is what you meant. If a key you set is a threshold, domain-list budget or list entry, also look for `config_invalid_value` in the same boot log: those readers ignore an invalid overlay value exactly as they would a base-file value. Changing the overlay needs a restart.
+
+---
+
 ### Weights never arrive: no token
 
 **Symptom:** `status: "degraded"`, `degraded_reasons: ["promptguard_unavailable"]`,

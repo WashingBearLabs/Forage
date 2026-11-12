@@ -955,8 +955,9 @@ memory default. The cache ceiling remains 128 MiB even on larger hosts.
 
 **Consequences:** under-sizing can turn a bounded classification wait into a
 marked fail-open unscanned response, not just slower scanning. `_load_config`
-replaces rather than merges, so a short mount can silently undo an operator's
-hardening. The explicit security-key partition/default test proves only the
+replaces rather than merges for a *full* mount, so a short mount can silently undo an
+operator's hardening; `FORAGE_CONFIG_OVERLAY` is the merging alternative (see
+"Config overlay: blocks merge, lists replace, strict names"). The explicit security-key partition/default test proves only the
 shipped baseline. Effective-value logging was considered and declined: INFO does
 not render, and WARNING for normal values is noise. The operator warning is the
 only protection for their own stricter baseline.
@@ -1237,3 +1238,45 @@ same-uid child could still read `/proc/<ppid>/environ`. Non-dumpable makes that 
 hashed file changed; `sanitizer_revision` stays `0ace27ca…`.
 
 **Source:** `kit_tools/specs/feature-release-resource-bounds.md` US-003.
+
+---
+
+### 2026-11-11: Config overlay: blocks merge, lists replace, strict names
+
+**Context:** The only way to change one `config.yaml` key was to mount a complete replacement, and
+a short file silently reset every omitted key, security bounds included. Every upgrade was a manual
+re-sync of about 90 tuned lines, and Poppy vendored the whole file under a sha256 pin.
+
+**Decision:** `FORAGE_CONFIG_OVERLAY` names a YAML file merged over the base config
+(`_load_config()` stays the base loader; the lifespan applies the overlay right after it).
+Blocks (`cache`, `extraction`, `retrieve`) merge leaf by leaf; lists replace outright; every other
+value replaces. The overlay is **strict** (unknown names, nulls and wrong shapes refuse boot with
+six closed `overlay_*` tokens) where the base file stays warn-only.
+
+**The four clarifications (2026-11-11):**
+1. Delivery is an env var naming a file; unset is today's behaviour, set-but-bad refuses boot.
+2. A list in the overlay replaces the shipped list wholesale, never appends.
+3. An unknown or misspelled key refuses the boot, never echoing the value; the base file stays lenient.
+4. An overlay may loosen security-relevant keys, with one WARNING naming every key set.
+
+**Validation-round decisions:**
+- YAML aliases, merge keys and duplicate keys are refused (`overlay_unreadable`): a duplicate would
+  silently keep the last value and an alias expands past any byte cap.
+- Every refusal is `from None` (and the exception suppresses its context), because a chained
+  `OSError` or `YAMLError` quotes the path or a snippet of the file in the traceback.
+- A rejected unknown key is echoed only when it fully matches a plain lower-case name
+  (`re.fullmatch`, not `^…$`, which accepts a trailing newline); otherwise `<unprintable key>`.
+- Dotted names are not accepted as top-level overlay keys (they would be a silent no-op).
+
+**Why loosening is allowed but logged:** per-key loosening rules were rejected: the operator wrote
+the file, and a rule table would be a second place to keep in step with every new key. The cost of
+naming every overlaid key in a WARNING is one line per boot.
+
+**Consequences:** Reader fallbacks (`promptguard_threshold`, `policy_domain_entries_max_bytes`,
+list entries) still warn with `config_invalid_value` and continue on the default, so an overlay
+value can be ignored behind a WARNING; turning those into refusals would change full-file
+behaviour and needs its own decision. Precedence for `extract_route_enabled` is
+`FORAGE_EXTRACT_ROUTE_ENABLED`, overlay, base file, code default. No contract bump and no
+`sanitizer_revision` rotation: `retrieval_app.py` and `pipeline/config_overlay.py` are not hashed.
+
+**Source:** `kit_tools/specs/feature-config-overlay.md`.

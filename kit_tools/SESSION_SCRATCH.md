@@ -106,3 +106,7 @@
 [20:09] config-overlay US-002: _apply_config_overlay wired into lifespan after _load_config; WARNING config_overlay_applied; tests in test_app.py
 - Files: retrieval_app.py, tests/test_app.py, tests/conftest.py, tests/test_hermeticity.py
 - Decision: no rotation (retrieval_app unhashed); formatter rewraps lines so inline pyright-ignore removal needs a re-grep
+
+[--:--] config-overlay US-003: operator docs, compose recipes, decision record
+- Files: docs/configuration.md, releases.md, bootstrap-notes.md, compose/{minimal,full,gpu}.yml, kit_tools docs (ENV_REFERENCE, LOGGING, MONITORING, TROUBLESHOOTING, ERROR_HANDLING, DECISIONS, GOTCHAS, CODE_ARCH, LOCAL_DEV, DEPLOYMENT)
+- Decision: dotted names documented as log/refusal names only (module refuses dotted top-level keys); compose recipe fully commented

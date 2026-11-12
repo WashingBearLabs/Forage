@@ -208,6 +208,18 @@ docker run --rm -p 127.0.0.1:8020:8020 \
   forage
 ```
 
+To change only a few keys, prefer an overlay file that holds just those keys (merged over the
+baked config; see `docs/configuration.md`):
+
+```bash
+docker run --rm -p 127.0.0.1:8020:8020 \
+  --env-file ./.env \
+  -v forage-model-cache:/app/model-cache \
+  -v "$PWD/overlay.yaml:/app/overlay.yaml:ro" \
+  -e FORAGE_CONFIG_OVERLAY=/app/overlay.yaml \
+  forage
+```
+
 While the download converges, watch `/metrics` (`model.fetch_in_progress`, then
 `model.retries_scheduled`), not `docker logs` — the success narrative is logged at INFO
 and nothing configures logging (see Troubleshooting). `promptguard_loaded` flips to

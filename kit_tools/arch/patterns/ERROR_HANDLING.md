@@ -56,7 +56,7 @@ Reference"; the consumer-facing one is `kit_tools/docs/API_GUIDE.md` "Error resp
 | Upload size, streaming | `content_too_large` | `/extract` 413 declared, **400 observed** (see Observed rough edges) | `DocumentSizeLimitMiddleware` via `_RequestBodyTooLargeError` | not logged |
 | Route disabled | `route_disabled` (beside `detail: "Not Found"`, contract 1.6.0) | `/extract` 404 | `ExtractionAdmissionMiddleware`; the handler repeats the same body via `_route_disabled_response()` | not logged per request; the boot line `extract_route_resolved` names the gate and its source, and `/health` omits `capabilities.extract_route` |
 | Admission not wired | none (bare `detail`) | `/extract` 503 | `ExtractionAdmissionMiddleware` | not logged |
-| Boot-time configuration | none (no HTTP) | process refuses to serve | Typed readers, including `ExtractionConfigurationError`, `CacheConfigurationError`, `SearchProviderConfigurationError` and `ModelConfigurationError`, raise out of `lifespan` | uvicorn reports it; unknown model selection also logs the closed WARNING `model_id_not_allowed` |
+| Boot-time configuration | none (no HTTP) | process refuses to serve | Typed readers, including `ConfigOverlayError`, `ExtractionConfigurationError`, `CacheConfigurationError`, `SearchProviderConfigurationError` and `ModelConfigurationError`, raise out of `lifespan` | uvicorn reports it; unknown model selection also logs the closed WARNING `model_id_not_allowed` |
 | Internal | none | 500, Starlette default body | no `Exception` handler is registered; the recorded cases are `/health` failing response validation on an unlisted `degraded_reasons` value and an unmodeled `/metrics` counter (`extra="forbid"`) | not logged by the app |
 
 The WARNING lines that accompany non-error degradations: quarantine on `/retrieve`
@@ -136,8 +136,9 @@ through headers.
   `UnsupportedUploadFormatError`, `UploadTextClassifiableLimitError`
   (`pipeline/stage1_upload.py`, both `ValueError`); `PromptGuardBudgetExceededError`
   (`promptguard/classifier.py`, a `ValueError`).
-- **Boot-time, refuse to serve**: `ExtractionConfigurationError`
-  (`pipeline/extraction_limits.py`) and `CacheConfigurationError` (`cache.py`), both
+- **Boot-time, refuse to serve**: `ConfigOverlayError` (`pipeline/config_overlay.py`, one of six
+  closed `overlay_*` tokens, raised `from None`), `ExtractionConfigurationError`
+  (`pipeline/extraction_limits.py`) and `CacheConfigurationError` (`cache.py`), all
   `ValueError`, raised from `lifespan` before the server yields.
 - **ASGI seam**: `_RequestBodyTooLargeError` (`retrieval_app.py`), raised out of the
   wrapped `receive` callable by `DocumentSizeLimitMiddleware`.
