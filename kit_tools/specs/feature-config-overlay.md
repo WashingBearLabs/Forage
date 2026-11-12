@@ -192,11 +192,11 @@ complete read, validation and merge contract with no lifespan or app involved.
   US-003 documents it. Do not add a second value-validation path here.
 
 **Acceptance Criteria:**
-- [ ] `pipeline/config_overlay.py` defines `ConfigOverlayToken` (exactly the six tokens),
+- [x] `pipeline/config_overlay.py` defines `ConfigOverlayToken` (exactly the six tokens),
       `ConfigOverlayError(ValueError)` with `.token`, `MAX_OVERLAY_BYTES = 1_048_576`,
       `read_overlay_file` and `merge_config_overlay`. Nothing in the module imports
       `retrieval_app`.
-- [ ] `read_overlay_file` maps each failure to its token:
+- [x] `read_overlay_file` maps each failure to its token:
   - missing path, directory or dangling symlink → `overlay_missing`;
   - permission denied (on stat or open), a 1 MiB + 1 byte file, non-UTF-8 bytes, invalid YAML,
     a duplicate key, a YAML alias, a `<<` merge key (with and without an alias), an unsafe tag
@@ -204,39 +204,39 @@ complete read, validation and merge contract with no lifespan or app involved.
   - a document that is `[]`, `0`, `false` or `''` → `overlay_not_mapping`.
 
   An empty or comments-only file returns `{}`.
-- [ ] For every refusal class in both functions, the **full formatted traceback**
+- [x] For every refusal class in both functions, the **full formatted traceback**
       (`"".join(traceback.format_exception(exc))`) contains neither a sentinel path nor a
       sentinel value, and `exc.__cause__ is None` and `exc.__suppress_context__ is True`.
       Do not assert `__context__ is None`; Python keeps it set under `from None`. The
       invalid-YAML case puts the sentinel value **inside** the malformed text (e.g. an
       unterminated `'SENTINELVAL`), because the raw `YAMLError` message quotes operator content.
-- [ ] Block keys merge leaf by leaf: `{"extraction": {"classification_concurrency": 2}}` over the
+- [x] Block keys merge leaf by leaf: `{"extraction": {"classification_concurrency": 2}}` over the
       baked file yields the baked `extraction` block with only that leaf changed; `cache: {}`
       changes nothing and sets no key
-- [ ] Non-block values replace outright, lists included: `seed_blocklist: [".example"]` yields
+- [x] Non-block values replace outright, lists included: `seed_blocklist: [".example"]` yields
       exactly that list, and `news_domains: []` yields `[]`
-- [ ] An unknown top-level key, an unknown leaf under a known block, a **dotted top-level key**
+- [x] An unknown top-level key, an unknown leaf under a known block, a **dotted top-level key**
       (`cache.max_entries`, `extraction.max_pages`), a non-string top-level key and a non-string
       block leaf key (`cache: {1: x}`) each raise `overlay_unknown_key`, never a raw `TypeError`
-- [ ] An unknown key matching the safe pattern appears in the message. Each of these appears only
+- [x] An unknown key matching the safe pattern appears in the message. Each of these appears only
       as `<unprintable key>`:
   - a **trailing** newline (`'foo\n'`);
   - an embedded newline (`'foo\n.bar'`);
   - uppercase;
   - punctuation;
   - more than 64 characters in a segment.
-- [ ] `None` at top level, as a block leaf, or as a list element raises `overlay_null_value`
-- [ ] `extraction: 5`, `promptguard_threshold: {a: 1}`, `user_agents: "x"` (base holds a list)
+- [x] `None` at top level, as a block leaf, or as a list element raises `overlay_null_value`
+- [x] `extraction: 5`, `promptguard_threshold: {a: 1}`, `user_agents: "x"` (base holds a list)
       and `promptguard_threshold: [1]` (base holds a scalar) each raise `overlay_shape_mismatch`.
       Over an empty base, `extraction: 5` still raises (block-ness from `known_keys`).
-- [ ] With several defects present, the first failing key in sorted order decides the token (one
+- [x] With several defects present, the first failing key in sorted order decides the token (one
       test with an unknown key sorting before a null)
-- [ ] `base` and `overlay` are unmodified after the call (deep equality with copies taken
+- [x] `base` and `overlay` are unmodified after the call (deep equality with copies taken
       before); `set_keys` is exactly the sorted dotted keys set
-- [ ] Tests written/updated for new functionality (new `tests/test_config_overlay.py`, added to
+- [x] Tests written/updated for new functionality (new `tests/test_config_overlay.py`, added to
       `kit_tools/testing/TESTING_GUIDE.md`'s `test_mapping` under `pipeline/config_overlay.py`)
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass with zero
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass with zero
       findings
 
 ### US-002: Apply the overlay at boot and log the keys
