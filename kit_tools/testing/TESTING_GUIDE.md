@@ -301,6 +301,7 @@ test_mapping:
   "model_fetcher.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]
   "weights_manifest.json": "tests/test_model_fetcher.py"
   "tests/fakes.py": ["tests/test_fakes.py", "tests/test_model_fetcher.py", "tests/test_app.py", "tests/test_brave_provider.py", "tests/test_stage5_url_audit.py", "tests/test_orchestrator.py"]
+  "pipeline/config_overlay.py": "tests/test_config_overlay.py"
   "pipeline/bounded_body.py": "tests/test_bounded_body.py"
   "pipeline/provider_transport.py": "tests/test_provider_transport.py"
   "pipeline/stage1_extraction.py": ["tests/test_stage1_extraction.py", "tests/test_inline_scan_form.py", "tests/test_visibility_pass.py", "tests/test_corpus_gate.py"]
