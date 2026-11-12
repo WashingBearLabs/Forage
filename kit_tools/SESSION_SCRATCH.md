@@ -110,3 +110,7 @@
 [--:--] config-overlay US-003: operator docs, compose recipes, decision record
 - Files: docs/configuration.md, releases.md, bootstrap-notes.md, compose/{minimal,full,gpu}.yml, kit_tools docs (ENV_REFERENCE, LOGGING, MONITORING, TROUBLESHOOTING, ERROR_HANDLING, DECISIONS, GOTCHAS, CODE_ARCH, LOCAL_DEV, DEPLOYMENT)
 - Decision: dotted names documented as log/refusal names only (module refuses dotted top-level keys); compose recipe fully commented
+
+[validate] validate-implementation feature-config-overlay.md: 0 critical / 0 warning / 5 info; pytest 5873 passed, ruff+pyright clean
+- Files: kit_tools/AUDIT_FINDINGS.md (gitignored)
+- Decision: no fixer, no pause; complete-implementation not invoked (epic run)
