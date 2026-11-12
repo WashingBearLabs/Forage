@@ -1279,4 +1279,4 @@ behaviour and needs its own decision. Precedence for `extract_route_enabled` is
 `FORAGE_EXTRACT_ROUTE_ENABLED`, overlay, base file, code default. No contract bump and no
 `sanitizer_revision` rotation: `retrieval_app.py` and `pipeline/config_overlay.py` are not hashed.
 
-**Source:** `kit_tools/specs/feature-config-overlay.md`.
+**Source:** `kit_tools/specs/archive/feature-config-overlay.md`.
