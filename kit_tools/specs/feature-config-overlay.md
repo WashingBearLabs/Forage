@@ -292,40 +292,40 @@ feature end to end without docs.
   default-config revision equals the current `HEAD` value.
 
 **Acceptance Criteria:**
-- [ ] With `FORAGE_CONFIG_OVERLAY` unset or blank, `_apply_config_overlay` returns its input
+- [x] With `FORAGE_CONFIG_OVERLAY` unset or blank, `_apply_config_overlay` returns its input
       object unchanged. A lifespan over the real `_load_config` yields `app.state.config` and both
       revision readers identical to the baked file's.
-- [ ] Over a monkeypatched base equal to the baked file, an overlay setting
+- [x] Over a monkeypatched base equal to the baked file, an overlay setting
       `extraction.classification_concurrency: 2` and `promptguard_threshold: 0.9` gives:
   - `app.state.extraction_settings.classification_concurrency == 2`;
   - `app.state.promptguard_threshold_default == 0.9`;
   - every other extraction value equal to the baked file's;
   - both revision readers equal to the revision of the equivalent full mapping.
-- [ ] Each of the six tokens refuses the boot through the lifespan: one parametrized test, with
+- [x] Each of the six tokens refuses the boot through the lifespan: one parametrized test, with
       the file-level cases built on disk. The formatted traceback contains neither the sentinel
       path nor a sentinel value, and no `caplog` record does either.
-- [ ] An applied overlay logs exactly one WARNING `config_overlay_applied — keys=<sorted dotted
+- [x] An applied overlay logs exactly one WARNING `config_overlay_applied — keys=<sorted dotted
       keys> count=<n>`. A comments-only overlay boots and logs `keys= count=0`. With no overlay,
       no such line is logged.
-- [ ] With a monkeypatched **empty** base (the base-file-missing path), an overlay containing
+- [x] With a monkeypatched **empty** base (the base-file-missing path), an overlay containing
       `extraction: {classification_concurrency: 2}` boots with
       `app.state.extraction_settings.classification_concurrency == 2`, every other extraction
       value at its code default, and the WARNING `config_overlay_applied —
       keys=extraction.classification_concurrency count=1`
-- [ ] An overlay value that a typed reader refuses (`extraction.classification_concurrency: 9`)
+- [x] An overlay value that a typed reader refuses (`extraction.classification_concurrency: 9`)
       refuses the boot through that reader's error type (`ExtractionConfigurationError`), not
       `ConfigOverlayError`. An overlay `promptguard_threshold: 1.5` boots, logs
       `config_invalid_value`, serves `0.85`, and has the same revision as an equivalent full
       mapping.
-- [ ] `FORAGE_EXTRACT_ROUTE_ENABLED=0` beats an overlay `extract_route_enabled: true`: the route
+- [x] `FORAGE_EXTRACT_ROUTE_ENABLED=0` beats an overlay `extract_route_enabled: true`: the route
       is closed and the log says `source=env`. With the variable unset, the overlay's `true` opens
       the route with `source=config`.
-- [ ] `FORAGE_CONFIG_OVERLAY` is in `tests/conftest.py::_CLEARED_ENV_VARS` and the
+- [x] `FORAGE_CONFIG_OVERLAY` is in `tests/conftest.py::_CLEARED_ENV_VARS` and the
       `tests/test_hermeticity.py` exact-set pin
-- [ ] Tests written/updated for new functionality (lifespan cases in `tests/test_app.py`, beside
+- [x] Tests written/updated for new functionality (lifespan cases in `tests/test_app.py`, beside
       the `FORAGE_EXTRACT_ROUTE_ENABLED` gate tests)
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass with zero
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass with zero
       findings
 
 ### US-003: Operator docs, compose recipe and the decision record
