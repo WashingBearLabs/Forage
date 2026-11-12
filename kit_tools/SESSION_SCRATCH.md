@@ -103,3 +103,6 @@
 - Gotcha: contract docstring entries may not carry publication state (test_docstring_entry_tense_has_no_publication_state)
 [20:10] v1.4.0 published 2026-10-11 (tag 49de6cc, run 38104861366, index sha256:d305bbbe…); candidate + published-image smokes CPU/GPU green; thelab cleaned (113G free); publication record PR
 [20:40] Closed epic-forage-inference-backends: spec 5 archived, epic wrapper completed, BACKLOG/MILESTONES updated, 3 GOTCHAS added, parked findings merged into AUDIT_FINDINGS.md (spec4/epic IDs +12; 020/021 resolved), test count 5766
+[20:09] config-overlay US-002: _apply_config_overlay wired into lifespan after _load_config; WARNING config_overlay_applied; tests in test_app.py
+- Files: retrieval_app.py, tests/test_app.py, tests/conftest.py, tests/test_hermeticity.py
+- Decision: no rotation (retrieval_app unhashed); formatter rewraps lines so inline pyright-ignore removal needs a re-grep
