@@ -5,7 +5,7 @@ already emits **without changing one wire byte**. Two halves make that claim
 checkable rather than asserted:
 
 * the *vocabulary* half sweeps every raise site in the repo and pins the
-  eighteen-code set against Poppy's independently-maintained allowlist;
+  nineteen-code set against Poppy's independently-maintained allowlist;
 * the *parity* half drives each emission site through the real routes and
   asserts the mirroring model reproduces the emitted body byte-for-byte —
   same keys, same order, same serialization.
@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
+import io
 import json
 import logging
 from collections.abc import Iterator, Sequence
@@ -35,7 +36,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
@@ -66,6 +67,7 @@ from retrieval_app import (
     Pipeline422ErrorResponse,
     RateLimit429Response,
     RetrieveMetrics,
+    RouteDisabled404Response,
     SearchMetrics,
     app,
 )
@@ -180,7 +182,7 @@ def _assert_validation_mirror(response: httpx.Response) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The vocabulary: eighteen codes, swept from the raise sites
+# The vocabulary: nineteen codes, swept from the raise sites
 # ---------------------------------------------------------------------------
 
 # Calls whose error code can be read straight off the call site. The value is
@@ -251,20 +253,20 @@ def _swept_error_codes(module_path: Path) -> set[str]:
     return found
 
 
-def test_error_vocabulary_is_the_documented_eighteen() -> None:
-    """The complete vocabulary is eighteen codes across the three surfaces."""
-    assert len(contract.ERROR_CODES) == 18
+def test_error_vocabulary_is_the_documented_nineteen() -> None:
+    """The complete vocabulary is nineteen codes across the three surfaces."""
+    assert len(contract.ERROR_CODES) == 19
     assert contract.ERROR_CODES == (
         contract.EXTRACT_ERROR_CODES
         | contract.RETRIEVE_ERROR_CODES
         | contract.SEARCH_ERROR_CODES
     )
-    assert len(contract.EXTRACT_ERROR_CODES) == 10
+    assert len(contract.EXTRACT_ERROR_CODES) == 11
     assert len(contract.RETRIEVE_ERROR_CODES) == 8
     assert len(contract.SEARCH_ERROR_CODES) == 3
     # `content_too_large`, `extraction_failed` and `busy` are the three codes
-    # two surfaces share, and they are why 10 + 8 + 3 documents eighteen codes
-    # rather than twenty-one.
+    # two surfaces share, and they are why 11 + 8 + 3 documents nineteen codes
+    # rather than twenty-two.
     assert {
         "busy",
         "content_too_large",
@@ -303,22 +305,36 @@ def test_every_raise_site_in_the_repo_is_in_the_vocabulary() -> None:
 
 
 def test_extract_surface_matches_the_orchestrator_taxonomy() -> None:
-    """The ten /extract codes are the seven document failures plus three."""
+    """The eleven /extract codes are the seven document failures plus four."""
     assert DOCUMENT_FAILURE_CODES < contract.EXTRACT_ERROR_CODES
     assert {
         "invalid_filename",
         "invalid_mime_hint",
         "invalid_request_id",
+        "route_disabled",
     } == contract.EXTRACT_ERROR_CODES - DOCUMENT_FAILURE_CODES
     # `busy` is the one /extract code the 422 handler never emits on /extract:
     # there it answers 429. The same literal is a /retrieve code, answered 422
     # there — the handler picks the status by route and code together.
-    assert {"busy"} == contract.EXTRACT_ERROR_CODES - contract.EXTRACT_422_ERROR_CODES
+    # `route_disabled` is the release gate's 404 and never reaches the handler.
+    assert {
+        "busy",
+        "route_disabled",
+    } == contract.EXTRACT_ERROR_CODES - contract.EXTRACT_422_ERROR_CODES
 
 
 def test_extract_vocabulary_matches_poppys_pinned_allowlist() -> None:
-    """Forage's /extract codes are exactly the set Poppy's client accepts."""
-    assert contract.EXTRACT_ERROR_CODES == _POPPY_PINNED_EXTRACT_FAILURE_CODES
+    """Forage's /extract codes are the set Poppy's client accepts, plus the 404.
+
+    ``route_disabled`` (contract 1.6.0) is the release-gate 404's code, not a
+    document failure Poppy validates a 422 against. It is carved out here
+    rather than added to the verbatim copy, which changes only when Poppy's
+    file does; the 1.6.0 consumer note asks Poppy to add it.
+    """
+    assert (
+        contract.EXTRACT_ERROR_CODES - {"route_disabled"}
+        == _POPPY_PINNED_EXTRACT_FAILURE_CODES
+    )
 
 
 def test_degraded_reasons_derive_from_one_source() -> None:
@@ -510,7 +526,7 @@ async def test_extract_429_body_is_mirrored() -> None:
 
 
 async def test_extract_404_body_is_mirrored() -> None:
-    """`/extract` 404: the release gate answers the bare detail shape."""
+    """`/extract` 404: the release gate keeps `detail` and adds its code (1.6.0)."""
     _configure_app({})
     async with _client() as client:
         response = await client.post(
@@ -520,8 +536,37 @@ async def test_extract_404_body_is_mirrored() -> None:
         )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Not Found"}
-    assert_mirrors(DetailResponse, response)
+    assert response.json() == {
+        "detail": "Not Found",
+        "error": "route_disabled",
+        "reason": contract.ROUTE_DISABLED_REASON,
+    }
+    assert_mirrors(RouteDisabled404Response, response)
+
+
+async def test_extract_handler_backstop_404_matches_the_middleware() -> None:
+    """The handler's own gate check answers the same bytes as the middleware."""
+    _configure_app({})
+    request = Request(
+        {
+            "type": "http",
+            "app": app,
+            "method": "POST",
+            "path": "/extract",
+            "headers": [],
+        }
+    )
+    upload = UploadFile(file=io.BytesIO(b"safe"), filename="document.txt")
+    response = await retrieval_app.extract(
+        request, file=upload, filename="document.txt"
+    )
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 404
+    assert json.loads(bytes(response.body)) == {
+        "detail": "Not Found",
+        "error": "route_disabled",
+        "reason": contract.ROUTE_DISABLED_REASON,
+    }
 
 
 async def test_extract_503_body_is_mirrored() -> None:
@@ -1131,7 +1176,7 @@ def test_each_declaration_points_at_its_mirror_model() -> None:
         "$ref": "#/components/schemas/DetailResponse"
     }
     assert schema_for("/extract", "404") == {
-        "$ref": "#/components/schemas/DetailResponse"
+        "$ref": "#/components/schemas/RouteDisabled404Response"
     }
     assert schema_for("/extract", "503") == {
         "$ref": "#/components/schemas/DetailResponse"
@@ -1153,7 +1198,7 @@ def test_each_declaration_points_at_its_mirror_model() -> None:
         ]
 
 
-def test_all_eighteen_codes_render_as_enums_in_the_schema() -> None:
+def test_all_nineteen_codes_render_as_enums_in_the_schema() -> None:
     """Every code reaches the document as an enum member of some component."""
     components: dict[str, Any] = _openapi()["components"]["schemas"]
     rendered: set[str] = set()
@@ -1162,6 +1207,7 @@ def test_all_eighteen_codes_render_as_enums_in_the_schema() -> None:
         "Pipeline422ErrorResponse",
         "Admission413Response",
         "RateLimit429Response",
+        "RouteDisabled404Response",
     ):
         error_schema: dict[str, Any] = components[name]["properties"]["error"]
         # A single-member Literal renders as `const`, more than one as `enum`.
@@ -1206,6 +1252,9 @@ def test_degraded_reasons_and_dict_vocabularies_are_documented() -> None:
     )
     assert (
         retrieval_app.CAPABILITY_CACHE_HMAC_KEY in health["capabilities"]["description"]
+    )
+    assert (
+        retrieval_app.CAPABILITY_EXTRACT_ROUTE in health["capabilities"]["description"]
     )
 
     omitted: dict[str, Any] = components["SearchResponse"]["properties"][

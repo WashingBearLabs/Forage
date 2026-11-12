@@ -26,7 +26,7 @@ response, and does every name it already knows still mean what it meant?
 | Schema fixtures | `tests/golden/contract_X_Y_Z.json` | by hand, one per contract version |
 | What the running service serves | `/openapi.json` `info.version`, `/health`'s `contract_version` | from `CONTRACT_VERSION` at import |
 
-The current contract version is **1.5.0**. *(That sentence is checked against
+The current contract version is **1.6.0**. *(That sentence is checked against
 `pipeline/contract.py` by `tests/test_governance_docs.py`; a bump that leaves it stale is
 a red test, not a stale doc.)*
 
@@ -72,10 +72,11 @@ The last published mapping is image `v1.4.0` (2026-10-11, verified): contract `1
 carries 1.4.0 too (image `v1.3.0` was never published, owner ruling 2026-10-10). Before it,
 image `v1.2.2` (2026-10-04, verified) served contract `1.3.0`, unchanged from `v1.2.1`. Both "next MINOR" windows are **closed in 1.4.0** (2026-10-07): ruling (g)'s
 `retrieve.max_promptguard_chunks` flip (to `64`) and ruling (l)'s validation-422 key drop.
-**No compatibility window is open.** A process built from this tree reports `1.5.0` on
-`/health` (the `inference-surface` MINOR, published in `v1.4.0`: the device fields and two degraded
-reasons; `contract_1_4_0.json` is now frozen beside `contract_1_5_0.json`). Image `v1.0.0`
-serving contract `1.5.0` is not a mapping that exists; the example above stays the one that shows
+**No compatibility window is open.** A process built from this tree reports `1.6.0` on
+`/health` (the unpublished `extract-route-env` MINOR: `/extract`'s 404 gains `error:
+route_disabled` and `/health` capabilities gains `extract_route`; `contract_1_5_0.json`, published
+in `v1.4.0`, is frozen beside `contract_1_6_0.json`). Image `v1.0.0`
+serving contract `1.6.0` is not a mapping that exists; the example above stays the one that shows
 the two semvers diverging.
 
 A human line in a release note claiming "this image serves contract 1.1.0" would be the

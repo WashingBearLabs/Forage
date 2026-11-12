@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
-CONTRACT_VERSION = "1.5.0"
+CONTRACT_VERSION = "1.6.0"
 """The retrieval sidecar's wire-shape version, carried on ``/health``.
 
 Bump MAJOR when a field is removed/renamed or its semantics change; bump
@@ -217,6 +217,18 @@ MINOR when fields are only added.
   ``effective_batch_size`` (windows per GPU forward pass; ``null`` on ``cpu`` or
   without a snapshot); all additive. A consumer moving from 1.3.0 takes the
   1.4.0 and 1.5.0 entries together: both ship in the same image.
+* ``1.6.0`` — ``POST /extract``'s release-gate 404 gains ``error``
+  (``route_disabled``, a new member of the error vocabulary, now nineteen codes)
+  and a fixed ``reason`` beside the unchanged ``detail: "Not Found"``, so a
+  disabled route is distinguishable from a missing one; it is not retryable
+  without an operator restart. ``GET /health``'s ``capabilities`` gains
+  ``extract_route``, present with the value 1 when this start resolved the
+  route enabled and absent otherwise. The gate itself can now be set with
+  ``FORAGE_EXTRACT_ROUTE_ENABLED`` (``1`` or ``0``, overriding
+  ``extract_route_enabled`` in ``config.yaml``; any other value refuses the
+  boot). Every change is additive; a consumer comparing MAJOR keeps working
+  untouched, and one that pins the ``/extract`` code set must add
+  ``route_disabled``.
 
 This is distinct from ``sanitizer_revision``
 (``pipeline/sanitizer_revision.py``, already on ``/health``, cached by Poppy
@@ -394,6 +406,22 @@ The same code also reaches the 422 handler when the post-multipart bounded
 read trips ``_spool_upload``'s cap — one code, two statuses, two body shapes.
 """
 
+RouteDisabled404ErrorCode = Literal["route_disabled"]
+"""The single code ``/extract`` emits at 404 (contract ``1.6.0``).
+
+The release gate is closed: ``extract_route_enabled`` (or
+``FORAGE_EXTRACT_ROUTE_ENABLED``) resolved false at start. Emitted by
+``ExtractionAdmissionMiddleware`` before the body is read, with the handler as
+a backstop, always beside ``detail: "Not Found"`` so a consumer that read only
+``detail`` keeps working. Permanent for the life of the process: retrying does
+not help, and ``/health``'s ``capabilities`` omits ``extract_route``.
+"""
+
+ROUTE_DISABLED_REASON = (
+    "The /extract route is disabled for this deployment; "
+    "the operator must enable it and restart the service."
+)
+
 RateLimit429ErrorCode = Literal["busy"]
 """The single code ``/extract`` emits at 429, from ``ExtractionAdmissionMiddleware``.
 
@@ -405,10 +433,11 @@ together, never by code alone.
 
 ExtractErrorCode = Literal[
     Extract422ErrorCode,
+    RouteDisabled404ErrorCode,
     Admission413ErrorCode,
     RateLimit429ErrorCode,
 ]
-"""The complete ``/extract`` surface vocabulary — ten codes across 413/422/429.
+"""The complete ``/extract`` surface vocabulary — eleven codes across 404/413/422/429.
 
 This is the set Poppy's client pins as ``_SIDECAR_EXTRACT_FAILURE_CODES``
 (``poppy/core/retrieval/client.py``); ``tests/test_contract_errors.py`` inlines
@@ -505,11 +534,11 @@ ErrorCode = Literal[
     ExtractErrorCode,
     Pipeline422ErrorCode,
 ]
-"""Every error code the service can put on the wire — eighteen, deduplicated.
+"""Every error code the service can put on the wire — nineteen, deduplicated.
 
-Ten ``/extract`` codes, plus the five ``/retrieve``-only refusals
-(``content_too_large``, ``busy`` and ``extraction_failed`` are shared), plus
-the three ``/search`` codes.
+Eleven ``/extract`` codes (``route_disabled`` joined in contract ``1.6.0``),
+plus the five ``/retrieve``-only refusals (``content_too_large``, ``busy`` and
+``extraction_failed`` are shared), plus the three ``/search`` codes.
 """
 
 ERROR_CODES = frozenset(get_args(ErrorCode))

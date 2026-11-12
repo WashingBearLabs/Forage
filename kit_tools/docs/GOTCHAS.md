@@ -729,7 +729,7 @@ the pass-list advice; the baked image still ships `limiter: false`.
 forty-seventh rotation) plus repo-root `url_validator.py` — plus the model identity, the
 `idna` version (`idna@<version>`: UTS-46 tables decide which hosts are dropped), the
 `unicodedata` version (`unicodedata@<version>`: NFKC's tables decide what the fold forms
-see) and the active threshold. Forage's revision has moved sixty-four times. The twenty-sixth was
+see) and the active threshold. Forage's revision has moved sixty-five times. The twenty-sixth was
 reconciled from the preceding validation commit during US-001's pre-flight; the rest
 were recorded at their implementation boundaries:
 
@@ -800,11 +800,12 @@ were recorded at their implementation boundaries:
 | `inference-surface` US-002 | `2384820b…` | Sixty-second, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.5.0 entry names `/metrics.model` `device_failovers`, `oom_batch_reductions`, `oom_refusals`, `effective_batch_size`). A read-only whole-file reversal against `fd10964` reproduces `396ea4bf…` under default, `config.yaml` and `bench/config.yaml`. `retrieval_app.py` and `promptguard/classifier.py` are not hashed. |
 | `inference-surface` US-003 | `02f7abcf…` | Sixty-third, **not a sanitization-behaviour change at shipped defaults**: only `orchestrator.py` moves (active device in `cache_policy_fingerprint`, step 8 skips the write if it changed). A read-only reversal against `3acbb81` reproduces `2384820b…` under default, `config.yaml` and `bench/config.yaml`. The `device@cuda` revision input is a no-rotation for cpu (`sanitizer_revision.py` is unhashed); cuda is `280511c1…`. |
 | `gpu-validation` US-005 | `a9beacbc…` | Sixty-fourth, **not a sanitization-behaviour change**: only `contract.py` moves (the 1.5.0 entry is finalised with its consumer note: 1.4.0 and 1.5.0 are taken together). A read-only whole-file reversal against `c8f198a` reproduces `02f7abcf…` under default, `config.yaml` and `bench/config.yaml`; cuda `280511c1…` → `cff06f97…`. |
+| `extract-route-env` | `e61c960e…` | Sixty-fifth, **not a sanitization-behaviour change**: only `contract.py` moves (contract `1.6.0`: `/extract`'s 404 gains `error: route_disabled`, `/health` capabilities gains `extract_route`). A read-only whole-file reversal against `HEAD` reproduces `a9beacbc…` under default, `config.yaml` and `bench/config.yaml`; cuda `cff06f97…` → `a9ed1b4a…`. `extraction_limits.py` (the `FORAGE_EXTRACT_ROUTE_ENABLED` override) and `retrieval_app.py` are not hashed. |
 
 Poppy's in-tree copy stayed on the original value throughout. Four of the eight sources (audit-measured 2026-09-11: contract.py, stage1_extraction.py, stage2_structural.py and orchestrator.py all differ now; an earlier count said five)
 are still byte-identical between the repos; the revision is not.
 
-**Forty-two of the sixty-four rotations changed no sanitization policy or algorithm at shipped defaults; the
+**Forty-three of the sixty-five rotations changed no sanitization policy or algorithm at shipped defaults; the
 fifteenth, sixteenth, eighteenth and nineteenth (`hardening-search-sanitization`
 US-001, US-002, US-003 and its validation fix) and the twenty-seventh
 through thirtieth (`hardening-hostname-and-config` US-001, US-007, US-002 and US-005),

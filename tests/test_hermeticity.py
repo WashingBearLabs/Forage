@@ -139,6 +139,7 @@ def test_the_cleared_environment_is_the_expected_exact_set() -> None:
         "FORAGE_CACHE_HMAC_KEY",
         "FORAGE_DEVICE",
         "FORAGE_DEVICE_FALLBACK",
+        "FORAGE_EXTRACT_ROUTE_ENABLED",
     }
 
 

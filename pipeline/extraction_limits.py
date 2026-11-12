@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pipeline.config_bounds import bounded_int
 from promptguard.classifier import (
@@ -54,6 +54,13 @@ _MIN_CHILD_ADDRESS_SPACE_BYTES = 128 * MEBIBYTE
 _MAX_CHILD_ADDRESS_SPACE_BYTES = 512 * MEBIBYTE
 _MAX_ADMISSION_QUEUE_DEPTH = 4
 _MAX_CLASSIFICATION_CONCURRENCY = 8
+
+# The one environment override for a `config.yaml` key. Exact `"1"` / `"0"`
+# after stripping whitespace; empty or unset defers to `config.yaml`, then to
+# the closed default. Any other value refuses the boot, because an operator who
+# wrote `true` meaning "on" must not silently get the route left closed.
+EXTRACT_ROUTE_ENV_VAR = "FORAGE_EXTRACT_ROUTE_ENABLED"
+ExtractRouteSource = Literal["env", "config", "default"]
 
 
 class ExtractionConfigurationError(ValueError):
@@ -106,11 +113,44 @@ class ExtractionSettings:
         return min(MAX_EXTRACTED_OUTPUT_BYTES, self.max_extracted_characters * 4)
 
 
-def extraction_settings_from_config(config: dict[str, Any]) -> ExtractionSettings:
-    """Build bounded extraction settings from the sidecar configuration."""
-    route_enabled = config.get("extract_route_enabled", False)
-    if not isinstance(route_enabled, bool):
+def resolve_extract_route(
+    config: Mapping[str, Any], environ: Mapping[str, str]
+) -> tuple[bool, ExtractRouteSource]:
+    """Resolve the ``/extract`` release gate and say where the value came from.
+
+    Precedence is ``FORAGE_EXTRACT_ROUTE_ENABLED``, then ``config.yaml``'s
+    ``extract_route_enabled``, then ``False``. The config key is validated even
+    when the environment overrides it, so a malformed file never boots on the
+    strength of an override that may later be removed. Neither refusal echoes
+    the offending value.
+    """
+    present = "extract_route_enabled" in config
+    configured: object = config.get("extract_route_enabled", False)
+    if not isinstance(configured, bool):
         raise ExtractionConfigurationError("extract_route_enabled must be a boolean")
+    raw = environ.get(EXTRACT_ROUTE_ENV_VAR, "").strip()
+    if raw == "1":
+        return True, "env"
+    if raw == "0":
+        return False, "env"
+    if raw:
+        raise ExtractionConfigurationError(
+            f"{EXTRACT_ROUTE_ENV_VAR} must be '1' or '0'"
+        )
+    return configured, "config" if present else "default"
+
+
+def extraction_settings_from_config(
+    config: dict[str, Any], *, route_enabled: bool | None = None
+) -> ExtractionSettings:
+    """Build bounded extraction settings from the sidecar configuration.
+
+    ``route_enabled`` is the value ``resolve_extract_route`` already resolved
+    (environment included). ``None`` reads ``config.yaml`` alone, which is what
+    the module-level fallback and the ``/retrieve`` controller's shape want.
+    """
+    if route_enabled is None:
+        route_enabled, _ = resolve_extract_route(config, {})
 
     raw_extraction_config = config.get("extraction", {})
     if not isinstance(raw_extraction_config, dict):

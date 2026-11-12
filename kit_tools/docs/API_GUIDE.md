@@ -334,8 +334,12 @@ strict UTF-8 text. Uploads are always treated as tier `untrusted` with fail-clos
 scanning; there is no caller-controlled trust policy on this route. Never cached.
 
 **Gate.** The route ships disabled: `config.yaml` `extract_route_enabled: false` makes it
-answer 404 `{"detail": "Not Found"}` before any parsing. Set it to `true` to enable
-(`docs/configuration.md`).
+answer 404 `{"detail": "Not Found", "error": "route_disabled", "reason": "..."}` before any
+parsing (`error` and `reason` since contract 1.6.0; `detail` is unchanged). Enable it with
+`FORAGE_EXTRACT_ROUTE_ENABLED=1` or `extract_route_enabled: true`, then restart
+(`docs/configuration.md`). Check `/health`'s `capabilities.extract_route` once rather than
+probing: present means open. A `route_disabled` 404 is permanent for that process — do not
+retry it.
 
 Form fields (from the handler signature in `retrieval_app.py`):
 
@@ -446,9 +450,10 @@ by the code.
 | Extract 422 | `/extract` 422 | `{"error", "reason", "request_id", "sanitizer_revision"}`. `reason` is a fixed string from a closed vocabulary |
 | Admission 429 | `/extract` 429 | `{"error": "busy", "reason", "request_id", "sanitizer_revision"}`, minted by the middleware |
 | Admission 413 | `/extract` 413 (unreachable today) | `{"error": "content_too_large", "reason"}`, no `request_id` |
-| Bare detail | `/extract` 400, 404, 503 | `{"detail": "..."}` with no error code. Schema-validation failures on any POST are FastAPI's default `detail` list of `loc`, `msg`, `type` entries |
+| Route disabled | `/extract` 404 | `{"detail": "Not Found", "error": "route_disabled", "reason"}`, no `request_id` (contract 1.6.0) |
+| Bare detail | `/extract` 400, 503 | `{"detail": "..."}` with no error code. Schema-validation failures on any POST are FastAPI's default `detail` list of `loc`, `msg`, `type` entries |
 
-Every coded body's `error` is one of the eighteen codes below and nothing else
+Every coded body's `error` is one of the nineteen codes below and nothing else
 (`pipeline/contract.py` `ERROR_CODES`; `tests/test_contract_errors.py` drives each
 emission site through the real routes and asserts parity).
 
@@ -472,6 +477,7 @@ emission site through the real routes and asserts parity).
 | `pdf_encrypted` | 422 | `/extract` | Encrypted PDF |
 | `pdf_no_text` | 422 | `/extract` | No extractable text; OCR is not supported |
 | `private_ip` | 422 | `/retrieve` | Resolves to a private or reserved address, `localhost` or a `.local` name |
+| `route_disabled` | 404 | `/extract` | The release gate is closed for this process (`FORAGE_EXTRACT_ROUTE_ENABLED` / `extract_route_enabled`). Not retryable. Added in `1.6.0` |
 | `search_unavailable` | 422 | `/search` | Three reason forms: `<provider_name>: <failure_class>` when the configured provider chain failed and is not a lone `searxng`; `policy_excluded_all_providers` when `providers` / `allow_paid_fallback` narrowed the chain to empty; or `policy_domain_list_too_large` when caller `blocked_domains` exceeded the byte budget. Both policy refusals occur before any provider call and are permanent client errors, **not retryable** without changing the request or configured policy/budget; distinguish them by `reason`, not the code alone. Code added in `1.2.0`, domain-policy refusal in `1.3.0` |
 | `searxng_error` | 422 | `/search` | SearXNG returned a non-2xx status (a lone `searxng` chain only) |
 | `searxng_unavailable` | 422 | `/search` | SearXNG unreachable, timed out, or returned bad JSON (a lone `searxng` chain only) |
@@ -520,7 +526,7 @@ in-tree copy and says nothing about wire compatibility. The image tag (for examp
 CI verifies two of the three on every release: the `smoke` job reads the in-image copy
 back out of the candidate image, and the `publish` job downloads the Release assets back
 from the API; both are checked against the anchor committed at the tag (currently
-`9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`).
+`8fa753beb3decaef8454bab0c430f590083bcce0d855bc77cd3c01aca8637d90`).
 
 **Vendoring procedure** (`contract/GOVERNANCE.md` "Consumers"):
 

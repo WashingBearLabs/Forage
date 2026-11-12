@@ -62,12 +62,14 @@ from pipeline.contract import (
 )
 from pipeline.extraction_limits import (
     CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL,
+    EXTRACT_ROUTE_ENV_VAR,
     MAX_PROMPTGUARD_CHUNKS,
     MEBIBYTE,
     PARENT_RESERVATION_BYTES,
     PROVISIONAL_CLASSIFIER_WORKING_SET_BYTES,
     ExtractionConfigurationError,
     extraction_settings_from_config,
+    resolve_extract_route,
 )
 from pipeline.orchestrator import PipelineError
 from pipeline.retrieve_limits import (
@@ -694,6 +696,7 @@ async def test_extract_release_gate_returns_404_when_disabled(
     )
 
     assert response.status_code == 404
+    assert response.json()["error"] == "route_disabled"
 
 
 async def test_extract_benign_text_over_classification_budget_is_not_injection(
@@ -2367,7 +2370,7 @@ async def test_lifespan_memory_rule_counts_configured_terms_once(
             f"envelope_memory_rule_unmet — memory_max={limit} "
             f"required={required_mib * MEBIBYTE} "
             f"classification_concurrency={settings.classification_concurrency} "
-            "extraction_concurrency=1 "
+            "worker_count=1 extract_route_enabled=0 "
             f"child_address_space_bytes={settings.child_address_space_bytes} "
             f"model_id={model_id} parent_bytes={(512 + delta_mib) * MEBIBYTE} "
             f"cache_backend=memory cache_term_bytes={cache_settings.max_bytes}"
@@ -3948,7 +3951,8 @@ async def test_lifespan_memory_rule_counts_one_bounded_valkey_read(
         assert warnings[0].getMessage() == (
             f"envelope_memory_rule_unmet — memory_max={1024 * MEBIBYTE} "
             f"required={required_mib * MEBIBYTE} "
-            f"classification_concurrency={concurrency} extraction_concurrency=1 "
+            f"classification_concurrency={concurrency} worker_count=1 "
+            "extract_route_enabled=0 "
             f"child_address_space_bytes={384 * MEBIBYTE} "
             f"model_id={PROMPT_GUARD_22M_ID} "
             f"parent_bytes={512 * MEBIBYTE} cache_backend=valkey "
@@ -3992,6 +3996,169 @@ async def test_shipped_memory_envelope_is_silent(
             assert app.state.cache_settings.max_bytes == 32 * MEBIBYTE
             assert (await client.get("/health")).status_code == 200
     assert "envelope_memory_rule_unmet" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FORAGE_EXTRACT_ROUTE_ENABLED: the release gate from the environment (1.6.0)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("config", "env", "expected"),
+    [
+        ({}, None, (False, "default")),
+        ({"extract_route_enabled": False}, None, (False, "config")),
+        ({"extract_route_enabled": True}, None, (True, "config")),
+        ({}, "1", (True, "env")),
+        ({"extract_route_enabled": False}, "1", (True, "env")),
+        ({"extract_route_enabled": True}, "0", (False, "env")),
+        ({}, " 1\n", (True, "env")),
+        ({"extract_route_enabled": True}, "", (True, "config")),
+        ({"extract_route_enabled": True}, "   ", (True, "config")),
+    ],
+)
+def test_extract_route_precedence_is_env_then_config_then_closed(
+    config: dict[str, Any], env: str | None, expected: tuple[bool, str]
+) -> None:
+    environ = {} if env is None else {EXTRACT_ROUTE_ENV_VAR: env}
+    assert resolve_extract_route(config, environ) == expected
+
+
+@pytest.mark.parametrize(
+    "value", ["true", "TRUE", "yes", "on", "false", "2", "-1", "01", "1 0"]
+)
+def test_an_invalid_extract_route_env_value_refuses_without_echoing_it(
+    value: str,
+) -> None:
+    """Anything but exact 1/0 refuses: "true" must not quietly mean closed."""
+    with pytest.raises(ExtractionConfigurationError) as excinfo:
+        resolve_extract_route(
+            {"extract_route_enabled": True}, {EXTRACT_ROUTE_ENV_VAR: value}
+        )
+    assert str(excinfo.value) == "FORAGE_EXTRACT_ROUTE_ENABLED must be '1' or '0'"
+
+
+@pytest.mark.parametrize("configured", ["yes", None, 1, 0])
+def test_a_malformed_config_gate_refuses_even_under_an_env_override(
+    configured: object,
+) -> None:
+    with pytest.raises(ExtractionConfigurationError):
+        resolve_extract_route(
+            {"extract_route_enabled": configured}, {EXTRACT_ROUTE_ENV_VAR: "1"}
+        )
+
+
+def test_settings_without_an_override_read_config_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The module-level and /retrieve-controller callers never read the env."""
+    monkeypatch.setenv(EXTRACT_ROUTE_ENV_VAR, "1")
+    assert extraction_settings_from_config({}).route_enabled is False
+    assert extraction_settings_from_config({}, route_enabled=True).route_enabled is True
+
+
+async def test_lifespan_refuses_an_invalid_extract_route_env_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    empty: dict[str, Any] = {}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: empty)
+    monkeypatch.setenv(EXTRACT_ROUTE_ENV_VAR, "true")
+    with pytest.raises(ExtractionConfigurationError):
+        async with lifespan(FastAPI()):
+            pytest.fail("an invalid FORAGE_EXTRACT_ROUTE_ENABLED reached serving")
+
+
+@pytest.mark.parametrize(
+    ("config", "env", "enabled", "source"),
+    [
+        ({}, "1", True, "env"),
+        ({"extract_route_enabled": True}, "0", False, "env"),
+        ({"extract_route_enabled": True}, None, True, "config"),
+        ({}, None, False, "default"),
+    ],
+)
+async def test_the_resolved_gate_reaches_health_the_route_and_the_boot_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config: dict[str, Any],
+    env: str | None,
+    enabled: bool,
+    source: str,
+) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: config)
+    if env is not None:
+        monkeypatch.setenv(EXTRACT_ROUTE_ENV_VAR, env)
+    with caplog.at_level(logging.INFO, logger="retrieval_app"):
+        async with _running_app() as client:
+            assert app.state.extraction_settings.route_enabled is enabled
+            health = (await client.get("/health")).json()
+            response = await client.post(
+                "/extract",
+                files={"file": ("document.txt", b"safe", "text/plain")},
+                data={"filename": "document.txt"},
+            )
+
+    assert ("extract_route" in health["capabilities"]) is enabled
+    if enabled:
+        assert health["capabilities"]["extract_route"] == 1
+        assert response.status_code != 404
+    else:
+        assert response.status_code == 404
+        assert response.json()["error"] == "route_disabled"
+    records = [
+        r for r in caplog.records if r.getMessage().startswith("extract_route_resolved")
+    ]
+    assert len(records) == 1
+    assert records[0].levelno == (logging.WARNING if enabled else logging.INFO)
+    assert records[0].getMessage() == (
+        f"extract_route_resolved — enabled={int(enabled)} source={source} "
+        "env_var=FORAGE_EXTRACT_ROUTE_ENABLED"
+    )
+
+
+@pytest.mark.parametrize(
+    ("enabled", "limit_mib", "warns"),
+    [(False, 1536, False), (True, 1536, True), (True, 3072, False)],
+    ids=["closed-at-compose-default", "open-at-compose-default", "open-at-3-gib"],
+)
+async def test_memory_rule_counts_the_upload_worker_only_while_the_route_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    enabled: bool,
+    limit_mib: int,
+    warns: bool,
+) -> None:
+    """Default 86M, memory cache: 512 + 405 + 64 + N x 384 + 32 MiB.
+
+    One worker (/retrieve's) is 1 397 MiB and fits the compose default of
+    1 536 MiB; opening uploads adds the second for 1 781 MiB, which does not.
+    """
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+    monkeypatch.setenv(EXTRACT_ROUTE_ENV_VAR, "1" if enabled else "0")
+    with patch.object(
+        retrieval_app,
+        "_cgroup_memory_snapshot",
+        return_value={"cgroup_memory_max_bytes": limit_mib * MEBIBYTE},
+    ):
+        async with _running_app() as client:
+            assert app.state.cache_backend == "memory"
+            assert (await client.get("/health")).status_code == 200
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if "envelope_memory_rule_unmet" in r.getMessage()
+    ]
+    assert len(warnings) == int(warns)
+    if warns:
+        assert f"required={1781 * MEBIBYTE} " in warnings[0]
+        assert "worker_count=2 extract_route_enabled=1 " in warnings[0]
 
 
 def test_only_a_fully_unset_valkey_url_reads_as_absent(

@@ -237,9 +237,12 @@ async def test_a_raised_running_wall_clock_does_not_widen_the_gate(
 ) -> None:
     """Even a running value above the bound leaves the gate at the bound."""
 
-    def raised(config: dict[str, Any]) -> ExtractionSettings:
+    def raised(
+        config: dict[str, Any], *, route_enabled: bool | None = None
+    ) -> ExtractionSettings:
         return dataclasses.replace(
-            extraction_settings_from_config(config), wall_clock_seconds=3600
+            extraction_settings_from_config(config, route_enabled=route_enabled),
+            wall_clock_seconds=3600,
         )
 
     monkeypatch.setattr(retrieval_app, "extraction_settings_from_config", raised)

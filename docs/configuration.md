@@ -110,6 +110,7 @@ instance is private-network-only and Forage is its only client.
 | `POPPY_RETRIEVAL_LEGACY_CAPABILITY` | unset | Deprecated alias of `FORAGE_BREAK_GLASS_ADVERTISE_SANITIZATION`, kept so a pre-extraction deployment keeps working. Identical semantics. |
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
 | `HF_TOKEN` | unset | Hugging Face access token for the **gated** repository of the selected model — `meta-llama/Llama-Prompt-Guard-2-86M` by default, `meta-llama/Llama-Prompt-Guard-2-22M` if `FORAGE_MODEL_ID` selects it. Meta grants access per repository: the token needs the grant for the model you actually run. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
+| `FORAGE_EXTRACT_ROUTE_ENABLED` | unset | Opens (`1`) or closes (`0`) the `POST /extract` release gate, overriding `config.yaml`'s [`extract_route_enabled`](#top-level-keys) without copying the whole file. Exactly `1` or `0` after stripping whitespace; unset or blank defers to `config.yaml`, then to closed. **Any other value (`true`, `yes`, …) refuses boot** with `ExtractionConfigurationError`, never echoing the value, so a typo cannot silently leave the route closed. Boot logs `extract_route_resolved — enabled=<0/1> source=<env/config/default>` (WARNING when open, INFO when closed); `/health` advertises `capabilities.extract_route` when open. **Open means reachable by anything on the network — there is no authentication** — and costs a second worker in the [memory rule](#memory-rule). Both Compose fragments pass it through as a bare name. Restart to apply. |
 | `FORAGE_DEVICE` | `cpu` | Where the classifier runs: `cpu` or `cuda`, case-insensitive; blank is unset. Invalid values refuse boot with `DeviceConfigurationError`, never echoing the value. See [Device selection](#device-selection). |
 | `FORAGE_DEVICE_FALLBACK` | `cpu` | Failover policy when `FORAGE_DEVICE=cuda`: `cpu` or `refuse`. Ignored, with an INFO log, when the device is `cpu`. See [Device selection](#device-selection). |
 | `FORAGE_MODEL_ID` | `meta-llama/Llama-Prompt-Guard-2-86M` | Model selected at startup; surrounding whitespace is stripped and unset or blank uses the default. Unknown values refuse boot with `ModelConfigurationError` and WARNING `model_id_not_allowed`, never echoing the value. The allowlist is exactly two ids: `meta-llama/Llama-Prompt-Guard-2-86M` (the default since the 2026-10-06 owner ruling) and `meta-llama/Llama-Prompt-Guard-2-22M`, the smaller opt-out. Each needs its own Hugging Face gated-access grant (one does not cover the other). The 86M's measured resident delta in `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` is 405 MiB, which is why the Compose default `FORAGE_MEM_LIMIT` is `1536m`; the 22M fits `1024m` — see [Sizing the container](#sizing-the-container). Both Compose fragments pass this and `FORAGE_MODEL_REVISION` through as bare names. Restart to apply; `/health.promptguard_model` reports the configured id even while unloaded. |
@@ -736,7 +737,8 @@ once per served result; figures are comparable only at the same `num_results`
 
 ### Memory rule
 
-`FORAGE_MEM_LIMIT ≥ PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[selected model] + classification_concurrency × CLASSIFIER_WORKING_SET + extraction_concurrency × extraction.child_address_space_bytes + (cache.max_bytes if the in-memory backend is selected, else cache.max_value_bytes)`.
+`FORAGE_MEM_LIMIT ≥ PARENT_RESERVATION_BYTES + CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL[selected model] + classification_concurrency × CLASSIFIER_WORKING_SET + workers × extraction.child_address_space_bytes + (cache.max_bytes if the in-memory backend is selected, else cache.max_value_bytes)`,
+where `workers = retrieve.fetch_concurrency + (extraction.extraction_concurrency if /extract is enabled, else 0)`.
 
 These five terms count each reservation once. `PARENT_RESERVATION_BYTES` is the
 named 512 MiB reservation in `pipeline/extraction_limits.py`: the parent with the
@@ -765,9 +767,10 @@ estimate. The cache term is `cache.max_bytes` under the in-memory backend, or
 `cache.max_value_bytes` for **one in-flight read** under Valkey. `full.yml`'s Valkey
 moves the cache's storage memory into its own container and leaves one read's worth
 here. Concurrent reads and decoding copies need extra headroom: cache reads have
-no concurrency bound. Enabling `/extract` also requires budgeting simultaneous
-upload and fetched-PDF workers, as explained under the `retrieve:` block; the
-advisory boot rule is not a measured peak-RSS guarantee.
+no concurrency bound. The worker term counts every route that can spawn the bounded
+worker: `/retrieve`'s fetched PDFs and large HTML bodies always, and `/extract`'s uploads
+only while its gate is open, because both can be resident at once. The advisory boot
+rule is not a measured peak-RSS guarantee.
 
 The worked reference row on `minimal.yml` with the default 86M is
 `512 + 405 + 64 + 384 + 32 = 1,397 MiB` under `1536m`, a **139 MiB margin**; on
@@ -775,6 +778,10 @@ The worked reference row on `minimal.yml` with the default 86M is
 opt-out at `1024m` the rows are `512 + 0 + 64 + 384 + 32 = 992 MiB` (a 32 MiB margin) and
 `964 MiB` (60 MiB): that ~128 MiB headroom holds the 32 MiB cache, the 64 MiB provisional
 classifier working set and a 32 MiB margin; it is not all classifier working set.
+**Opening `/extract` adds a second worker:** the default 86M on `minimal.yml` becomes
+`512 + 405 + 64 + 2 × 384 + 32 = 1,781 MiB`, which **does not fit `1536m`** — raise
+`FORAGE_MEM_LIMIT` to at least `1792m` (or run the 22M, `1,376 MiB`) before setting
+`FORAGE_EXTRACT_ROUTE_ENABLED=1`.
 Boot warns `envelope_memory_rule_unmet` when the cgroup limit is readable and strictly
 below the rule; above it the failure is an OOM kill `/health` cannot report.
 Here "above it" means allocations above the container limit, not a guarantee that
@@ -867,7 +874,9 @@ cache:
 **Replace, never merge.** `_load_config` replaces the baked file; it does not merge
 missing keys back in. A two-line file silently drops `user_agents` and `news_domains`
 to their empty code defaults **and resets every omitted security-relevant key to
-its code default**: `promptguard_threshold`, both contiguity keys, `extract_route_enabled`, `seed_blocklist`,
+its code default**: `promptguard_threshold`, both contiguity keys, `extract_route_enabled` (unless
+`FORAGE_EXTRACT_ROUTE_ENABLED` sets it — the one key with an environment override, so opening
+`/extract` needs no copied file at all), `seed_blocklist`,
 `promptguard_fail_closed_floor`, `promptguard_threshold_ceiling`, and the four
 envelope keys — `promptguard_threads` (back to `0`: torch sizes to the host's cores
 under a CPU quota, the 2026-09-12 incident), `extraction.classification_concurrency`
@@ -932,7 +941,7 @@ Those emit `config_invalid_value`, not `config_unknown_key`.
 | `promptguard_contiguity_windows` | integer, 0 or 2–8 | `0` | `0` | Opt-in run rule on all three routes: `0` disables it; otherwise at least this many consecutive windows must score at or above the absolute contiguity threshold. `1`, booleans, non-integers and out-of-range values refuse boot with `PromptGuardConfigurationError`. Read once by `promptguard_settings_from_config`; restart to change it. Both contiguity keys enter `sanitizer_revision`, even when disabled. No per-request override. |
 | `promptguard_contiguity_threshold` | float, 0.0–1.0 | `0.5` | `0.5` | Absolute server-side run threshold (`>=`), independent of the caller's max-score threshold. Both rules apply; raising the max threshold cannot override this one. Booleans, strings, non-finite and out-of-range values refuse boot with `PromptGuardConfigurationError`, even when the rule is off. See the opt-in recipe below. |
 | `policy_domain_entries_max_bytes` | integer | `65536` (64 KiB) | `65536` | Raw UTF-8 bytes per caller domain list, including newline separators; range **4096–1048576** (4 KiB–1 MiB). Each `/retrieve` list and `/search`'s denylist has its own budget. An over-budget denylist is refused whole with 422 `content_too_large` on `/retrieve` or `search_unavailable` on `/search`, reason `policy_domain_list_too_large`; allowlists retain the in-budget prefix and count all remaining entries as drops. Invalid configuration logs `config_invalid_value — key=policy_domain_entries_max_bytes` and falls back to 65536, never refuses boot. Read once at startup; restart after changing it. |
-| `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** — it is invisible, not merely refused. Requires a restart to take effect. Remember there is no authentication in front of it. |
+| `extract_route_enabled` | boolean | `false` | `false` | Release gate for `POST /extract`. While `false` the route returns **404** `{"detail": "Not Found", "error": "route_disabled", "reason": …}` (the code since contract 1.6.0) and `/health` omits `capabilities.extract_route`. `FORAGE_EXTRACT_ROUTE_ENABLED` overrides it in either direction; a non-boolean value here refuses boot even under that override. Requires a restart to take effect. Remember there is no authentication in front of it, and opening it adds a worker to the [memory rule](#memory-rule). |
 | `search_promptguard_latency_target_ms` | integer, 100–60000 | `1000` | `1000` | Observational target for the per-result sanitization loop: structural scan, PromptGuard and any semaphore wait. A strictly greater duration increments `search.promptguard_latency_target_exceeded` once per request; `search.sanitization_latency_max_ms` records the per-process maximum even below target. Scales with `num_results` (1–20); compare only at the same `num_results`. Each result's title/snippet parse and raw-markup scans run in one worker-thread hop, so the duration — and therefore `search.promptguard_latency_target_exceeded` and `search.sanitization_latency_max_ms` — **includes thread-hop time**; `search.classification_wait_timeouts` counts only expired semaphore waits, but its per-request `promptguard_wait_seconds` deadline is wall-clock from before the result loop, so hop time spends that budget too. Not a deadline or sanitizer-revision input. Validated unconditionally at boot by `search_targets_from_config`; invalid values, including booleans, raise `SearchTargetsConfigurationError`. Restart after changes. |
 | `search_first_token_target_ms` | integer, 100–120000 | `5000` | `5000` | **log-only today**: tunes the `search_promptguard_complete` log line; no counter compares it. Also appears on the overrun WARNING's `extra` dict; neither payload renders under default container logging. Not a deadline or sanitizer-revision input. The same unconditional boot reader refuses invalid values with `SearchTargetsConfigurationError`; restart after changes. |
 | `search_brave_timeout_seconds` | float | `15.0` | `15.0` | Wall-clock budget for one Brave call — connect, headers and body together; a request on an N-provider chain can take the sum of the configured budgets. Out of range (1.0 to 60.0) or wrong-typed refuses boot. The caller's timeout must exceed the sum of the configured per-provider budgets — 25 s at the shipped defaults on a `searxng,brave` chain — plus parse, sanitization and classification time. Raise this budget for a slow Brave instance; for a slow SearXNG raise `search_searxng_timeout_seconds`. Defaults are unchanged but now bound the whole interaction, not each socket operation separately. |
@@ -1180,8 +1189,9 @@ Missing/unlimited cgroup values are supported and produce no warning.
 A limit **strictly below** the sum warns once and still boots; equality is silent.
 This is an advisory reservation, not a measured peak-RSS guarantee.
 The WARNING includes `memory_max`, `required`,
-`classification_concurrency`, `extraction_concurrency`, `child_address_space_bytes`,
-`model_id`, `parent_bytes`, `cache_backend` and `cache_term_bytes`.
+`classification_concurrency`, `worker_count`, `extract_route_enabled`,
+`child_address_space_bytes`, `model_id`, `parent_bytes`, `cache_backend` and
+`cache_term_bytes`.
 
 <a id="retrieve--fetch-route-limits"></a>
 

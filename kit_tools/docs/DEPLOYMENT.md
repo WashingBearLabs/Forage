@@ -115,7 +115,7 @@ drops to memory-cache mode. Full text: `CLAUDE.md`, "Coexistence with Poppy".
 
    `gh release download v$TAG --pattern 'openapi.yaml*'` is the alternative route to the
    same two files. The anchor at `HEAD` is
-   `9e17c9133c4a5e6c39c0ee9073ccc1f33f18efc120d3d3985e8030b944703e0d`.
+   `8fa753beb3decaef8454bab0c430f590083bcce0d855bc77cd3c01aca8637d90`.
 4. **Check contract compatibility.** The image tag and `contract_version` are independent
    semvers — image `1.3.0` serves contract `1.4.0`. Compare the consumer's expected MAJOR
    against `info.version` in the `openapi.yaml` you just extracted; a MAJOR mismatch means
@@ -351,8 +351,9 @@ Things that change across versions and are expected, not bugs:
   `FORAGE_MODEL_REVISION` override when upgrading: an override that does not match the
   selected model's manifest entry refuses before a snapshot lookup
   (`weights_revision_unpinned`), by design.
-- **`VALKEY_URL` and `extract_route_enabled` are read once at start**, so changing either
-  needs a container restart, not just an edit.
+- **`VALKEY_URL` and the `/extract` gate (`FORAGE_EXTRACT_ROUTE_ENABLED`, else
+  `extract_route_enabled`) are read once at start**, so changing either needs a container
+  restart, not just an edit.
 
 ---
 

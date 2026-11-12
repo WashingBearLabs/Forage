@@ -63,12 +63,13 @@ The stage 2 and stage 3 defences are measured, not asserted: a corpus of indirec
 | `GET /metrics` | Extraction, search, retrieve, and cache counters. |
 | `POST /search` | Finds and returns provider-extracted content for a query across sources — snippets or chunks, per result `content_kind` — from the configured provider chain, every result sanitized, never cached. Only `/search` honours `allow_paid_fallback`, `num_results` and `providers`; every result is scanned at trust tier `standard`. Shared by both routes: `blocked_domains`, `promptguard_threshold` and `promptguard_fail_closed`. An omitted or null threshold uses the validated `config.yaml` default (shipped as 0.85); `promptguard_threshold_ceiling` bounds either choice on both routes. |
 | `POST /retrieve` | Fetches and sanitizes one caller-named URL through the full pipeline, cached by `sanitizer_revision`. Only `/retrieve` honours `cache_ttl_hours`, `extract_mode`, `trusted_domains` and `verified_domains`; the shared knobs are listed above. |
-| `POST /extract` | Extract from an uploaded document (gated behind `extract_route_enabled` in `config.yaml`). |
+| `POST /extract` | Extract from an uploaded document (off by default: enable with `FORAGE_EXTRACT_ROUTE_ENABLED=1`, or `extract_route_enabled` in `config.yaml`). |
 
 <!-- boundary-text:end -->
 
-The response contract is versioned (`contract_version`, currently **1.5.0**). Consumers
-should refuse to activate on a mismatch rather than guess.
+The response contract is versioned (`contract_version`, currently **1.6.0** on `main`;
+the published v1.4.0 image serves 1.5.0). Consumers should refuse to activate on a
+mismatch rather than guess.
 
 ## Quickstart
 
