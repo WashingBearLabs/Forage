@@ -111,6 +111,7 @@ instance is private-network-only and Forage is its only client.
 | `HF_HOME` | `/app/model-cache` (set by the image) | Hugging Face cache directory the PromptGuard weights are fetched into and read from. Override only if you mount the weights elsewhere. Mount a volume here or the weights are re-fetched on every container recreate. |
 | `HF_TOKEN` | unset | Hugging Face access token for the **gated** repository of the selected model — `meta-llama/Llama-Prompt-Guard-2-86M` by default, `meta-llama/Llama-Prompt-Guard-2-22M` if `FORAGE_MODEL_ID` selects it. Meta grants access per repository: the token needs the grant for the model you actually run. Optional — see "Weights acquisition" below. **Carries a credential**; supply it the same way as `VALKEY_URL`. |
 | `FORAGE_EXTRACT_ROUTE_ENABLED` | unset | Opens (`1`) or closes (`0`) the `POST /extract` release gate, overriding `config.yaml`'s [`extract_route_enabled`](#top-level-keys) without copying the whole file. Exactly `1` or `0` after stripping whitespace; unset or blank defers to `config.yaml`, then to closed. **Any other value (`true`, `yes`, …) refuses boot** with `ExtractionConfigurationError`, never echoing the value, so a typo cannot silently leave the route closed. Boot logs `extract_route_resolved — enabled=<0/1> source=<env/config/default>` (WARNING when open, INFO when closed); `/health` advertises `capabilities.extract_route` when open. **Open means reachable by anything on the network — there is no authentication** — and costs a second worker in the [memory rule](#memory-rule). Both Compose fragments pass it through as a bare name. Restart to apply. |
+| `FORAGE_CONFIG_OVERLAY` | unset | Path of a YAML file merged over the base `config.yaml` (the baked file, or a full replacement mounted at `/app/config.yaml`), so changing one key needs a file with only that key. **Recommended over copying the whole file** — see [Delivering `config.yaml` through the fragments](#delivering-configyaml-through-the-fragments). Surrounding whitespace is stripped and unset or blank means no overlay. Any defect refuses boot with `ConfigOverlayError` and one of six tokens (`overlay_missing`, `overlay_unreadable`, `overlay_not_mapping`, `overlay_unknown_key`, `overlay_null_value`, `overlay_shape_mismatch`), never echoing the path, a value or operator text. One WARNING per boot, `config_overlay_applied — keys=<dotted,keys> count=<n>`, names the keys it set. Read once at start — restart to apply. Mount the file `:ro`. |
 | `FORAGE_DEVICE` | `cpu` | Where the classifier runs: `cpu` or `cuda`, case-insensitive; blank is unset. Invalid values refuse boot with `DeviceConfigurationError`, never echoing the value. See [Device selection](#device-selection). |
 | `FORAGE_DEVICE_FALLBACK` | `cpu` | Failover policy when `FORAGE_DEVICE=cuda`: `cpu` or `refuse`. Ignored, with an INFO log, when the device is `cpu`. See [Device selection](#device-selection). |
 | `FORAGE_MODEL_ID` | `meta-llama/Llama-Prompt-Guard-2-86M` | Model selected at startup; surrounding whitespace is stripped and unset or blank uses the default. Unknown values refuse boot with `ModelConfigurationError` and WARNING `model_id_not_allowed`, never echoing the value. The allowlist is exactly two ids: `meta-llama/Llama-Prompt-Guard-2-86M` (the default since the 2026-10-06 owner ruling) and `meta-llama/Llama-Prompt-Guard-2-22M`, the smaller opt-out. Each needs its own Hugging Face gated-access grant (one does not cover the other). The 86M's measured resident delta in `CLASSIFIER_RESIDENT_DELTA_BYTES_BY_MODEL` is 405 MiB, which is why the Compose default `FORAGE_MEM_LIMIT` is `1536m`; the 22M fits `1024m` — see [Sizing the container](#sizing-the-container). Both Compose fragments pass this and `FORAGE_MODEL_REVISION` through as bare names. Restart to apply; `/health.promptguard_model` reports the configured id even while unloaded. |
@@ -828,19 +829,79 @@ pool, not concurrent callers. The default remains one classification permit.
 
 ### Delivering `config.yaml` through the fragments
 
-The fragments do **not** mount `config.yaml`: `Dockerfile` bakes it at
-`/app/config.yaml`, and Forage's only shipped volume is `forage-model-cache`.
-The table's three config columns (`promptguard_threads`,
-`extraction.classification_concurrency`, `cache.max_bytes`) and the two latency
-keys therefore need a bind mount. Start with the repo's **complete** `config.yaml`
-copied alongside your fragment, or copy the running image's file (from `compose/`):
+**Recommended: a one-key overlay.** Set `FORAGE_CONFIG_OVERLAY` to a small YAML file that holds
+only the keys you change. Forage merges it over the baked `/app/config.yaml`, so every other
+tuned value, security bounds included, stays at the shipped setting and follows each upgrade.
+`Dockerfile` bakes `config.yaml` and Forage's only shipped volume is `forage-model-cache`, so the
+overlay needs a bind mount, **read-only** (`:ro`). Add the mount and the variable to the existing
+service, retaining the model volume (from `compose/`):
+
+```yaml
+# overlay.yaml — only the keys you change
+promptguard_threads: 2
+cache:
+  max_bytes: 67108864
+```
+
+```yaml
+services:
+  forage:
+    volumes:
+      - forage-model-cache:/app/model-cache
+      - ./overlay.yaml:/app/overlay.yaml:ro
+    environment:
+      - FORAGE_CONFIG_OVERLAY=/app/overlay.yaml
+```
+
+The host path must already exist as a **file** (a missing short-syntax bind source mounts a
+*directory*, which refuses boot as `overlay_missing`). Both fragments carry this recipe as a
+commented block. `compose/gpu.yml` is itself an overlay merged onto those two fragments and carries
+no recipe: put the mount and variable in `minimal.yml` or `full.yml`'s `forage` service.
+
+Rules, all enforced at boot:
+
+- **Blocks merge.** `cache:`, `extraction:` and `retrieve:` merge leaf by leaf: an overlay with
+  `cache: {max_bytes: …}` leaves every other `cache` key alone.
+- **Lists replace, never append.** A list in the overlay replaces the base list outright.
+  `news_domains` and `user_agents` are non-empty in the shipped file, so an overlay that sets
+  either must carry the **complete** list.
+- **Other values replace** the base value outright.
+- **Null is refused.** `key:` with no value, or `~`/`null`, for a key or as a list item is
+  `overlay_null_value`. An overlay cannot unset a key; set the value you want.
+- **Shape is checked.** A block key (`cache`, `extraction`, `retrieve`) must hold a mapping; any
+  other key must not hold a mapping; a key whose base value is a list must be given a list, and a
+  key whose base value is a scalar must not be given one. A mismatch is `overlay_shape_mismatch`.
+  Value *types and ranges* are not checked here — the existing readers own them.
+- **Dotted keys are names, not syntax.** Write the nested form; `cache.max_bytes` is **not**
+  accepted as a top-level overlay key. Dotted names appear in the `config_overlay_applied` line
+  and in refusals. Anything that is not a known key, at the top level or one level inside a block,
+  is `overlay_unknown_key` — unlike the base file, where
+  [unknown keys are ignored](#configyaml) with a WARNING. The refusal echoes the key only when it
+  is a plain lower-case name; anything else is reported as `<unprintable key>`.
+- **YAML aliases, merge keys and duplicate keys are refused** (`overlay_unreadable`), as are
+  files over **1 MiB** (1,048,576 bytes), non-UTF-8 text and invalid YAML. A missing path or a
+  non-regular file is `overlay_missing`; an I/O or permission error is `overlay_unreadable`; a
+  document that is not a mapping is `overlay_not_mapping`.
+- **Precedence** for `extract_route_enabled`, the one key with its own variable:
+  `FORAGE_EXTRACT_ROUTE_ENABLED`, then the overlay, then the base file, then the code default.
+
+An overlay may loosen a security-relevant key as well as tighten it. That is allowed because the
+operator wrote it, and it is never silent: `config_overlay_applied` names every dotted key it
+set, at WARNING, on every boot. The line never carries the path or a value.
+
+**Check the boot log after adding an overlay value a reader can fall back on.** The overlay
+validates names, nulls and shapes only. The readers that warn and fall back with
+`config_invalid_value` — `promptguard_threshold`, `policy_domain_entries_max_bytes`, and entries
+in `seed_blocklist` / `news_domains` — do exactly the same for an overlay value: the value is
+ignored behind a WARNING and the boot continues on the default.
+
+**Full replacement.** To replace the file instead, copy the running image's, edit the copy and
+mount it over `/app/config.yaml` (from `compose/`):
 
 ```bash
 docker compose -f minimal.yml cp forage:/app/config.yaml ./config.yaml
 # Use -f full.yml instead for that deployment.
 ```
-
-Add the config line to the existing service's volumes, retaining the model volume:
 
 ```yaml
 services:
@@ -871,8 +932,9 @@ cache:
   max_bytes: 33554432
 ```
 
-**Replace, never merge.** `_load_config` replaces the baked file; it does not merge
-missing keys back in. A two-line file silently drops `user_agents` and `news_domains`
+**A full replacement replaces; an overlay merges.** `_load_config` replaces the baked file; it
+does not merge missing keys back in (that is what `FORAGE_CONFIG_OVERLAY` is for). **For a full
+mount, replace never merges.** A two-line file silently drops `user_agents` and `news_domains`
 to their empty code defaults **and resets every omitted security-relevant key to
 its code default**: `promptguard_threshold`, both contiguity keys, `extract_route_enabled` (unless
 `FORAGE_EXTRACT_ROUTE_ENABLED` sets it — the one key with an environment override, so opening
@@ -916,7 +978,8 @@ If the file is missing, Forage logs a warning and every key below falls back to 
 default. The repository ships a working `config.yaml`; the "shipped" column records what
 that file sets, which is not always the code default.
 
-Unknown keys are ignored, with one boot WARNING per key:
+Unknown keys are ignored in this **base file** (the [overlay](#delivering-configyaml-through-the-fragments)
+is stricter and refuses them), with one boot WARNING per key:
 `config_unknown_key — key=<dotted.name>`. The message names only the key, never
 its value. An unknown top-level block gets one warning, not one per child;
 known blocks are checked one level deep. Correct the spelling and restart.

@@ -103,3 +103,17 @@
 - Gotcha: contract docstring entries may not carry publication state (test_docstring_entry_tense_has_no_publication_state)
 [20:10] v1.4.0 published 2026-10-11 (tag 49de6cc, run 38104861366, index sha256:d305bbbe…); candidate + published-image smokes CPU/GPU green; thelab cleaned (113G free); publication record PR
 [20:40] Closed epic-forage-inference-backends: spec 5 archived, epic wrapper completed, BACKLOG/MILESTONES updated, 3 GOTCHAS added, parked findings merged into AUDIT_FINDINGS.md (spec4/epic IDs +12; 020/021 resolved), test count 5766
+[20:09] config-overlay US-002: _apply_config_overlay wired into lifespan after _load_config; WARNING config_overlay_applied; tests in test_app.py
+- Files: retrieval_app.py, tests/test_app.py, tests/conftest.py, tests/test_hermeticity.py
+- Decision: no rotation (retrieval_app unhashed); formatter rewraps lines so inline pyright-ignore removal needs a re-grep
+
+[--:--] config-overlay US-003: operator docs, compose recipes, decision record
+- Files: docs/configuration.md, releases.md, bootstrap-notes.md, compose/{minimal,full,gpu}.yml, kit_tools docs (ENV_REFERENCE, LOGGING, MONITORING, TROUBLESHOOTING, ERROR_HANDLING, DECISIONS, GOTCHAS, CODE_ARCH, LOCAL_DEV, DEPLOYMENT)
+- Decision: dotted names documented as log/refusal names only (module refuses dotted top-level keys); compose recipe fully commented
+
+[validate] validate-implementation feature-config-overlay.md: 0 critical / 0 warning / 5 info; pytest 5873 passed, ruff+pyright clean
+- Files: kit_tools/AUDIT_FINDINGS.md (gitignored)
+- Decision: no fixer, no pause; complete-implementation not invoked (epic run)
+
+[epic-final] Epic-wide validate-implementation for forage-config-overlay: 0 critical, all 3 reviewers ready; logged 2026-11-11-006..010 (info). 3 test_corpus_docs failures are environmental (worktree's gitignored AUDIT_FINDINGS.md lacks owner entries; pass against owner copy).
+- Files: kit_tools/AUDIT_FINDINGS.md (gitignored), this file

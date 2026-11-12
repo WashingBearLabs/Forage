@@ -4,6 +4,9 @@
 # merged onto `minimal.yml` or `full.yml`. The tag is the same one the base
 # pins — one image serves both device classes.
 #
+# No FORAGE_CONFIG_OVERLAY recipe here: this file is itself an overlay, so put
+# the config-overlay mount and variable in the base fragment's `forage` service.
+#
 #   cd compose
 #   docker compose -f minimal.yml -f gpu.yml up -d     # or: -f full.yml -f gpu.yml
 #   curl -s localhost:8020/health | jq '{promptguard_device, degraded_reasons}'

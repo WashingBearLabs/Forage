@@ -48,6 +48,7 @@ from models import (
 )
 from pipeline import contract
 from pipeline.config_bounds import bounded_float, bounded_int
+from pipeline.config_overlay import merge_config_overlay, read_overlay_file
 from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAUTHENTICATED,
@@ -519,6 +520,27 @@ def _load_config() -> dict[str, Any]:
             return yaml.safe_load(f) or {}
     logger.warning("config.yaml not found at %s", config_path)
     return {}
+
+
+CONFIG_OVERLAY_ENV_VAR = "FORAGE_CONFIG_OVERLAY"
+
+
+def _apply_config_overlay(base: dict[str, Any]) -> dict[str, Any]:
+    """Merge the operator's overlay file over ``base``, or return ``base``.
+
+    ``ConfigOverlayError`` propagates so the boot refuses rather than
+    half-applies. The one log line names validated dotted keys only: never the
+    path, a value or operator text.
+    """
+    path = os.environ.get(CONFIG_OVERLAY_ENV_VAR, "").strip()
+    if not path:
+        return base
+    overlay = read_overlay_file(path)
+    merged, set_keys = merge_config_overlay(base, overlay, KNOWN_CONFIG_KEYS)
+    logger.warning(
+        "config_overlay_applied — keys=%s count=%d", ",".join(set_keys), len(set_keys)
+    )
+    return merged
 
 
 # -- Response models --
@@ -1805,7 +1827,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     elif os.environ.get(promptguard_device.DEVICE_FALLBACK_ENV_VAR, "").strip():
         logger.info("device_fallback_ignored_on_cpu")
     # Load config
-    config = _load_config()
+    config = _apply_config_overlay(_load_config())
     _warn_unknown_config_keys(config)
     published_config = config.copy()
     for key, denylist in (("seed_blocklist", True), ("news_domains", False)):

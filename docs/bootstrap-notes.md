@@ -2855,3 +2855,19 @@ is unreleased until the next image tag.
    `tests/test_contract_errors.py` carves it out of the inlined copy until Poppy decides.
 5. **Activation.** Re-vendor `contract/openapi.yaml` from the release tag and verify it against that
    tag's anchor. A consumer that refuses only on a major mismatch activates unchanged.
+
+### Consumer note for Poppy: `FORAGE_CONFIG_OVERLAY` (`config-overlay`)
+
+Prepared, not published; nothing is pushed to Poppy. No contract change and no `sanitizer_revision`
+rotation.
+
+1. **Replace the vendored `config/forage/config.yaml`** with an overlay holding **only Poppy's
+   deltas** from Forage's shipped file, and set `FORAGE_CONFIG_OVERLAY` to its in-container path.
+2. **Drop the sha256 pin and the drift test**, but **keep a test pinning Poppy's expected overlay
+   keys** (the dotted names `config_overlay_applied` would log), so an accidental deletion of a
+   key is caught rather than silently reverting to Forage's default.
+3. **Mount it `:ro`.** A path without its mount refuses the boot (`overlay_missing`).
+4. **Every upgrade now inherits Forage's tuned defaults** for every key the overlay does not name,
+   security bounds included. Review release notes for default changes instead of re-syncing a file.
+5. Lists in the overlay replace the shipped list (`news_domains`, `user_agents`); carry them whole.
+   Check the boot log for `config_invalid_value` after adding a threshold or domain-list value.

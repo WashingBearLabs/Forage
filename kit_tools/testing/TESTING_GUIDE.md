@@ -96,7 +96,7 @@ crash reads as a false regression.
 
 **56 `test_*.py` modules** under `tests/`, flat, one per subject — 60 Python files in all
 once `conftest.py`, `fakes.py`, `corpus_stage2.py` and `__init__.py` are counted — plus
-`golden/`, `fixtures/` and `corpus/`. **5800 tests collected** on 2026-11-11 (`extract-route-env`, contract 1.6.0: 5766 -> 5800; on 2026-10-11 `epic-forage-inference-backends` and v1.4.0: 5557 -> 5766; before that `release-1-3-0` US-005, `epic-forage-structural-hardening`: 4860 -> 5389; before that, the 86M default split the shipped-envelope test into the 86M and 22M cases; the `/retrieve` bounded-decoder fix added nine before it; before that
+`golden/`, `fixtures/` and `corpus/`. **5879 tests collected** on 2026-11-11 (`config-overlay`: 5800 -> 5879; earlier the same day `extract-route-env`, contract 1.6.0: 5766 -> 5800; on 2026-10-11 `epic-forage-inference-backends` and v1.4.0: 5557 -> 5766; before that `release-1-3-0` US-005, `epic-forage-structural-hardening`: 4860 -> 5389; before that, the 86M default split the shipped-envelope test into the 86M and 22M cases; the `/retrieve` bounded-decoder fix added nine before it; before that
 4850, after the epic-wide validation fixes for `forage-injection-corpus`; `uv run pytest --collect-only -q`).
 Every per-module row below is remeasured
 from collection, not incremented from a previous story's count; their sum
@@ -301,6 +301,7 @@ test_mapping:
   "model_fetcher.py": ["tests/test_model_fetcher.py", "tests/test_app.py"]
   "weights_manifest.json": "tests/test_model_fetcher.py"
   "tests/fakes.py": ["tests/test_fakes.py", "tests/test_model_fetcher.py", "tests/test_app.py", "tests/test_brave_provider.py", "tests/test_stage5_url_audit.py", "tests/test_orchestrator.py"]
+  "pipeline/config_overlay.py": "tests/test_config_overlay.py"
   "pipeline/bounded_body.py": "tests/test_bounded_body.py"
   "pipeline/provider_transport.py": "tests/test_provider_transport.py"
   "pipeline/stage1_extraction.py": ["tests/test_stage1_extraction.py", "tests/test_inline_scan_form.py", "tests/test_visibility_pass.py", "tests/test_corpus_gate.py"]

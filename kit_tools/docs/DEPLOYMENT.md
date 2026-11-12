@@ -354,6 +354,8 @@ Things that change across versions and are expected, not bugs:
 - **`VALKEY_URL` and the `/extract` gate (`FORAGE_EXTRACT_ROUTE_ENABLED`, else
   `extract_route_enabled`) are read once at start**, so changing either needs a container
   restart, not just an edit.
+- **`FORAGE_CONFIG_OVERLAY` is read once at start** too, and so is the file it names. Mount the
+  overlay `:ro`; a defective one refuses the boot with a closed `overlay_*` token.
 
 ---
 

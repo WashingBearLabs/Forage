@@ -16,6 +16,21 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
+### Lists in an overlay replace, they never append
+
+`FORAGE_CONFIG_OVERLAY` merges blocks leaf by leaf, but a list is replaced outright. `news_domains`
+and `user_agents` are **non-empty in the shipped file**, so an overlay that sets either with one
+entry leaves the service with that one entry, not the shipped set plus yours. Carry the complete
+list. There is no append syntax (out of scope for the overlay spec).
+
+### An overlay value a reader falls back on is still ignored behind a WARNING
+
+The overlay validates names, nulls and shapes only. `promptguard_threshold` (e.g. `1.5`),
+`policy_domain_entries_max_bytes` and invalid `seed_blocklist` / `news_domains` entries fall back
+with `config_invalid_value` for an overlay value exactly as for a base-file one: the boot
+succeeds and `config_overlay_applied` still lists the key. After adding such a value, check the boot
+log for `config_invalid_value`; refusing instead would change full-file behaviour too.
+
 ### A timing gate only gates what it actually asserts
 
 `test_stage2_complexity`'s linearity check skips any pair where both sizes finish under

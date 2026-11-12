@@ -568,6 +568,26 @@ def test_model_selection_is_a_bare_passthrough_only_on_forage(
             assert variable not in _environment(service)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [*(_FRAGMENT_PATHS[n] for n in _FRAGMENTS), _COMPOSE_DIR / "gpu.yml"],
+    ids=[*_FRAGMENTS, "gpu"],
+)
+def test_config_overlay_is_never_a_live_environment_entry(path: Path) -> None:
+    """The overlay recipe stays commented out (config-overlay US-003).
+
+    A live ``FORAGE_CONFIG_OVERLAY`` without its matching read-only mount
+    refuses the boot with ``overlay_missing``, so no fragment may set it, not
+    even as a bare passthrough. ``gpu.yml`` is itself merged onto the two base
+    fragments and carries no recipe at all.
+    """
+    for service_name, service in _services(_load(path)).items():
+        assert "FORAGE_CONFIG_OVERLAY" not in _environment(service), (
+            f"{path.name} sets FORAGE_CONFIG_OVERLAY on {service_name}; the "
+            "recipe must stay commented: a path without its mount refuses boot"
+        )
+
+
 class TestMinimalIsGenuinelyValkeyFree:
     """Only a *fully unset* VALKEY_URL selects the in-memory backend."""
 

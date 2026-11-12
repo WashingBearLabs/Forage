@@ -1,17 +1,18 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: config-overlay
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: "T2.2 — Forage hardening (operator configuration, single source)"
 type: epic-child
-size: M
+size: L
 epic: forage-config-overlay
 epic_seq: 1
 epic_final: true
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
+completed: 2026-11-12
 ---
 
 # Feature Spec: Config Overlay — `FORAGE_CONFIG_OVERLAY` Merged Over the Base Config
@@ -192,11 +193,11 @@ complete read, validation and merge contract with no lifespan or app involved.
   US-003 documents it. Do not add a second value-validation path here.
 
 **Acceptance Criteria:**
-- [ ] `pipeline/config_overlay.py` defines `ConfigOverlayToken` (exactly the six tokens),
+- [x] `pipeline/config_overlay.py` defines `ConfigOverlayToken` (exactly the six tokens),
       `ConfigOverlayError(ValueError)` with `.token`, `MAX_OVERLAY_BYTES = 1_048_576`,
       `read_overlay_file` and `merge_config_overlay`. Nothing in the module imports
       `retrieval_app`.
-- [ ] `read_overlay_file` maps each failure to its token:
+- [x] `read_overlay_file` maps each failure to its token:
   - missing path, directory or dangling symlink → `overlay_missing`;
   - permission denied (on stat or open), a 1 MiB + 1 byte file, non-UTF-8 bytes, invalid YAML,
     a duplicate key, a YAML alias, a `<<` merge key (with and without an alias), an unsafe tag
@@ -204,39 +205,39 @@ complete read, validation and merge contract with no lifespan or app involved.
   - a document that is `[]`, `0`, `false` or `''` → `overlay_not_mapping`.
 
   An empty or comments-only file returns `{}`.
-- [ ] For every refusal class in both functions, the **full formatted traceback**
+- [x] For every refusal class in both functions, the **full formatted traceback**
       (`"".join(traceback.format_exception(exc))`) contains neither a sentinel path nor a
       sentinel value, and `exc.__cause__ is None` and `exc.__suppress_context__ is True`.
       Do not assert `__context__ is None`; Python keeps it set under `from None`. The
       invalid-YAML case puts the sentinel value **inside** the malformed text (e.g. an
       unterminated `'SENTINELVAL`), because the raw `YAMLError` message quotes operator content.
-- [ ] Block keys merge leaf by leaf: `{"extraction": {"classification_concurrency": 2}}` over the
+- [x] Block keys merge leaf by leaf: `{"extraction": {"classification_concurrency": 2}}` over the
       baked file yields the baked `extraction` block with only that leaf changed; `cache: {}`
       changes nothing and sets no key
-- [ ] Non-block values replace outright, lists included: `seed_blocklist: [".example"]` yields
+- [x] Non-block values replace outright, lists included: `seed_blocklist: [".example"]` yields
       exactly that list, and `news_domains: []` yields `[]`
-- [ ] An unknown top-level key, an unknown leaf under a known block, a **dotted top-level key**
+- [x] An unknown top-level key, an unknown leaf under a known block, a **dotted top-level key**
       (`cache.max_entries`, `extraction.max_pages`), a non-string top-level key and a non-string
       block leaf key (`cache: {1: x}`) each raise `overlay_unknown_key`, never a raw `TypeError`
-- [ ] An unknown key matching the safe pattern appears in the message. Each of these appears only
+- [x] An unknown key matching the safe pattern appears in the message. Each of these appears only
       as `<unprintable key>`:
   - a **trailing** newline (`'foo\n'`);
   - an embedded newline (`'foo\n.bar'`);
   - uppercase;
   - punctuation;
   - more than 64 characters in a segment.
-- [ ] `None` at top level, as a block leaf, or as a list element raises `overlay_null_value`
-- [ ] `extraction: 5`, `promptguard_threshold: {a: 1}`, `user_agents: "x"` (base holds a list)
+- [x] `None` at top level, as a block leaf, or as a list element raises `overlay_null_value`
+- [x] `extraction: 5`, `promptguard_threshold: {a: 1}`, `user_agents: "x"` (base holds a list)
       and `promptguard_threshold: [1]` (base holds a scalar) each raise `overlay_shape_mismatch`.
       Over an empty base, `extraction: 5` still raises (block-ness from `known_keys`).
-- [ ] With several defects present, the first failing key in sorted order decides the token (one
+- [x] With several defects present, the first failing key in sorted order decides the token (one
       test with an unknown key sorting before a null)
-- [ ] `base` and `overlay` are unmodified after the call (deep equality with copies taken
+- [x] `base` and `overlay` are unmodified after the call (deep equality with copies taken
       before); `set_keys` is exactly the sorted dotted keys set
-- [ ] Tests written/updated for new functionality (new `tests/test_config_overlay.py`, added to
+- [x] Tests written/updated for new functionality (new `tests/test_config_overlay.py`, added to
       `kit_tools/testing/TESTING_GUIDE.md`'s `test_mapping` under `pipeline/config_overlay.py`)
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass with zero
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass with zero
       findings
 
 ### US-002: Apply the overlay at boot and log the keys
@@ -292,40 +293,40 @@ feature end to end without docs.
   default-config revision equals the current `HEAD` value.
 
 **Acceptance Criteria:**
-- [ ] With `FORAGE_CONFIG_OVERLAY` unset or blank, `_apply_config_overlay` returns its input
+- [x] With `FORAGE_CONFIG_OVERLAY` unset or blank, `_apply_config_overlay` returns its input
       object unchanged. A lifespan over the real `_load_config` yields `app.state.config` and both
       revision readers identical to the baked file's.
-- [ ] Over a monkeypatched base equal to the baked file, an overlay setting
+- [x] Over a monkeypatched base equal to the baked file, an overlay setting
       `extraction.classification_concurrency: 2` and `promptguard_threshold: 0.9` gives:
   - `app.state.extraction_settings.classification_concurrency == 2`;
   - `app.state.promptguard_threshold_default == 0.9`;
   - every other extraction value equal to the baked file's;
   - both revision readers equal to the revision of the equivalent full mapping.
-- [ ] Each of the six tokens refuses the boot through the lifespan: one parametrized test, with
+- [x] Each of the six tokens refuses the boot through the lifespan: one parametrized test, with
       the file-level cases built on disk. The formatted traceback contains neither the sentinel
       path nor a sentinel value, and no `caplog` record does either.
-- [ ] An applied overlay logs exactly one WARNING `config_overlay_applied — keys=<sorted dotted
+- [x] An applied overlay logs exactly one WARNING `config_overlay_applied — keys=<sorted dotted
       keys> count=<n>`. A comments-only overlay boots and logs `keys= count=0`. With no overlay,
       no such line is logged.
-- [ ] With a monkeypatched **empty** base (the base-file-missing path), an overlay containing
+- [x] With a monkeypatched **empty** base (the base-file-missing path), an overlay containing
       `extraction: {classification_concurrency: 2}` boots with
       `app.state.extraction_settings.classification_concurrency == 2`, every other extraction
       value at its code default, and the WARNING `config_overlay_applied —
       keys=extraction.classification_concurrency count=1`
-- [ ] An overlay value that a typed reader refuses (`extraction.classification_concurrency: 9`)
+- [x] An overlay value that a typed reader refuses (`extraction.classification_concurrency: 9`)
       refuses the boot through that reader's error type (`ExtractionConfigurationError`), not
       `ConfigOverlayError`. An overlay `promptguard_threshold: 1.5` boots, logs
       `config_invalid_value`, serves `0.85`, and has the same revision as an equivalent full
       mapping.
-- [ ] `FORAGE_EXTRACT_ROUTE_ENABLED=0` beats an overlay `extract_route_enabled: true`: the route
+- [x] `FORAGE_EXTRACT_ROUTE_ENABLED=0` beats an overlay `extract_route_enabled: true`: the route
       is closed and the log says `source=env`. With the variable unset, the overlay's `true` opens
       the route with `source=config`.
-- [ ] `FORAGE_CONFIG_OVERLAY` is in `tests/conftest.py::_CLEARED_ENV_VARS` and the
+- [x] `FORAGE_CONFIG_OVERLAY` is in `tests/conftest.py::_CLEARED_ENV_VARS` and the
       `tests/test_hermeticity.py` exact-set pin
-- [ ] Tests written/updated for new functionality (lifespan cases in `tests/test_app.py`, beside
+- [x] Tests written/updated for new functionality (lifespan cases in `tests/test_app.py`, beside
       the `FORAGE_EXTRACT_ROUTE_ENABLED` gate tests)
-- [ ] Full test suite passes (`uv run pytest`)
-- [ ] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass with zero
+- [x] Full test suite passes (`uv run pytest`)
+- [x] `uv run ruff check .`, `uv run ruff format --check .` and `uv run pyright` pass with zero
       findings
 
 ### US-003: Operator docs, compose recipe and the decision record
@@ -403,23 +404,23 @@ mount it read-only with a compose fragment's commented recipe, and confirm it fr
     case.
 
 **Acceptance Criteria:**
-- [ ] `docs/configuration.md` documents `FORAGE_CONFIG_OVERLAY`: the merge, null, shape and
+- [x] `docs/configuration.md` documents `FORAGE_CONFIG_OVERLAY`: the merge, null, shape and
       dotted-key rules, the precedence chain, the 1 MiB bound, all six tokens, read-only mounting
       and the reader-fallback caveat. It presents the overlay before the full-replacement mount.
       Every phrase `test_unknown_config_key_warning_is_documented` requires is still present.
-- [ ] `ENV_REFERENCE.md`, `LOGGING.md` (Logger Inventory), `MONITORING.md` (Startup lines table),
+- [x] `ENV_REFERENCE.md`, `LOGGING.md` (Logger Inventory), `MONITORING.md` (Startup lines table),
       `TROUBLESHOOTING.md` (a section per token) and `ERROR_HANDLING.md` (boot-time refusers)
       cover the variable, the WARNING, the tokens and `ConfigOverlayError` respectively
-- [ ] `kit_tools/arch/DECISIONS.md` has the new overlay entry, and the resource-envelope
+- [x] `kit_tools/arch/DECISIONS.md` has the new overlay entry, and the resource-envelope
       consequence points to it
-- [ ] `compose/minimal.yml` and `compose/full.yml` each carry a commented `:ro` overlay recipe.
+- [x] `compose/minimal.yml` and `compose/full.yml` each carry a commented `:ro` overlay recipe.
       `tests/test_compose_fragments.py` passes and pins that `FORAGE_CONFIG_OVERLAY` is **not**
       a live environment entry on any service.
-- [ ] `docs/bootstrap-notes.md` carries the Poppy consumer note, including the keep-a-key-pin
+- [x] `docs/bootstrap-notes.md` carries the Poppy consumer note, including the keep-a-key-pin
       advice. `docs/releases.md` Unreleased carries one bullet.
-- [ ] `kit_tools/docs/GOTCHAS.md` carries both entries, `CODE_ARCH.md` the module row, and
+- [x] `kit_tools/docs/GOTCHAS.md` carries both entries, `CODE_ARCH.md` the module row, and
       `LOCAL_DEV.md` and `DEPLOYMENT.md` the run example and the read-once note
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Full test suite passes (`uv run pytest`)
 
 ## Edge Cases
 

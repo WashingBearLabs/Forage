@@ -14,6 +14,7 @@ import stat
 import tempfile
 import threading
 import time
+import traceback
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from copy import deepcopy
@@ -53,6 +54,7 @@ from models import (
     TrustTier,
 )
 from pipeline import contract, orchestrator
+from pipeline.config_overlay import ConfigOverlayError
 from pipeline.contract import (
     CONTRACT_VERSION,
     DEGRADED_CACHE_UNAUTHENTICATED,
@@ -6528,3 +6530,251 @@ async def test_lifespan_marks_the_process_non_dumpable(
     )
     async with _running_app():
         assert calls == ["called"]
+
+
+# ---------------------------------------------------------------------------
+# FORAGE_CONFIG_OVERLAY: applied at boot (config-overlay US-002)
+# ---------------------------------------------------------------------------
+
+_BAKED_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+_OVERLAY_SENTINEL = "sentinel-overlay-9f3c"
+
+
+def _baked_config() -> dict[str, Any]:
+    loaded = yaml.safe_load(_BAKED_CONFIG_PATH.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], loaded)
+
+
+def _write_overlay(tmp_path: Path, text: str) -> Path:
+    directory = tmp_path / _OVERLAY_SENTINEL
+    directory.mkdir()
+    path = directory / "overlay.yaml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _applied_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        r for r in caplog.records if r.getMessage().startswith("config_overlay_applied")
+    ]
+
+
+async def _boot_quietly(monkeypatch: pytest.MonkeyPatch) -> None:
+    _park_the_retry(monkeypatch)
+    monkeypatch.setattr(
+        model_fetcher, "acquire_and_load", _acquisition_that_never_loads
+    )
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_an_unset_or_blank_overlay_returns_the_base_object(
+    monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    if value is not None:
+        monkeypatch.setenv(retrieval_app.CONFIG_OVERLAY_ENV_VAR, value)
+    base: dict[str, Any] = {"promptguard_threshold": 0.5}
+    assert retrieval_app._apply_config_overlay(base) is base
+
+
+async def test_a_lifespan_without_an_overlay_serves_the_baked_file(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    await _boot_quietly(monkeypatch)
+    baked = _baked_config()
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        async with _running_app():
+            assert app.state.config == baked
+            assert app.state.sanitizer_revision == derive_sanitizer_revision(baked)
+            assert _resolved_revision_from_state() == derive_sanitizer_revision(baked)
+    assert _applied_records(caplog) == []
+
+
+def _resolved_revision_from_state() -> str:
+    return derive_sanitizer_revision(app.state.config)
+
+
+async def test_an_overlay_changes_only_the_named_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    await _boot_quietly(monkeypatch)
+    baked = _baked_config()
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: deepcopy(baked))
+    path = _write_overlay(
+        tmp_path,
+        "extraction:\n  classification_concurrency: 2\npromptguard_threshold: 0.9\n",
+    )
+    monkeypatch.setenv(retrieval_app.CONFIG_OVERLAY_ENV_VAR, f" {path} ")
+    full = deepcopy(baked)
+    full["extraction"] = {**baked["extraction"], "classification_concurrency": 2}
+    full["promptguard_threshold"] = 0.9
+    baseline = extraction_settings_from_config(baked, route_enabled=False)
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        async with _running_app():
+            settings = app.state.extraction_settings
+            assert settings.classification_concurrency == 2
+            assert app.state.promptguard_threshold_default == 0.9
+            assert settings.extraction_concurrency == baseline.extraction_concurrency
+            assert (
+                settings.child_address_space_bytes == baseline.child_address_space_bytes
+            )
+            assert app.state.config == full
+            expected = derive_sanitizer_revision(full)
+            assert app.state.sanitizer_revision == expected
+            assert _resolved_revision_from_state() == expected
+    records = _applied_records(caplog)
+    assert [r.levelno for r in records] == [logging.WARNING]
+    assert records[0].getMessage() == (
+        "config_overlay_applied — "
+        "keys=extraction.classification_concurrency,promptguard_threshold count=2"
+    )
+    assert _OVERLAY_SENTINEL not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("token", "text"),
+    [
+        ("overlay_missing", None),
+        ("overlay_unreadable", f"key: [{_OVERLAY_SENTINEL}\n"),
+        ("overlay_not_mapping", f"- {_OVERLAY_SENTINEL}\n"),
+        ("overlay_unknown_key", f"SENTINEL-{_OVERLAY_SENTINEL}: 1\n"),
+        ("overlay_null_value", "promptguard_threshold:\n"),
+        ("overlay_shape_mismatch", f"seed_blocklist: {_OVERLAY_SENTINEL}\n"),
+    ],
+)
+async def test_every_overlay_refusal_stops_the_boot_without_leaking(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    token: str,
+    text: str | None,
+) -> None:
+    monkeypatch.setattr(retrieval_app, "_load_config", _baked_config)
+    if text is None:
+        path = tmp_path / _OVERLAY_SENTINEL / "absent.yaml"
+    else:
+        path = _write_overlay(tmp_path, text)
+    monkeypatch.setenv(retrieval_app.CONFIG_OVERLAY_ENV_VAR, str(path))
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch("retrieval_app.ContentCache", return_value=_LifespanCache()),
+        pytest.raises(ConfigOverlayError) as caught,
+    ):
+        async with lifespan(FastAPI()):
+            pytest.fail("a refused overlay reached serving startup")
+    assert caught.value.token == token
+    formatted = "".join(traceback.format_exception(caught.value))
+    assert token in formatted
+    assert _OVERLAY_SENTINEL not in formatted
+    assert _OVERLAY_SENTINEL not in caplog.text
+    assert _applied_records(caplog) == []
+
+
+async def test_a_comments_only_overlay_boots_and_logs_no_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    await _boot_quietly(monkeypatch)
+    baked = _baked_config()
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: deepcopy(baked))
+    path = _write_overlay(tmp_path, "# nothing to change\n")
+    monkeypatch.setenv(retrieval_app.CONFIG_OVERLAY_ENV_VAR, str(path))
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        async with _running_app():
+            assert app.state.config == baked
+    records = _applied_records(caplog)
+    assert [r.getMessage() for r in records] == [
+        "config_overlay_applied — keys= count=0"
+    ]
+
+
+async def test_an_overlay_over_an_empty_base_leaves_the_other_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    await _boot_quietly(monkeypatch)
+    empty: dict[str, Any] = {}
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: empty)
+    path = _write_overlay(tmp_path, "extraction:\n  classification_concurrency: 2\n")
+    monkeypatch.setenv(retrieval_app.CONFIG_OVERLAY_ENV_VAR, str(path))
+    defaults = extraction_settings_from_config({}, route_enabled=False)
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        async with _running_app():
+            settings = app.state.extraction_settings
+            assert settings.classification_concurrency == 2
+            assert settings.extraction_concurrency == defaults.extraction_concurrency
+            assert (
+                settings.child_address_space_bytes == defaults.child_address_space_bytes
+            )
+    assert [r.getMessage() for r in _applied_records(caplog)] == [
+        "config_overlay_applied — keys=extraction.classification_concurrency count=1"
+    ]
+    assert empty == {}
+
+
+async def test_an_overlay_value_the_typed_reader_refuses_keeps_its_own_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(retrieval_app, "_load_config", _baked_config)
+    path = _write_overlay(tmp_path, "extraction:\n  classification_concurrency: 9\n")
+    monkeypatch.setenv(retrieval_app.CONFIG_OVERLAY_ENV_VAR, str(path))
+    with pytest.raises(ExtractionConfigurationError) as caught:
+        async with lifespan(FastAPI()):
+            pytest.fail("an invalid overlay value reached serving startup")
+    assert not isinstance(caught.value, ConfigOverlayError)
+
+
+async def test_an_overlay_threshold_the_reader_falls_back_on_still_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """Documents that the overlay changes no reader's fallback; not an endorsement."""
+    await _boot_quietly(monkeypatch)
+    baked = _baked_config()
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: deepcopy(baked))
+    path = _write_overlay(tmp_path, "promptguard_threshold: 1.5\n")
+    monkeypatch.setenv(retrieval_app.CONFIG_OVERLAY_ENV_VAR, str(path))
+    full = {**deepcopy(baked), "promptguard_threshold": 1.5}
+    with caplog.at_level(logging.WARNING, logger="retrieval_app"):
+        async with _running_app():
+            assert app.state.promptguard_threshold_default == 0.85
+            assert app.state.sanitizer_revision == derive_sanitizer_revision(full)
+            assert _resolved_revision_from_state() == derive_sanitizer_revision(full)
+    assert "config_invalid_value — key=promptguard_threshold" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("env", "enabled", "source"),
+    [("0", False, "env"), (None, True, "config")],
+)
+async def test_the_route_env_variable_beats_an_overlay_value(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    env: str | None,
+    enabled: bool,
+    source: str,
+) -> None:
+    await _boot_quietly(monkeypatch)
+    baked = _baked_config()
+    monkeypatch.setattr(retrieval_app, "_load_config", lambda: deepcopy(baked))
+    path = _write_overlay(tmp_path, "extract_route_enabled: true\n")
+    monkeypatch.setenv(retrieval_app.CONFIG_OVERLAY_ENV_VAR, str(path))
+    if env is not None:
+        monkeypatch.setenv(EXTRACT_ROUTE_ENV_VAR, env)
+    with caplog.at_level(logging.INFO, logger="retrieval_app"):
+        async with _running_app():
+            assert app.state.extraction_settings.route_enabled is enabled
+    resolved = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("extract_route_resolved")
+    ]
+    assert resolved == [
+        f"extract_route_resolved — enabled={int(enabled)} source={source} "
+        "env_var=FORAGE_EXTRACT_ROUTE_ENABLED"
+    ]
