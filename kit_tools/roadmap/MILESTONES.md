@@ -94,6 +94,12 @@ Poppy.
       amd64, CPU torch on arm64), `FORAGE_DEVICE` + `FORAGE_DEVICE_FALLBACK`, GPU batching, OOM failover,
       `/health` device → contract `1.5.0`, corpus parity on thelab's RTX 4070 Ti. Wrapper
       `../specs/epic-forage-inference-backends.md`.
+- [ ] **Config overlay** (`epic-forage-config-overlay`, planned 2026-11-11, one spec / three stories; P1,
+      follows PR #52's `FORAGE_EXTRACT_ROUTE_ENABLED` / contract `1.6.0`): `FORAGE_CONFIG_OVERLAY` merges a
+      strict partial YAML over the baked `config.yaml` (blocks merge, lists replace; unknown, `null` or
+      shape mismatch refuses boot; one WARNING names the keys set), so an operator never copies the whole
+      file and Poppy can drop its vendored copy. No contract bump, no revision rotation. Wrapper
+      `../specs/epic-forage-config-overlay.md`.
 
 ## Exit Criteria for `v1.0.0`
 
