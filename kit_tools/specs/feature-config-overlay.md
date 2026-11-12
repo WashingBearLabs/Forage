@@ -403,23 +403,23 @@ mount it read-only with a compose fragment's commented recipe, and confirm it fr
     case.
 
 **Acceptance Criteria:**
-- [ ] `docs/configuration.md` documents `FORAGE_CONFIG_OVERLAY`: the merge, null, shape and
+- [x] `docs/configuration.md` documents `FORAGE_CONFIG_OVERLAY`: the merge, null, shape and
       dotted-key rules, the precedence chain, the 1 MiB bound, all six tokens, read-only mounting
       and the reader-fallback caveat. It presents the overlay before the full-replacement mount.
       Every phrase `test_unknown_config_key_warning_is_documented` requires is still present.
-- [ ] `ENV_REFERENCE.md`, `LOGGING.md` (Logger Inventory), `MONITORING.md` (Startup lines table),
+- [x] `ENV_REFERENCE.md`, `LOGGING.md` (Logger Inventory), `MONITORING.md` (Startup lines table),
       `TROUBLESHOOTING.md` (a section per token) and `ERROR_HANDLING.md` (boot-time refusers)
       cover the variable, the WARNING, the tokens and `ConfigOverlayError` respectively
-- [ ] `kit_tools/arch/DECISIONS.md` has the new overlay entry, and the resource-envelope
+- [x] `kit_tools/arch/DECISIONS.md` has the new overlay entry, and the resource-envelope
       consequence points to it
-- [ ] `compose/minimal.yml` and `compose/full.yml` each carry a commented `:ro` overlay recipe.
+- [x] `compose/minimal.yml` and `compose/full.yml` each carry a commented `:ro` overlay recipe.
       `tests/test_compose_fragments.py` passes and pins that `FORAGE_CONFIG_OVERLAY` is **not**
       a live environment entry on any service.
-- [ ] `docs/bootstrap-notes.md` carries the Poppy consumer note, including the keep-a-key-pin
+- [x] `docs/bootstrap-notes.md` carries the Poppy consumer note, including the keep-a-key-pin
       advice. `docs/releases.md` Unreleased carries one bullet.
-- [ ] `kit_tools/docs/GOTCHAS.md` carries both entries, `CODE_ARCH.md` the module row, and
+- [x] `kit_tools/docs/GOTCHAS.md` carries both entries, `CODE_ARCH.md` the module row, and
       `LOCAL_DEV.md` and `DEPLOYMENT.md` the run example and the read-once note
-- [ ] Full test suite passes (`uv run pytest`)
+- [x] Full test suite passes (`uv run pytest`)
 
 ## Edge Cases
 
