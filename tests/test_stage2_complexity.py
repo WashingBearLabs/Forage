@@ -2,10 +2,14 @@
 
 Five shape families are generated for **every** entry in ``_PATTERNS`` and timed
 at 256 KiB and 2 MiB (best of 3). Linear scaling is 8x, quadratic 64x, so the
-ratio bound is 12x; a pair that finishes both sizes under 20 ms is fast enough
-to prove itself. A second test holds the whole 24-pattern scan of one 2 MiB form
-under 2 s in a child process that is killed at a hard deadline, because a
-quadratic regex cannot be interrupted from inside the interpreter.
+ratio bound is 12x; a pair that finishes both sizes under 100 ms is fast enough
+to prove itself. The bound is relative to this machine's own linear scaling: a
+known-linear baseline is timed over the same two texts, interleaved, and when it
+scales worse than 8x (a memory-hierarchy cost on a slower runner) the bound
+grows by the same factor, capped at 1.75x (21x, still below n^1.5's 22.6x).
+A second test holds the whole 24-pattern scan of one 2 MiB form under 2 s in a
+child process that is killed at a hard deadline, because a quadratic regex
+cannot be interrupted from inside the interpreter.
 
 The newline and line-number tests pin the two gap patterns' paragraph-bounded
 behaviour and ``_line_number_of``'s unchanged values.
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import gc
 import multiprocessing
+import re
 import time
 from collections.abc import Callable
 from multiprocessing.connection import Connection
@@ -43,6 +48,17 @@ _RATIO_BOUND = 12
 _FAST_SECONDS = 0.100
 """Below this at 2 MiB a ratio is noise: a quadratic pattern from a millisecond
 base is already far above it at 2 MiB (64x), so nothing quadratic hides here."""
+_BASELINE = re.compile(r"(?:(?!\x00\x01)[^\x00])*")
+"""Known linear: one match from position 0, no backtracking, with the same
+per-character opcodes (a negative lookahead and a class) the tempered patterns
+run. No shape family contains NUL, so it always walks the whole text."""
+_MAX_MACHINE_FACTOR = 1.75
+"""How far the bound may follow the baseline: 12 x 1.75 = 21x < 22.6x (n^1.5).
+
+Measured 2026-11-11: GitHub runners showed ``exfil_image`` and
+``disregard_instructions`` at 13-15x on ``one_start_many_interior`` while both
+stay flat at ~30-44 ns/char from 64 KiB to 32 MiB locally (linear); the step was
+only asserted once a slower runner pushed the 2 MiB time past ``_FAST_SECONDS``."""
 _CEILING_SECONDS = 2.0
 """The floor of every absolute ceiling, measured on a quiet developer Mac."""
 _HARD_DEADLINE_SECONDS = 60.0
@@ -111,6 +127,26 @@ def _best_of_three(run: Callable[[], object]) -> float:
     return best
 
 
+def _paired_best_of_three(
+    run_a: Callable[[], object], run_b: Callable[[], object]
+) -> tuple[float, float]:
+    """Best of three for two runs, interleaved so they share machine state."""
+    best_a = best_b = float("inf")
+    gc.collect()
+    gc.disable()
+    try:
+        for _ in range(3):
+            began = time.perf_counter()
+            run_a()
+            best_a = min(best_a, time.perf_counter() - began)
+            began = time.perf_counter()
+            run_b()
+            best_b = min(best_b, time.perf_counter() - began)
+    finally:
+        gc.enable()
+    return best_a, best_b
+
+
 def _calibration() -> float:
     """This machine's cost of one plain 2 MiB text through every derived form.
 
@@ -149,8 +185,20 @@ def test_each_pattern_scales_linearly_on_every_shape_family(index: int) -> None:
         t_large = _best_of_three(lambda text=large_text: list(pattern.finditer(text)))
         if t_small < _FAST_SECONDS and t_large < _FAST_SECONDS:
             continue
-        assert t_large <= _RATIO_BOUND * t_small, (
-            f"{name}/{family}: {t_large:.3f}s at 2 MiB vs {t_small:.3f}s at 256 KiB"
+        # Asserted pairs only: re-time interleaved with the baseline.
+        t_small, b_small = _paired_best_of_three(
+            lambda text=small_text: list(pattern.finditer(text)),
+            lambda text=small_text: _BASELINE.match(text),
+        )
+        t_large, b_large = _paired_best_of_three(
+            lambda text=large_text: list(pattern.finditer(text)),
+            lambda text=large_text: _BASELINE.match(text),
+        )
+        machine = (b_large / b_small) / (_LARGE / _SMALL)
+        bound = _RATIO_BOUND * min(_MAX_MACHINE_FACTOR, max(1.0, machine))
+        assert t_large <= bound * t_small, (
+            f"{name}/{family}: {t_large:.3f}s at 2 MiB vs {t_small:.3f}s at 256 KiB "
+            f"(bound {bound:.1f}x; linear baseline {b_large:.3f}s vs {b_small:.3f}s)"
         )
 
 

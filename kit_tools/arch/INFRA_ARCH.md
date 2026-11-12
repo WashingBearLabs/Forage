@@ -33,7 +33,7 @@ There is one shipped artefact and no staging/production split in this repo. The 
 | Environment | Purpose | Where |
 |-------------|---------|-------|
 | **Shipped image** | The artefact consumers deploy (Poppy today; open-source users via `compose/`) | `ghcr.io/washingbearlabs/forage:<tag>` on the operator's private network |
-| **CI smoke (pre-publish)** | The candidate image is run token-less on `ubuntu-24.04` and probed by `contract_smoke.py` before `publish` may push | Ephemeral, per workflow run |
+| **CI smoke (pre-publish)** | The candidate image is run token-less on `ubuntu-latest` and probed by `contract_smoke.py` before `publish` may push | Ephemeral, per workflow run |
 | **Local development** | Build and run on a developer machine (see `kit_tools/docs/LOCAL_DEV.md`) | `http://127.0.0.1:8020` |
 
 Poppy runs the image on its own private network; those deployment details (host, network
@@ -291,7 +291,7 @@ quota; `docker inspect -f '{{.HostConfig.NanoCpus}}' <container>` verifies it.
 
 ## CI and Publish Pipeline
 
-One GitHub Actions workflow, `.github/workflows/ci.yml`, on GitHub-hosted `ubuntu-24.04` (pinned)
+One GitHub Actions workflow, `.github/workflows/ci.yml`, on GitHub-hosted `ubuntu-latest`
 runners, is the only pipeline. Six required checks on `main` — `lint`, `typecheck`, `test`,
 `build-amd64`, `secret-grep`, `smoke` — gate a `publish` job that rebuilds amd64 from the
 GHA cache, pushes the multi-arch image, then reads the published image back and proves its

@@ -660,7 +660,7 @@ class TestLintJob:
 
     def test_lint_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
         runs_on = jobs["lint"]["runs-on"]
-        assert runs_on == "ubuntu-24.04", (
+        assert runs_on == "ubuntu-latest", (
             "Forage has no GPU or database needs and must not depend on Poppy's "
             f"self-hosted runner; got {runs_on!r}"
         )
@@ -928,7 +928,7 @@ class TestTypecheckJob:
 
     def test_typecheck_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
         runs_on = jobs["typecheck"]["runs-on"]
-        assert runs_on == "ubuntu-24.04", (
+        assert runs_on == "ubuntu-latest", (
             f"typecheck must run on a GitHub-hosted runner; got {runs_on!r}"
         )
 
@@ -1026,7 +1026,7 @@ class TestTestJob:
 
     def test_test_job_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
         runs_on = jobs["test"]["runs-on"]
-        assert runs_on == "ubuntu-24.04", (
+        assert runs_on == "ubuntu-latest", (
             "The suite is hermetic and CPU-only; it must not depend on Poppy's "
             f"self-hosted runner. Got {runs_on!r}"
         )
@@ -1167,7 +1167,7 @@ class TestBuildAmd64Job:
 
     def test_build_job_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
         runs_on = jobs["build-amd64"]["runs-on"]
-        assert runs_on == "ubuntu-24.04", (
+        assert runs_on == "ubuntu-latest", (
             f"build-amd64 must run on a GitHub-hosted runner; got {runs_on!r}"
         )
 
@@ -1325,7 +1325,7 @@ class TestSecretGrepJob:
         self, jobs: dict[str, Any]
     ) -> None:
         runs_on = jobs["secret-grep"]["runs-on"]
-        assert runs_on == "ubuntu-24.04", (
+        assert runs_on == "ubuntu-latest", (
             f"secret-grep must run on a GitHub-hosted runner; got {runs_on!r}"
         )
 
@@ -1493,7 +1493,7 @@ class TestSmokeJob:
 
     def test_smoke_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
         runs_on = jobs["smoke"]["runs-on"]
-        assert runs_on == "ubuntu-24.04", (
+        assert runs_on == "ubuntu-latest", (
             f"smoke must run on a GitHub-hosted runner; got {runs_on!r}"
         )
 
@@ -1910,7 +1910,7 @@ class TestPublishJob:
         )
 
     def test_publish_runs_on_github_hosted_ubuntu(self, jobs: dict[str, Any]) -> None:
-        assert jobs["publish"]["runs-on"] == "ubuntu-24.04"
+        assert jobs["publish"]["runs-on"] == "ubuntu-latest"
 
     def test_publish_has_timeout_minutes(self, jobs: dict[str, Any]) -> None:
         assert isinstance(jobs["publish"].get("timeout-minutes"), int), (

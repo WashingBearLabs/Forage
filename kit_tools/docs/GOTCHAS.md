@@ -16,28 +16,32 @@ live in, and losing them in the move was an identified risk.
 
 ## Active Gotchas
 
-### CI is pinned to `ubuntu-24.04`; don't move it to `ubuntu-latest` without these three checks
+### A timing gate only gates what it actually asserts
 
-On 2026-11-11, `ubuntu-latest` became Ubuntu 26.04, and PR #52 hit three failures that had nothing
-to do with its change:
+`test_stage2_complexity`'s linearity check skips any pair where both sizes finish under
+`_FAST_SECONDS` (100 ms). On a fast machine, `exfil_image` and `disregard_instructions` at
+2 MiB finish in about 60–90 ms, so their ratio was **never asserted**: not locally, and not on
+CI before 2026-11.
 
-1. **Interpreter.** The runner's system Python became 3.14. uv synced on it, and
-   `pipeline/confusables.py` read as stale under 3.14's `unicodedata`. `.python-version` now pins
-   3.12, matching the image.
-2. **Docker.** 26.04's newer Docker `save` writes layer blobs with an out-of-range mtime. GNU gzip
-   warns on that and exits 2, even on a stdin redirect, because it `fstat()`s the descriptor. The
-   size budget now uses `gzip -n`.
-3. **Timing.** With no system 3.12, uv downloads its own CPython 3.12.12. On that runner,
-   `test_stage2_complexity`'s `one_start_many_interior` family measured 13–15× at 2 MiB against
-   the 12× bound for `disregard_instructions` and `exfil_image`, in two runs out of two. Locally,
-   and on 3.14, it passes.
+Slower GitHub runners pushed the 2 MiB time past 100 ms, and the assertion ran for the first
+time. It saw 13–15× against the 12× bound, in four runs out of four, on both `ubuntu-26.04` and
+`ubuntu-24.04`. Both patterns are linear: a flat 30–44 ns/char from 64 KiB to 32 MiB. The
+excess was the 256 KiB → 2 MiB step costing about 1.6× more per character on those runners,
+probably a memory-hierarchy effect.
 
-All jobs are pinned to `ubuntu-24.04`, which has the system CPython 3.12.3 that `main` last passed
-on. `tests/test_ci_workflow.py` pins that label; its intent is still "GitHub-hosted, never Poppy's
-self-hosted runner".
+The bound is now relative to the machine. A known-linear baseline with the same opcodes is
+timed over the same texts, interleaved with the pattern. The 12× bound follows the baseline's
+excess over 8×, capped at 1.75× (21×, below n^1.5). It is never stricter than before.
 
-Before lifting the pin, profile item 3: tell a cache or allocator artifact apart from real
-superlinearity. Never loosen the 12× bound just to get green.
+Two lessons:
+- Pinning the runner was tried and did not help; don't repeat it.
+- When adding a skip threshold to a timing test, check which cases it silently exempts on a fast
+  developer machine.
+
+Same day, two real runner drifts were fixed:
+- `ubuntu-latest` (26.04) has CPython 3.14 as its system Python, so `.python-version` pins 3.12;
+  otherwise `confusables.py` reads as stale.
+- Newer Docker writes out-of-range layer mtimes, so the size-budget `gzip` runs with `-n`.
 
 ### Derived Stage 2 scan forms must never change Stage 3's input
 

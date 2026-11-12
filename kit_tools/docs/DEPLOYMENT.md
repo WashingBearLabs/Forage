@@ -44,7 +44,7 @@ exist, in the order a change passes through them:
 
 | Environment | What it is | Image | Notes |
 |-------------|------------|-------|-------|
-| CI `smoke` | Ephemeral pre-publish run on `ubuntu-24.04` | `forage:ci` (amd64 tarball) | Started with **no environment at all**, so it exercises the weights-free degraded path; `contract_smoke.py --image forage:ci` must pass within 120 s |
+| CI `smoke` | Ephemeral pre-publish run on `ubuntu-latest` | `forage:ci` (amd64 tarball) | Started with **no environment at all**, so it exercises the weights-free degraded path; `contract_smoke.py --image forage:ci` must pass within 120 s |
 | GHCR | The published registry | `ghcr.io/washingbearlabs/forage:<tag>` | Public, anonymous pulls; `publish` runs only on pushes to `main` and `v*` tags, after all six gates |
 | Reference deployment | `compose/minimal.yml` and `compose/full.yml` | pinned tags in the fragments | The shape this document describes; runs on any Docker host on a private network |
 | Poppy (downstream) | The consuming agent's own private network | Poppy's in-tree copy, until Poppy spec 6 pins a published image | Out of scope here except for the coexistence rule below |
