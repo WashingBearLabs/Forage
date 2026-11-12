@@ -1,7 +1,7 @@
 <!-- Template Version: 2.5.0 -->
 ---
 feature: config-overlay
-status: active
+status: completed
 session_ready: true
 depends_on: []
 vision_ref: "T2.2 — Forage hardening (operator configuration, single source)"
@@ -11,7 +11,8 @@ epic: forage-config-overlay
 epic_seq: 1
 epic_final: true
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
+completed: 2026-11-12
 ---
 
 # Feature Spec: Config Overlay — `FORAGE_CONFIG_OVERLAY` Merged Over the Base Config
