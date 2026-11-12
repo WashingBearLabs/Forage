@@ -64,22 +64,22 @@ installs nothing in speed. The only cost is size: amd64 grows from about 350 MB 
 
 ## Completion Criteria
 
-- [ ] All four specs completed and archived.
-- [ ] One `forage` tag serves both device classes:
+- [x] All four specs completed and archived.
+- [x] One `forage` tag serves both device classes:
   - a CPU-only host with default settings behaves exactly as v1.3.0 (same scores, same corpus
     baseline);
   - a GPU host with `FORAGE_DEVICE=cuda` classifies on the GPU.
-- [ ] CPU-path classifier scores are byte-identical to v1.3.0 for every corpus text, and both
+- [x] CPU-path classifier scores are byte-identical to v1.3.0 for every corpus text, and both
       cassettes are unchanged.
-- [ ] GPU parity on thelab:
+- [x] GPU parity on thelab:
   - zero verdict flips at the 0.85 threshold across every corpus text;
   - maximum score drift recorded;
   - real-weights 86M per-window latency recorded and at most 25 ms;
   - a 64-chunk page classifies in under 2 s.
-- [ ] CI is green, including a no-GPU smoke for each failover policy:
+- [x] CI is green, including a no-GPU smoke for each failover policy:
   - `cuda` + `cpu` fallback boots degraded on CPU;
   - `cuda` + `refuse` fallback refuses to start.
-- [ ] **Owner gates:** the real-weights GPU smoke and parity run on thelab, merge, tag `v1.4.0`,
+- [x] **Owner gates:** the real-weights GPU smoke and parity run on thelab, merge, tag `v1.4.0`,
       publish, and an anonymous pull.
 
 ## Notes
