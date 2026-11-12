@@ -114,3 +114,6 @@
 [validate] validate-implementation feature-config-overlay.md: 0 critical / 0 warning / 5 info; pytest 5873 passed, ruff+pyright clean
 - Files: kit_tools/AUDIT_FINDINGS.md (gitignored)
 - Decision: no fixer, no pause; complete-implementation not invoked (epic run)
+
+[epic-final] Epic-wide validate-implementation for forage-config-overlay: 0 critical, all 3 reviewers ready; logged 2026-11-11-006..010 (info). 3 test_corpus_docs failures are environmental (worktree's gitignored AUDIT_FINDINGS.md lacks owner entries; pass against owner copy).
+- Files: kit_tools/AUDIT_FINDINGS.md (gitignored), this file
